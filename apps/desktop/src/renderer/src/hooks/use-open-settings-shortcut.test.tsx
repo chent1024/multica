@@ -2,7 +2,6 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { render } from "@testing-library/react";
 import { useTabStore } from "@/stores/tab-store";
-import { useWindowOverlayStore } from "@/stores/window-overlay-store";
 import {
   openSettingsTab,
   useOpenSettingsShortcut,
@@ -68,7 +67,6 @@ function stubDesktopAPI(kind: "main" | "issue") {
 describe("openSettingsTab", () => {
   beforeEach(() => {
     seedTabs();
-    useWindowOverlayStore.setState({ overlay: null });
   });
 
   it("opens Settings for the active workspace and focuses it", () => {
@@ -87,15 +85,7 @@ describe("openSettingsTab", () => {
     expect(activeTabUrl()).toBe("/acme/settings");
   });
 
-  it("does nothing while a pre-workspace overlay covers the window", () => {
-    useWindowOverlayStore.setState({ overlay: { type: "onboarding" } });
-
-    openSettingsTab();
-
-    expect(tabUrls()).toEqual(["/acme/issues"]);
-  });
-
-  it("does nothing without an active workspace (logged out)", () => {
+  it("does nothing before the local data space mounts", () => {
     useTabStore.setState({ activeWorkspaceSlug: null });
 
     expect(() => openSettingsTab()).not.toThrow();
@@ -106,7 +96,6 @@ describe("openSettingsTab", () => {
 describe("useOpenSettingsShortcut", () => {
   beforeEach(() => {
     seedTabs();
-    useWindowOverlayStore.setState({ overlay: null });
   });
 
   it("opens Settings when main delivers the chord", () => {

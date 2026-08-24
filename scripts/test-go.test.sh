@@ -20,17 +20,6 @@ cat >"$BIN_DIR/go" <<'EOF'
 set -eu
 
 case "${1:-}" in
-  list)
-    if [ "$#" -ne 2 ] || [ "$2" != "./..." ]; then
-      echo "unexpected go list arguments: $*" >&2
-      exit 2
-    fi
-    printf '%s\n' \
-      github.com/multica-ai/multica/server \
-      github.com/multica-ai/multica/server/internal/daemon \
-      github.com/multica-ai/multica/server/pkg/agent \
-      github.com/multica-ai/multica/server/pkg/agent/internal/testutil
-    ;;
   test)
     printf '%s\n' "$*" >>"$MULTICA_TEST_GO_CALLS"
     ;;
@@ -44,8 +33,7 @@ chmod 755 "$BIN_DIR/go"
 
 PATH="$BIN_DIR:$PATH" bash "$SCRIPT_DIR/test-go.sh" --race
 
-expected_calls='test -race github.com/multica-ai/multica/server github.com/multica-ai/multica/server/internal/daemon
-test -race -p 2 -parallel 2 ./pkg/agent/...'
+expected_calls='test -race -p 2 -parallel 2 ./...'
 actual_calls=$(cat "$CALLS_FILE")
 if [ "$actual_calls" != "$expected_calls" ]; then
   echo "unexpected go test calls:" >&2

@@ -9,8 +9,6 @@ import (
 
 	chimw "github.com/go-chi/chi/v5/middleware"
 	"github.com/lmittmann/tint"
-
-	"github.com/multica-ai/multica/server/internal/middleware"
 )
 
 // isTerminal reports whether the given file descriptor is connected to a
@@ -78,10 +76,9 @@ func NewWriterLoggerDefault(component string, w io.Writer) *slog.Logger {
 	return base.With("component", component)
 }
 
-// RequestAttrs extracts request_id, user_id, and X-Client-* metadata from
-// an HTTP request for use in handler-level structured logging. Mirrors the
-// global request logger so handler logs end up with the same observability
-// dimensions as the access log.
+// RequestAttrs extracts request and client metadata without depending on the
+// retired cloud middleware package. It remains available to legacy source
+// files, but the local server does not require identity or tenant context.
 func RequestAttrs(r *http.Request) []any {
 	attrs := make([]any, 0, 10)
 	if rid := chimw.GetReqID(r.Context()); rid != "" {
@@ -90,7 +87,9 @@ func RequestAttrs(r *http.Request) []any {
 	if uid := r.Header.Get("X-User-ID"); uid != "" {
 		attrs = append(attrs, "user_id", uid)
 	}
-	platform, version, os := middleware.ClientMetadataFromContext(r.Context())
+	platform := r.Header.Get("X-Client-Platform")
+	version := r.Header.Get("X-Client-Version")
+	os := r.Header.Get("X-Client-OS")
 	if platform != "" {
 		attrs = append(attrs, "client_platform", platform)
 	}

@@ -54,8 +54,8 @@ vi.mock("../pages/issue-detail-page", () => ({
   IssueDetailPage: () => <div data-testid="issue-detail" />,
 }));
 
-vi.mock("../pages/auth-recovery", () => ({
-  DesktopAuthRecoveryPage: ({
+vi.mock("../pages/local-workbench-recovery", () => ({
+  LocalWorkbenchRecoveryPage: ({
     onRetry,
     isRetrying,
   }: {
@@ -63,7 +63,7 @@ vi.mock("../pages/auth-recovery", () => ({
     isRetrying: boolean;
   }) => (
     <button type="button" disabled={isRetrying} onClick={onRetry}>
-      Retry workspace list
+      Retry
     </button>
   ),
 }));
@@ -115,7 +115,7 @@ describe("IssueWindow", () => {
     render(<IssueWindow context={context} />);
 
     const retry = await screen.findByRole("button", {
-      name: "Retry workspace list",
+      name: "Retry",
     });
     fireEvent.click(retry);
     expect(state.refetch).toHaveBeenCalledOnce();

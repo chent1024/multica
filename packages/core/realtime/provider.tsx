@@ -40,6 +40,8 @@ export interface WSProviderProps {
   storage: StorageAdapter;
   /** When true, use HttpOnly cookies instead of token query param for WS auth. */
   cookieAuth?: boolean;
+  /** Connect without an auth frame to the loopback-only local server. */
+  localMode?: boolean;
   /** Identifies the WS client to the server (sent as query params on the upgrade URL). */
   identity?: ClientIdentity;
   /** Optional callback for showing toast messages (platform-specific, e.g. sonner) */
@@ -52,6 +54,7 @@ export function WSProvider({
   authStore,
   storage,
   cookieAuth,
+  localMode,
   identity,
   onToast,
 }: WSProviderProps) {
@@ -81,12 +84,12 @@ export function WSProvider({
 
     // In token mode we need a token from storage; in cookie mode the HttpOnly
     // cookie is sent automatically with the WS upgrade request.
-    const token = cookieAuth ? null : storage.getItem("multica_token");
-    if (!cookieAuth && !token) return;
+    const token = cookieAuth || localMode ? null : storage.getItem("multica_token");
+    if (!cookieAuth && !localMode && !token) return;
 
     const ws = new WSClient(wsUrl, {
       logger: createLogger("ws"),
-      cookieAuth,
+      cookieAuth: cookieAuth || localMode,
       identity:
         identityPlatform || identityVersion || identityOS
           ? {
@@ -110,6 +113,7 @@ export function WSProvider({
     wsUrl,
     storage,
     cookieAuth,
+    localMode,
     identityPlatform,
     identityVersion,
     identityOS,

@@ -41,6 +41,7 @@
     "./search": "./search/index.ts",
     "./chat": "./chat/index.ts",
     "./settings": "./settings/index.ts",
+    "./settings/local": "./settings/local-settings-page.tsx",
     "./settings/lark-tab": "./settings/components/lark-tab.tsx",
     "./lark": "./lark/index.ts",
     "./slack": "./slack/index.ts",
@@ -123,7 +124,6 @@
   },
   "devDependencies": {
     "@multica/eslint-config": "workspace:*",
-    "@multica/plugin-sdk": "workspace:*",
     "@multica/tsconfig": "workspace:*",
     "@testing-library/jest-dom": "catalog:",
     "@testing-library/react": "catalog:",

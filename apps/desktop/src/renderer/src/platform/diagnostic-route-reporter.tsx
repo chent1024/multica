@@ -1,11 +1,6 @@
 import { useEffect, useRef } from "react";
 import { bucketDiagnosticPath, setDiagnosticRoute } from "@multica/core/diagnostics";
-import { useAuthStore } from "@multica/core/auth";
 import { useActiveTabIdentity, useActiveTabUrl } from "@/stores/tab-store";
-import {
-  useWindowOverlayStore,
-  type WindowOverlay,
-} from "@/stores/window-overlay-store";
 import type { RendererRouteContextInput } from "../../../shared/renderer-route-context";
 
 /**
@@ -20,16 +15,12 @@ import type { RendererRouteContextInput } from "../../../shared/renderer-route-c
  *     `location.pathname` is the packaged index.html path here (this window
  *     runs a memory router), so without this the watchdog has no route at all.
  *
- * Desktop has three layers that can own the visible page: the logged-out
- * `/login` state, window overlays (onboarding, new-workspace, invite — these
- * are overlay state, not tab routes), and otherwise the active tab's path.
+ * Desktop has one visible route surface: the active local-workbench tab.
  *
  * Paths are bucketed to route templates before publishing, so telemetry
  * carries `/:slug/issues/:id` rather than a workspace slug and issue id.
  */
 export function DiagnosticRouteReporter() {
-  const user = useAuthStore((s) => s.user);
-  const overlay = useWindowOverlayStore((s) => s.overlay);
   // The slug decides whether a workspace is mounted at all; it is never sent.
   const { slug: activeWorkspaceSlug } = useActiveTabIdentity();
   // The tab url carries search/hash too; bucketing drops both, so telemetry
@@ -41,12 +32,7 @@ export function DiagnosticRouteReporter() {
   const lastSentRef = useRef<string | null>(null);
 
   useEffect(() => {
-    const surface = resolveSurface({
-      user,
-      overlay,
-      activeWorkspaceSlug,
-      activeTabUrl,
-    });
+    const surface = resolveSurface({ activeWorkspaceSlug, activeTabUrl });
     setDiagnosticRoute(surface.path);
 
     // Only the bucketed template travels. The slug and tab id stay in this
@@ -57,7 +43,7 @@ export function DiagnosticRouteReporter() {
       path: surface.path,
     };
     send(context, lastSentRef);
-  }, [user, overlay, activeWorkspaceSlug, activeTabUrl]);
+  }, [activeWorkspaceSlug, activeTabUrl]);
 
   return null;
 }
@@ -73,35 +59,14 @@ function send(
 }
 
 function resolveSurface({
-  user,
-  overlay,
   activeWorkspaceSlug,
   activeTabUrl,
 }: {
-  user: unknown;
-  overlay: WindowOverlay | null;
   activeWorkspaceSlug: string | null;
   activeTabUrl: string | null;
 }): { kind: RendererRouteContextInput["surface"]; path: string } {
-  if (!user) return { kind: "login", path: "/login" };
-  if (overlay) {
-    return { kind: "overlay", path: bucketDiagnosticPath(overlayPath(overlay)) };
-  }
   if (activeWorkspaceSlug && activeTabUrl) {
     return { kind: "tab", path: bucketDiagnosticPath(activeTabUrl) };
   }
   return { kind: "tab", path: "/" };
-}
-
-function overlayPath(overlay: WindowOverlay): string {
-  switch (overlay.type) {
-    case "new-workspace":
-      return "/workspaces/new";
-    case "onboarding":
-      return "/onboarding";
-    case "invite":
-      return `/invite/${overlay.invitationId}`;
-    case "invitations":
-      return "/invitations";
-  }
 }

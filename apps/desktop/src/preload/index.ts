@@ -19,7 +19,6 @@ import {
   readDesktopWindowContext,
   type IssueWindowRequest,
 } from "../shared/issue-window";
-import { AUTH_SESSION_STATE_CHANNEL } from "../shared/auth-session";
 import type {
   DaemonStatus,
   LocalRuntimeProbe,
@@ -134,16 +133,6 @@ const desktopAPI = {
   /** Retire the breadcrumb with this exact timestamp after its event has been
    *  handed to analytics. Anything left unacknowledged is retried next boot. */
   ackFreeze: (ts: number) => ipcRenderer.send("freeze:ack", ts),
-  /** Report only the resolved user id (never a token) so main can close
-   *  dedicated issue windows that belong to an old account. */
-  reportAuthSession: (userId: string | null) =>
-    ipcRenderer.send(AUTH_SESSION_STATE_CHANNEL, userId),
-  /** Listen for auth token delivered via deep link */
-  onAuthToken: (callback: (token: string) => void) =>
-    subscribeToMainRendererChannel("auth:token", callback),
-  /** Listen for invitation IDs delivered via deep link */
-  onInviteOpen: (callback: (invitationId: string) => void) =>
-    subscribeToMainRendererChannel("invite:open", callback),
   /** Open a URL in the default browser */
   openExternal: (url: string) => ipcRenderer.invoke("shell:openExternal", url),
   /** Download a file by URL through Electron's native download system.
@@ -154,41 +143,6 @@ const desktopAPI = {
   /** Toggle immersive mode — hide macOS traffic lights for full-screen modals */
   setImmersiveMode: (immersive: boolean) =>
     ipcRenderer.invoke("window:setImmersive", immersive),
-  /**
-   * Show a native OS notification for a new inbox item. Fired from the
-   * renderer only when the app is unfocused — in-focus feedback is the
-   * inbox sidebar's unread styling. `slug`, `itemId`, and `issueKey` are
-   * all round-tripped on click: slug pins routing to the source workspace
-   * (the user may switch workspaces before clicking the banner), itemId
-   * lets the renderer mark the row read, issueKey maps to the inbox URL
-   * param.
-   */
-  showNotification: (payload: {
-    slug: string;
-    itemId: string;
-    issueKey: string;
-    title: string;
-    body: string;
-  }) => ipcRenderer.send("notification:show", payload),
-  /**
-   * Update the OS dock / taskbar unread badge. Pass 0 to clear. Values
-   * above 99 render as "99+" (capping is handled in the main process).
-   */
-  setUnreadBadge: (count: number) =>
-    ipcRenderer.send("badge:set", Math.max(0, Math.floor(count))),
-  /**
-   * Subscribe to "open this inbox row" requests sent by the main process
-   * when the user clicks an OS notification banner. Returns an unsubscribe
-   * function. The payload echoes the `slug`, `itemId`, and `issueKey` that
-   * were passed to `showNotification`.
-   */
-  onInboxOpen: (
-    callback: (payload: {
-      slug: string;
-      itemId: string;
-      issueKey: string;
-    }) => void,
-  ) => subscribeToMainRendererChannel("inbox:open", callback),
   /** Listen for native macOS back/forward swipe gestures. */
   onNavigationGesture: (callback: (gesture: NavigationGesture) => void) => {
     const handler = (_event: Electron.IpcRendererEvent, gesture: unknown) => {
@@ -230,11 +184,6 @@ const desktopAPI = {
     ipcRenderer.invoke("window:open-issue", request),
 };
 
-type DaemonReauthResult =
-  | { ok: true }
-  | { ok: false; reason: "session_invalid" }
-  | { ok: false; reason: "transient"; message: string };
-
 const daemonAPI = {
   start: (): Promise<{ success: boolean; error?: string }> =>
     ipcRenderer.invoke("daemon:start"),
@@ -255,15 +204,6 @@ const daemonAPI = {
   },
   setTargetApiUrl: (url: string): Promise<void> =>
     ipcRenderer.invoke("daemon:set-target-api-url", url),
-  syncToken: (token: string, userId: string): Promise<void> =>
-    ipcRenderer.invoke("daemon:sync-token", token, userId),
-  clearToken: (): Promise<void> =>
-    ipcRenderer.invoke("daemon:clear-token"),
-  reauthenticate: (
-    token: string,
-    userId: string,
-  ): Promise<DaemonReauthResult> =>
-    ipcRenderer.invoke("daemon:reauthenticate", token, userId),
   isCliInstalled: (): Promise<boolean> =>
     ipcRenderer.invoke("daemon:is-cli-installed"),
   getPrefs: (): Promise<{ autoStart: boolean; autoStop: boolean }> =>

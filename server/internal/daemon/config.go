@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"log/slog"
+	"net"
 	"net/url"
 	"os"
 	"os/exec"
@@ -17,6 +18,21 @@ import (
 	"github.com/multica-ai/multica/server/internal/daemon/execenv"
 	"github.com/multica-ai/multica/server/pkg/agent"
 )
+
+// IsLoopbackServerURL reports whether the daemon talks only to this machine.
+// Local mode uses this boundary to run without an account token.
+func IsLoopbackServerURL(raw string) bool {
+	parsed, err := url.Parse(raw)
+	if err != nil {
+		return false
+	}
+	host := parsed.Hostname()
+	if strings.EqualFold(host, "localhost") {
+		return true
+	}
+	ip := net.ParseIP(host)
+	return ip != nil && ip.IsLoopback()
+}
 
 const (
 	DefaultServerURL         = "ws://localhost:8080/ws"
@@ -99,6 +115,7 @@ var DefaultGCArtifactPatterns = []string{"node_modules", ".next", ".turbo"}
 // Config holds all daemon configuration.
 type Config struct {
 	ServerBaseURL                  string
+	LocalWorkbench                 bool
 	DaemonID                       string
 	LegacyDaemonIDs                []string // historical daemon_ids this machine may have registered under; reported at register time so the server can merge old runtime rows
 	DeviceName                     string
@@ -534,6 +551,7 @@ func LoadConfig(overrides Overrides) (Config, error) {
 
 	return Config{
 		ServerBaseURL:                   serverBaseURL,
+		LocalWorkbench:                  boolFromEnv("MULTICA_LOCAL_WORKBENCH", false),
 		DaemonID:                        daemonID,
 		LegacyDaemonIDs:                 legacyDaemonIDs,
 		DeviceName:                      deviceName,

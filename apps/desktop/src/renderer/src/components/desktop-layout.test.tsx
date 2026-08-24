@@ -74,7 +74,6 @@ vi.mock("@multica/views/search", () => ({
 }));
 vi.mock("@multica/views/chat", () => ({ FloatingChat: () => null }));
 vi.mock("./tab-bar", () => ({ TabBar: () => null }));
-vi.mock("./window-overlay", () => ({ WindowOverlay: () => null }));
 
 // Stands in for whatever page the active tab is showing. Reports the one fact
 // a `PageHeader` reads before deciding to render its own fallback trigger.

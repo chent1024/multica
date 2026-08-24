@@ -12,7 +12,7 @@ import (
 // quick-create agent is allowed to translate raw user input into the issue
 // description body. Each substring corresponds to a concrete failure mode
 // observed in production output:
-//   - meta-instructions ("create an issue", "cc @X") leaking into the body
+//   - meta-instructions ("create an issue") leaking into the body
 //   - the Context section being misused as an apology log when no external
 //     references were actually fetched
 //   - hard-line rules being silently dropped on prompt rewrites
@@ -26,10 +26,6 @@ func TestBuildQuickCreatePromptRules(t *testing.T) {
 		// strip non-spec material: verbal routing wrappers + conversational fillers
 		"verbal routing wrappers about creating the issue",
 		"pure conversational fillers",
-		// cc routing must survive: mention link stays in description so the
-		// auto-subscribe path fires (multica issue create has no --subscriber flag)
-		"CC exception",
-		"auto-subscribes members",
 		// context section is conditional and must not be an apology log
 		"include ONLY when the input cited external resources",
 		"never use it as an apology log",
@@ -61,27 +57,6 @@ func TestBuildQuickCreatePromptRules(t *testing.T) {
 
 	if strings.Contains(out, "do NOT pass `--attachment`") {
 		t.Errorf("buildQuickCreatePrompt carries the unconditional --attachment ban that conflicts with the quick-create ## Output delivery channel (MUL-5696)\n--- output ---\n%s", out)
-	}
-}
-
-// TestBuildQuickCreatePromptAssigneeIncludesSquads locks in the MUL-2165
-// fix: the assignee-resolution rules must tell the agent to consult the
-// squad list alongside members and agents. Before this, a quick-create
-// input like "assign to <SquadName>" silently fell through to
-// "Unrecognized assignee" because squads were never queried.
-func TestBuildQuickCreatePromptAssigneeIncludesSquads(t *testing.T) {
-	out := buildQuickCreatePrompt(Task{QuickCreatePrompt: "fix the login button color"})
-	mustContain := []string{
-		"multica squad list",
-		"Squads are first-class assignees",
-		"Treat bare @-routing as an assignee directive",
-		"让 @独立团 review 这个 PR",
-		"pass the squad's `id` as `--assignee-id`",
-	}
-	for _, s := range mustContain {
-		if !strings.Contains(out, s) {
-			t.Errorf("buildQuickCreatePrompt assignee block missing %q\n--- output ---\n%s", s, out)
-		}
 	}
 }
 

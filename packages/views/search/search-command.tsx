@@ -103,6 +103,13 @@ const PAGE_KEYWORDS: Record<WorkspacePageKey, string[]> = {
 };
 
 const NAV_PAGE_KEYS = Object.keys(WORKSPACE_PAGES) as WorkspacePageKey[];
+const LOCAL_NAV_PAGE_KEYS = new Set<WorkspacePageKey>([
+  "issues",
+  "projects",
+  "agents",
+  "runtimes",
+  "settings",
+]);
 
 // No `icon` field: like the sidebar nav, a page's icon is derived from its
 // destination path via routeIconForPath, so all navigation surfaces show the
@@ -303,7 +310,11 @@ const NO_RESULTS: SearchResults = { query: "", issues: [], projects: [] };
 const GROUP_CLASS =
   "p-2 [&_[cmdk-group-heading]]:px-3 [&_[cmdk-group-heading]]:py-1.5 [&_[cmdk-group-heading]]:text-caption [&_[cmdk-group-heading]]:font-medium [&_[cmdk-group-heading]]:text-muted-foreground";
 
-export function SearchCommand() {
+export function SearchCommand({
+  localMode = false,
+}: {
+  localMode?: boolean;
+} = {}) {
   const { t } = useT("search");
   // Page names come from the sidebar's own namespace rather than a private
   // copy under `search.pages`: one translated string per page, so the palette
@@ -311,12 +322,16 @@ export function SearchCommand() {
   const { t: tNav } = useT("layout");
   const navPages = useMemo<NavPage[]>(
     () =>
-      NAV_PAGE_KEYS.map((key) => ({
-        key,
-        label: tNav(($) => $.nav[WORKSPACE_PAGES[key].navKey]),
-        keywords: PAGE_KEYWORDS[key],
-      })),
-    [tNav],
+      NAV_PAGE_KEYS.filter(
+        (key) => !localMode || LOCAL_NAV_PAGE_KEYS.has(key),
+      ).map(
+        (key) => ({
+          key,
+          label: tNav(($) => $.nav[WORKSPACE_PAGES[key].navKey]),
+          keywords: PAGE_KEYWORDS[key],
+        }),
+      ),
+    [localMode, tNav],
   );
   const { pathname, getShareableUrl } = useNavigation();
   const intentNavigate = useIntentNavigate();
@@ -343,7 +358,10 @@ export function SearchCommand() {
   const recentItems = useRecentIssuesStore(selectRecentIssues(wsId));
   const p: WorkspacePaths = useWorkspacePaths();
   const { theme, setTheme } = useTheme();
-  const { data: members = [] } = useQuery(memberListOptions(wsId));
+  const { data: members = [] } = useQuery({
+    ...memberListOptions(wsId),
+    enabled: !localMode,
+  });
 
   // Resolve each recent issue via its cached detail entry. Recent items are
   // typically already in the detail cache because the user has opened them;
@@ -422,8 +440,8 @@ export function SearchCommand() {
 
     if (currentIssueId && currentIssue) {
       const identifier = currentIssue.identifier;
-      items.push(
-        {
+      if (!localMode) {
+        items.push({
           key: "copy-issue-link",
           label: t(($) => $.commands.copy_issue_link),
           icon: Link2,
@@ -434,7 +452,9 @@ export function SearchCommand() {
             });
             setOpen(false);
           },
-        },
+        });
+      }
+      items.push(
         {
           key: "copy-issue-identifier",
           label: t(($) => $.commands.copy_identifier, { identifier }),
@@ -527,7 +547,18 @@ export function SearchCommand() {
     );
 
     return items;
-  }, [currentIssue, currentIssueId, getShareableUrl, pathname, queryClient, setOpen, setTheme, theme, t]);
+  }, [
+    currentIssue,
+    currentIssueId,
+    getShareableUrl,
+    localMode,
+    pathname,
+    queryClient,
+    setOpen,
+    setTheme,
+    theme,
+    t,
+  ]);
 
   const filteredCommands = useMemo(() => {
     const q = query.trim().toLowerCase();
@@ -547,10 +578,11 @@ export function SearchCommand() {
         "people".startsWith(q) ||
         "users".startsWith(q) ||
         "team".startsWith(q));
+    if (localMode) return [];
     return members
       .filter((member) => wantsAllMembers || matchesMember(member, q))
       .slice(0, 10);
-  }, [members, query]);
+  }, [localMode, members, query]);
 
   const hasResults =
     results.issues.length > 0 ||

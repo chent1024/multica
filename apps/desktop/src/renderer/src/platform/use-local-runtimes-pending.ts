@@ -15,8 +15,8 @@ import type { DaemonStatus } from "../../../shared/daemon-types";
  * "runtimes are coming" hint.
  *
  * It goes false once the daemon settles into a state that will not yield
- * runtimes (running with zero detected agents, stopped, cli_not_found,
- * auth_expired), letting the step fall through to its genuine empty exits.
+ * runtimes (running with zero detected agents, stopped, or cli_not_found),
+ * letting the step fall through to its genuine empty exits.
  *
  * Starts true so a daemon that is mid-boot when the user lands on the step
  * doesn't get a scanning→empty flash before the first status resolves.

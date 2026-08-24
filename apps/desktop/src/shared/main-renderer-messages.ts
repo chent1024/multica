@@ -7,9 +7,6 @@ export const MAIN_RENDERER_CHANNEL_STATE_CHANNEL =
   "main-renderer:channel-state";
 
 export const MAIN_RENDERER_MESSAGE_CHANNELS = [
-  "auth:token",
-  "invite:open",
-  "inbox:open",
   "settings:open",
 ] as const;
 
@@ -96,8 +93,4 @@ export class MainRendererMessageQueue {
     this.readyChannels.clear();
   }
 
-  /** Drop messages that are no longer safe for the active account. */
-  clear(channel: MainRendererMessageChannel): void {
-    this.pending.delete(channel);
-  }
 }

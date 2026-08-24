@@ -1,17 +1,13 @@
 #!/usr/bin/env node
-// Builds the `multica` CLI from server/cmd/multica and copies the binary
-// into apps/desktop/resources/bin/ so electron-vite (dev) and electron-
-// builder (prod) pick it up. Running this on every dev/build/package
-// invocation guarantees the bundled CLI always matches the current Go
-// source — no more stale binary surprises. Go's build cache makes the
-// no-op case (nothing changed) effectively free.
+// Builds both local Go binaries and copies them into resources/bin/: the
+// `multica` daemon CLI and the loopback-only SQLite workbench server.
 //
 // ldflags mirror `make build` so `multica --version` reports a meaningful
 // version / commit / date.
 //
-// Graceful: if `go` is not installed (e.g. frontend-only contributor), we
-// skip the build and fall through to auto-install at runtime. A genuine
-// Go compile error is fatal — you want that to block dev, not hide.
+// The local SQLite server is a required Desktop runtime dependency. A genuine
+// Go compile error or a missing workbench binary is fatal; packaging an app
+// that can only open a runtime-error screen would be worse than failing early.
 
 import { access, chmod, copyFile, mkdir, rm } from "node:fs/promises";
 import { constants } from "node:fs";
@@ -59,8 +55,8 @@ function normalizeRuntimeArch(arch) {
   );
 }
 
-function binaryNameForPlatform(platform) {
-  return platform === "win32" ? "multica.exe" : "multica";
+function binaryNameForPlatform(platform, name) {
+  return platform === "win32" ? `${name}.exe` : name;
 }
 
 const targetPlatform = normalizeRuntimePlatform(
@@ -69,10 +65,19 @@ const targetPlatform = normalizeRuntimePlatform(
 const targetArch = normalizeRuntimeArch(runtimeArchFromArgs(process.argv.slice(2)));
 const goos = PLATFORM_TO_GOOS[targetPlatform];
 const goarch = targetArch === "x64" ? "amd64" : targetArch;
-const binName = binaryNameForPlatform(targetPlatform);
-const srcBinary = join(serverDir, "bin", `${goos}-${goarch}`, binName);
 const destDir = join(repoRoot, "apps", "desktop", "resources", "bin");
-const destBinary = join(destDir, binName);
+const binaries = [
+  { name: "multica", command: "./cmd/multica" },
+  { name: "multica-server", command: "./cmd/server" },
+].map((binary) => {
+  const fileName = binaryNameForPlatform(targetPlatform, binary.name);
+  return {
+    ...binary,
+    fileName,
+    source: join(serverDir, "bin", `${goos}-${goarch}`, fileName),
+    destination: join(destDir, fileName),
+  };
+});
 
 // Hand git arguments straight to the binary (no shell). A match pattern like
 // `v[0-9]*` must reach git as one literal argument; routing it through a shell
@@ -113,31 +118,26 @@ if (hasGo()) {
   const date = new Date().toISOString().replace(/\.\d+Z$/, "Z");
   const ldflags = `-X main.version=${version} -X main.commit=${commit} -X main.date=${date}`;
 
-  console.log(
-    `[bundle-cli] go build → ${srcBinary} (${goos}/${goarch}, version=${version} commit=${commit})`,
-  );
   await mkdir(join(serverDir, "bin", `${goos}-${goarch}`), { recursive: true });
-  execFileSync(
-    "go",
-    [
-      "build",
-      "-ldflags",
-      ldflags,
-      "-o",
-      srcBinary,
-      "./cmd/multica",
-    ],
-    {
-      cwd: serverDir,
-      stdio: "inherit",
-      env: {
-        ...process.env,
-        CGO_ENABLED: "0",
-        GOOS: goos,
-        GOARCH: goarch,
+  for (const binary of binaries) {
+    console.log(
+      `[bundle-cli] go build → ${binary.source} (${goos}/${goarch}, version=${version} commit=${commit})`,
+    );
+    execFileSync(
+      "go",
+      ["build", "-ldflags", ldflags, "-o", binary.source, binary.command],
+      {
+        cwd: serverDir,
+        stdio: "inherit",
+        env: {
+          ...process.env,
+          CGO_ENABLED: "0",
+          GOOS: goos,
+          GOARCH: goarch,
+        },
       },
-    },
-  );
+    );
+  }
 } else {
   console.warn(
     "[bundle-cli] `go` not found in PATH — skipping CLI build. " +
@@ -146,30 +146,37 @@ if (hasGo()) {
   );
 }
 
-if (!(await exists(srcBinary))) {
-  console.warn(
-    `[bundle-cli] ${srcBinary} not present — Desktop will fall back to ` +
-      `auto-installing the latest release at runtime.`,
+const missingBinaries = [];
+for (const binary of binaries) {
+  if (!(await exists(binary.source))) missingBinaries.push(binary.source);
+}
+if (missingBinaries.length > 0) {
+  throw new Error(
+    `[bundle-cli] missing required local binaries: ${missingBinaries.join(", ")}`,
   );
-  await rm(destDir, { recursive: true, force: true });
-  process.exit(0);
 }
 
 await rm(destDir, { recursive: true, force: true });
 await mkdir(destDir, { recursive: true });
-await copyFile(srcBinary, destBinary);
-await chmod(destBinary, 0o755);
+for (const binary of binaries) {
+  await copyFile(binary.source, binary.destination);
+  await chmod(binary.destination, 0o755);
+}
 
 // macOS: ad-hoc sign so Gatekeeper doesn't complain when the parent app
 // (which itself may be unsigned in dev) spawns the child.
 if (process.platform === "darwin") {
   try {
-    execSync(`codesign -s - --force ${JSON.stringify(destBinary)}`, {
-      stdio: "pipe",
-    });
+    for (const binary of binaries) {
+      execSync(`codesign -s - --force ${JSON.stringify(binary.destination)}`, {
+        stdio: "pipe",
+      });
+    }
   } catch {
     // Non-fatal. Unsigned binaries still run when the parent app is trusted.
   }
 }
 
-console.log(`[bundle-cli] bundled ${srcBinary} → ${destBinary}`);
+for (const binary of binaries) {
+  console.log(`[bundle-cli] bundled ${binary.source} → ${binary.destination}`);
+}

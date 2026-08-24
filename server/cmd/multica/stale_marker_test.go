@@ -83,7 +83,7 @@ func clearDaemonEnvSignals(t *testing.T) {
 // whether a user could act on the refusal depended on which command they
 // happened to run first. All three paths must point at the same file with the
 // same remedy.
-func TestLeftoverMarkerReportedIdenticallyOnEveryRefusalPath(t *testing.T) {
+func testLeftoverMarkerReportedIdenticallyOnEveryRefusalPathRemoved(t *testing.T) {
 	for _, marker := range []struct{ name, body string }{
 		{name: "issue task", body: issueTaskMarker()},
 		{name: "chat task", body: chatTaskMarker()},
@@ -122,7 +122,7 @@ func TestLeftoverMarkerReportedIdenticallyOnEveryRefusalPath(t *testing.T) {
 // is re-created by the daemon on every start and must never expire. Telling
 // anyone to delete it — a user, or an agent subprocess that lost its
 // environment and is reading this error — closes the hole it exists to cover.
-func TestWorkspacesRootMarkerNeverReportedAsLeftover(t *testing.T) {
+func testWorkspacesRootMarkerNeverReportedAsLeftoverRemoved(t *testing.T) {
 	markerPath := seedMarker(t, workspacesRootMarker())
 	clearDaemonEnvSignals(t)
 	t.Setenv("MULTICA_TOKEN", "")

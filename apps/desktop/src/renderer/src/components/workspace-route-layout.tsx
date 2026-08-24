@@ -8,13 +8,8 @@ import {
 } from "@multica/core/workspace";
 import { getCurrentSlug, setCurrentWorkspace } from "@multica/core/platform";
 import { isWorkspaceDeletePending } from "@multica/core/workspace/pending-delete";
-import { useAuthStore } from "@multica/core/auth";
 import { useWorkspaceSeen } from "@multica/views/workspace/use-workspace-seen";
-import { WelcomeAfterOnboarding } from "@multica/views/workspace/welcome-after-onboarding";
-import { WorkspacePresencePrefetch } from "@multica/views/layout";
-import { SourceBackfillModal } from "@multica/views/onboarding";
 import { useTabStore } from "@/stores/tab-store";
-import { useWindowOverlayStore } from "@/stores/window-overlay-store";
 
 /**
  * Which mounted layout instance currently owns the platform workspace
@@ -33,7 +28,7 @@ let singletonOwner: symbol | null = null;
  * Desktop equivalent of apps/web/app/[workspaceSlug]/layout.tsx.
  *
  * Resolves the URL slug → workspace UUID via the React Query list cache
- * (seeded by AuthInitializer). Children do not render until the workspace
+ * (seeded by the local bootstrap). Children do not render until the data space
  * is fully resolved — useWorkspaceId() inside child pages is therefore
  * guaranteed non-null when called. Two industry-standard identities are
  * kept distinct: slug (URL / browser) and UUID (API / cache keys).
@@ -41,7 +36,7 @@ let singletonOwner: symbol | null = null;
  * Unlike web, desktop never renders a "workspace not available" page: the
  * app has no URL bar and no clickable links from outside the session, so
  * landing on an inaccessible slug can only mean stale state (a persisted
- * tab group for a workspace the current user no longer has access to, or
+ * tab group for a workspace the local actor no longer resolves, or
  * active eviction). Both cases resolve by dropping the stale tab group
  * from the tab store — the TabBar then renders a different workspace or
  * the WindowOverlay takes over (zero valid workspaces).
@@ -53,27 +48,9 @@ export function WorkspaceRouteLayout() {
   // same-workspace tab swap, which carry the same slug and workspace id and
   // are therefore indistinguishable by value.
   const [instanceId] = useState(() => Symbol("workspace-route-layout"));
-  const user = useAuthStore((s) => s.user);
-  const isAuthLoading = useAuthStore((s) => s.isLoading);
-  // While a WindowOverlay is open (onboarding, accept-invite, new-workspace),
-  // the underlying tab is still mounted in the React tree — so this layout
-  // and its WelcomeAfterOnboarding Modal would render UNDER the overlay.
-  // Because the modal uses a Portal that targets document.body, it ends up
-  // rendered LATER in the DOM and visually outranks the overlay's z-50.
-  // Suppress the modal whenever any overlay is active; the moment the
-  // overlay closes the welcome hook re-evaluates and pops if its store
-  // signal is still set.
-  const overlayActive = useWindowOverlayStore((s) => s.overlay !== null);
-
-  // Workspace routes require auth. App.tsx renders <DesktopLoginPage>
-  // instead of the shell whenever `user` is null, so this tree never mounts
-  // unauthenticated — the old in-router bounce to /login was dead defensive
-  // code and violated MUL-4741 invariant 1 (only the Coordinator navigates).
-  // The `!user` early return below keeps the defense without navigating.
-
   const { data: workspace } = useQuery({
     ...workspaceBySlugOptions(workspaceSlug ?? ""),
-    enabled: !!user && !!workspaceSlug,
+    enabled: !!workspaceSlug,
   });
   // A failed background refetch retains the last authoritative selection.
   // Only undefined means the shared workspace list has never resolved.
@@ -81,7 +58,7 @@ export function WorkspaceRouteLayout() {
 
   const { data: wsList } = useQuery({
     ...workspaceListOptions(),
-    enabled: !!user,
+    enabled: true,
   });
 
   // Feed the URL slug into the platform singleton so the API client's
@@ -119,14 +96,13 @@ export function WorkspaceRouteLayout() {
   // is scoped to the stale slug; navigating to "/" would create an
   // inconsistent "tab in group X with path /" state.
   useEffect(() => {
-    if (!user) return;
     if (!listReady) return;
     if (workspace) return;
     if (hasBeenSeen) return; // active eviction in flight — let the other path win
     if (!wsList) return;
     const validSlugs = new Set(wsList.map((w) => w.slug));
     useTabStore.getState().validateWorkspaceSlugs(validSlugs);
-  }, [user, listReady, workspace, hasBeenSeen, wsList]);
+  }, [listReady, workspace, hasBeenSeen, wsList]);
 
   // Release the platform singleton when this layout's workspace stops
   // resolving, and again when the layout unmounts. Nothing else owned that
@@ -169,31 +145,13 @@ export function WorkspaceRouteLayout() {
     };
   }, [workspaceSlug, instanceId]);
 
-  if (isAuthLoading) return null;
-  if (!user) return null;
   if (!workspaceSlug) return null;
   if (!listReady) return null;
   if (!workspace) return null; // auto-heal effect above handles the cleanup
 
   return (
     <WorkspaceSlugProvider slug={workspaceSlug}>
-      <WorkspacePresencePrefetch />
       <Outlet />
-      {/* Reads the welcome-store transient signal parked by
-       *  OnboardingFlow.handleRuntimeNext. Suppressed while a WindowOverlay
-       *  (onboarding / accept-invite / new-workspace) is open so the modal
-       *  doesn't portal-jump in front of an active pre-workspace flow.
-       *  Once the overlay closes the hook re-evaluates and pops the
-       *  Modal — unless the store signal has already been consumed, in
-       *  which case the hook renders null. */}
-      {!overlayActive && <WelcomeAfterOnboarding />}
-      {/* Source-attribution backfill: same Dialog the web shell mounts
-       *  inside DashboardLayout. Desktop's WorkspaceRouteLayout doesn't
-       *  wrap DashboardLayout, so the modal has to be wired in directly
-       *  here. Same overlay-suppression rule as WelcomeAfterOnboarding —
-       *  a portal-rendered Dialog at z-50 would otherwise sit above an
-       *  active pre-workspace overlay. */}
-      {!overlayActive && <SourceBackfillModal />}
     </WorkspaceSlugProvider>
   );
 }

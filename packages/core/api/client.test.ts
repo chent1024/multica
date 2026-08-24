@@ -1,8 +1,10 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { ApiClient, ApiError, CHAT_DRAFT_RESTORE_CAPABILITY, clientErrorMessage } from "./client";
 import { EMPTY_PLUGIN_PACKAGE_LIST, EMPTY_PLUGIN_PREVIEW, EMPTY_PLUGIN_SURFACE_LAUNCH } from "./schemas";
+import { setCurrentWorkspace } from "../platform/workspace-storage";
 
 afterEach(() => {
+  setCurrentWorkspace(null, null);
   vi.unstubAllGlobals();
 });
 
@@ -774,6 +776,41 @@ describe("ApiClient notification preferences", () => {
 });
 
 describe("ApiClient", () => {
+  it("does not request workspace members in local mode", async () => {
+    const fetchMock = vi.fn();
+    vi.stubGlobal("fetch", fetchMock);
+    const client = new ApiClient("http://127.0.0.1:8080", { localMode: true });
+
+    await expect(client.listMembers("local-workspace")).resolves.toEqual([]);
+    expect(fetchMock).not.toHaveBeenCalled();
+  });
+
+  it("does not request squads in local mode", async () => {
+    const fetchMock = vi.fn();
+    vi.stubGlobal("fetch", fetchMock);
+    const client = new ApiClient("http://127.0.0.1:8080", { localMode: true });
+
+    await expect(client.listSquads()).resolves.toEqual([]);
+    expect(fetchMock).not.toHaveBeenCalled();
+  });
+
+  it("does not send a tenant-selection header in local mode", async () => {
+    const fetchMock = vi.fn().mockResolvedValue(
+      new Response("[]", {
+        status: 200,
+        headers: { "Content-Type": "application/json" },
+      }),
+    );
+    vi.stubGlobal("fetch", fetchMock);
+    setCurrentWorkspace("legacy-cloud", "legacy-id");
+    const client = new ApiClient("http://127.0.0.1:8080", { localMode: true });
+
+    await client.listWorkspaces();
+
+    const headers = new Headers(fetchMock.mock.calls[0]?.[1]?.headers);
+    expect(headers.has("X-Workspace-Slug")).toBe(false);
+  });
+
   it("preserves HTTP status on failed requests", async () => {
     vi.stubGlobal(
       "fetch",

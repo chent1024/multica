@@ -118,7 +118,6 @@ USAGE
 FLAGS
 {{.LocalFlags.FlagUsages}}
 EXAMPLES
-  $ multica login
   $ multica issue list --output json
   $ multica daemon start
   $ multica agent list --output json

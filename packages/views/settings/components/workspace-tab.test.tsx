@@ -245,4 +245,13 @@ describe("WorkspaceTab — automatic updates", () => {
     expect(screen.getByPlaceholderText("TES")).toBeDisabled();
     expect(screen.getByDisplayValue("Test Workspace")).toBeDisabled();
   });
+
+  it("removes leave and delete actions in local mode", () => {
+    render(<WorkspaceTab localMode />, { wrapper: I18nWrapper });
+
+    expect(screen.queryByText("Danger Zone")).not.toBeInTheDocument();
+    expect(screen.queryByText("Leave workspace")).not.toBeInTheDocument();
+    expect(screen.queryByText("Delete workspace")).not.toBeInTheDocument();
+    expect(screen.getByDisplayValue("Test Workspace")).toBeEnabled();
+  });
 });

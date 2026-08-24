@@ -78,7 +78,7 @@ fi
 worktree_env="$target/.env.worktree"
 if [ -f "$worktree_env" ]; then
   db_drop_status=0
-  bash "$script_dir/drop-database.sh" "$worktree_env" || db_drop_status=$?
+  bash "$script_dir/drop-sqlite.sh" "$worktree_env" || db_drop_status=$?
   case "$db_drop_status" in
     0) ;;
     2)
@@ -88,7 +88,7 @@ if [ -f "$worktree_env" ]; then
     *) exit "$db_drop_status" ;;
   esac
 else
-  echo "No .env.worktree found; skipping database cleanup."
+  echo "No .env.worktree found; skipping SQLite cleanup."
 fi
 
 git -C "$repo_root" worktree remove "$target"

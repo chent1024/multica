@@ -111,7 +111,7 @@ interface CommentCardProps {
   onReplyAccepted?: (commentId: string) => void;
   onEdit: (commentId: string, content: string, attachmentIds: string[], suppressAgentIds?: string[], contentBase?: string) => Promise<void>;
   onDelete: (commentId: string) => void;
-  onToggleReaction: (commentId: string, emoji: string) => void;
+  onToggleReaction?: (commentId: string, emoji: string) => void;
   /** Resolve/unresolve any comment in this thread (commentId = the target row). */
   onResolveToggle?: (commentId: string, resolved: boolean) => void;
   /**
@@ -601,7 +601,7 @@ function CommentRow({
   isHighlighted?: boolean;
   onEdit: (commentId: string, content: string, attachmentIds: string[], suppressAgentIds?: string[], contentBase?: string) => Promise<void>;
   onDelete: (commentId: string) => void;
-  onToggleReaction: (commentId: string, emoji: string) => void;
+  onToggleReaction?: (commentId: string, emoji: string) => void;
   onResolveToggle?: (commentId: string, resolved: boolean) => void;
 }) {
   const { t } = useT("issues");
@@ -804,13 +804,15 @@ function CommentRow({
               className="mt-2 pl-12 pr-4 max-md:pl-3 max-md:pr-3"
             />
           )}
-          <ReactionBar
-            reactions={reactions}
-            currentUserId={currentUserId}
-            onToggle={(emoji) => onToggleReaction(entry.id, emoji)}
-            getActorName={getActorName}
-            className="mt-1.5 pl-12 pr-4 max-md:pl-3 max-md:pr-3"
-          />
+          {onToggleReaction && (
+            <ReactionBar
+              reactions={reactions}
+              currentUserId={currentUserId}
+              onToggle={(emoji) => onToggleReaction(entry.id, emoji)}
+              getActorName={getActorName}
+              className="mt-1.5 pl-12 pr-4 max-md:pl-3 max-md:pr-3"
+            />
+          )}
         </>
       )}
     </div>
@@ -1130,13 +1132,15 @@ function CommentCardImpl({
                     className="mt-2 pl-10 max-md:pl-0"
                   />
                 )}
-                <ReactionBar
-                  reactions={reactions}
-                  currentUserId={currentUserId}
-                  onToggle={(emoji) => onToggleReaction(entry.id, emoji)}
-                  getActorName={getActorName}
-                  className="mt-1.5 pl-10 max-md:pl-0"
-                />
+                {onToggleReaction && (
+                  <ReactionBar
+                    reactions={reactions}
+                    currentUserId={currentUserId}
+                    onToggle={(emoji) => onToggleReaction(entry.id, emoji)}
+                    getActorName={getActorName}
+                    className="mt-1.5 pl-10 max-md:pl-0"
+                  />
+                )}
               </>
             )}
           </div>

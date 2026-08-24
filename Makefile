@@ -1,4 +1,4 @@
-.PHONY: help makehelp dev server daemon cli multica build test migrate-up migrate-down sqlc seed clean setup start stop check worktree-env setup-main start-main stop-main check-main setup-worktree start-worktree stop-worktree check-worktree remove-worktree db-up db-down db-drop db-reset selfhost selfhost-build selfhost-stop up down status list destroy gc env-exec api-dev web-dev desktop-dev
+.PHONY: help makehelp dev server daemon cli multica build test migrate-up migrate-down seed clean setup start stop check worktree-env setup-main start-main stop-main check-main setup-worktree start-worktree stop-worktree check-worktree remove-worktree db-up db-down db-drop db-reset up down status list destroy gc env-exec api-dev desktop-dev
 
 MAIN_ENV_FILE ?= .env
 WORKTREE_ENV_FILE ?= .env.worktree
@@ -8,29 +8,22 @@ ifneq ($(wildcard $(ENV_FILE)),)
 include $(ENV_FILE)
 endif
 
-POSTGRES_DB ?= multica
-POSTGRES_USER ?= multica
-POSTGRES_PASSWORD ?= multica
-POSTGRES_PORT ?= 5432
-PORT := $(or $(BACKEND_PORT),$(API_PORT),$(SERVER_PORT),$(PORT),8080)
+MULTICA_SQLITE_PATH ?= $(CURDIR)/.multica/multica.db
+PORT := $(or $(BACKEND_PORT),$(API_PORT),$(SERVER_PORT),$(PORT),17824)
 ifeq ($(origin MULTICA_PUBLIC_URL), undefined)
 MULTICA_PUBLIC_URL := http://localhost:$(PORT)
 endif
 FRONTEND_PORT ?= 3000
 FRONTEND_ORIGIN ?= http://localhost:$(FRONTEND_PORT)
 MULTICA_APP_URL ?= $(FRONTEND_ORIGIN)
-DATABASE_URL ?= postgres://$(POSTGRES_USER):$(POSTGRES_PASSWORD)@localhost:$(POSTGRES_PORT)/$(POSTGRES_DB)?sslmode=disable
 NEXT_PUBLIC_API_URL ?= http://localhost:$(PORT)
 NEXT_PUBLIC_WS_URL ?= ws://localhost:$(PORT)/ws
-GOOGLE_REDIRECT_URI ?= $(FRONTEND_ORIGIN)/auth/callback
 MULTICA_SERVER_URL ?= ws://localhost:$(PORT)/ws
 LOCAL_UPLOAD_BASE_URL ?= http://localhost:$(PORT)
 
 export
 
 MULTICA_ARGS ?= $(ARGS)
-
-COMPOSE := docker compose
 
 define REQUIRE_ENV
 	@if [ ! -f "$(ENV_FILE)" ]; then \
@@ -40,108 +33,17 @@ define REQUIRE_ENV
 	fi
 endef
 
-# Self-hosting requires the Docker Compose CLI plugin (`docker compose`).
-# The self-host compose files use compose-spec syntax (top-level `name:`, no
-# `version:`) that the legacy v1 `docker-compose` standalone cannot parse, so we
-# fail early with an actionable message instead of a cryptic CLI parse error
-# (e.g. "unknown shorthand flag: 'f' in -f") when the plugin is missing or v1.
-# Keep the message short and OS-agnostic: per-OS install steps belong in docs.
-define REQUIRE_COMPOSE
-	@if ! compose_version=$$($(COMPOSE) version --short 2>/dev/null); then \
-		echo "Docker Compose ('docker compose') was not found."; \
-		echo "Self-hosting requires the Compose CLI plugin; legacy 'docker-compose' v1 is not supported."; \
-		echo "Install Docker Compose from https://docs.docker.com/compose/install/ and verify with: docker compose version"; \
-		exit 1; \
-	fi; \
-	case "$$compose_version" in \
-		1.*|v1.*) \
-			echo "'$(COMPOSE)' is legacy Docker Compose v1 ($$compose_version)."; \
-			echo "Self-hosting requires the Compose CLI plugin; legacy 'docker-compose' v1 is not supported."; \
-			echo "Install Docker Compose from https://docs.docker.com/compose/install/ and verify with: docker compose version"; \
-			exit 1; \
-			;; \
-	esac
-endef
-
-# Default target changed from selfhost to help: bare `make` now prints this help
-# instead of launching a full Docker Compose build, which is safer for onboarding.
+# Bare `make` prints the local-workbench entry points.
 .DEFAULT_GOAL := help
 
 ##@ Help
 
 help: ## Show available make targets and common local workflows
-	@awk 'BEGIN {FS = ":.*## "; printf "\nUsage:\n  make \033[36m<target>\033[0m\n\nQuick start:\n  \033[36mmake up\033[0m           Start this checkout'"'"'s environment (C=api,web,daemon,desktop)\n  \033[36mmake status\033[0m       Show what is running, and prove it is yours\n  \033[36mmake down\033[0m         Stop it again, keeping the database\n  \033[36mmake check\033[0m        Run the full local verification pipeline\n\nCheckout modes:\n  Main checkout uses \033[36m.env\033[0m\n  Worktrees use \033[36m.env.worktree\033[0m (generate with \033[36mmake worktree-env\033[0m)\n\n"} \
+	@awk 'BEGIN {FS = ":.*## "; printf "\nUsage:\n  make \033[36m<target>\033[0m\n\nQuick start:\n  \033[36mmake up\033[0m           Start the local API and Electron desktop (C can override)\n  \033[36mmake status\033[0m       Show what is running, and prove it is yours\n  \033[36mmake down\033[0m         Stop it again, keeping the database\n  \033[36mmake check\033[0m        Run the local-workbench verification pipeline\n\nCheckout modes:\n  Main checkout uses \033[36m.env\033[0m\n  Worktrees use \033[36m.env.worktree\033[0m (generate with \033[36mmake worktree-env\033[0m)\n\n"} \
 		/^##@/ {printf "\n\033[1m%s\033[0m\n", substr($$0, 5); next} \
 		/^[a-zA-Z0-9_.-]+:.*## / {printf "  \033[36m%-18s\033[0m %s\n", $$1, $$2}' $(MAKEFILE_LIST)
 
 makehelp: help ## Alias for `make help`
-
-# ---------- Self-hosting (Docker Compose) ----------
-##@ Self-hosting
-
-selfhost: ## Create .env if needed, then pull and start the official self-hosted images
-	$(REQUIRE_COMPOSE)
-	@if [ ! -f .env ]; then \
-		echo "==> Creating .env from .env.example..."; \
-		cp .env.example .env; \
-		JWT=$$(openssl rand -hex 32); \
-		PGPASS=$$(openssl rand -hex 24); \
-		VCSKEY=$$(openssl rand -base64 32); \
-		if [ "$$(uname)" = "Darwin" ]; then \
-			sed -i '' "s/^JWT_SECRET=.*/JWT_SECRET=$$JWT/" .env; \
-			sed -i '' "s/^POSTGRES_PASSWORD=.*/POSTGRES_PASSWORD=$$PGPASS/" .env; \
-			sed -i '' -E "s#^(DATABASE_URL=postgres://[^:]+:)[^@]*(@.*)#\1$$PGPASS\2#" .env; \
-			sed -i '' "s#^MULTICA_VCS_SECRET_KEY=.*#MULTICA_VCS_SECRET_KEY=$$VCSKEY#" .env; \
-		else \
-			sed -i "s/^JWT_SECRET=.*/JWT_SECRET=$$JWT/" .env; \
-			sed -i "s/^POSTGRES_PASSWORD=.*/POSTGRES_PASSWORD=$$PGPASS/" .env; \
-			sed -i -E "s#^(DATABASE_URL=postgres://[^:]+:)[^@]*(@.*)#\1$$PGPASS\2#" .env; \
-			sed -i "s#^MULTICA_VCS_SECRET_KEY=.*#MULTICA_VCS_SECRET_KEY=$$VCSKEY#" .env; \
-		fi; \
-		echo "==> Generated random JWT_SECRET, POSTGRES_PASSWORD, and MULTICA_VCS_SECRET_KEY"; \
-	fi
-	@echo "==> Pulling official Multica images..."
-	@if ! $(COMPOSE) -f docker-compose.selfhost.yml pull; then \
-		echo ""; \
-		echo "Official images for tag '$${MULTICA_IMAGE_TAG:-latest}' are not published yet."; \
-		echo "If this is before the first GHCR release, build from the current checkout:"; \
-		echo "  make selfhost-build"; \
-		exit 1; \
-	fi
-	@echo "==> Starting Multica via Docker Compose..."
-	$(COMPOSE) -f docker-compose.selfhost.yml up -d
-	@bash scripts/selfhost-wait.sh official
-
-selfhost-build: ## Build backend/web from the current checkout and start the self-hosted stack
-	$(REQUIRE_COMPOSE)
-	@if [ ! -f .env ]; then \
-		echo "==> Creating .env from .env.example..."; \
-		cp .env.example .env; \
-		JWT=$$(openssl rand -hex 32); \
-		PGPASS=$$(openssl rand -hex 24); \
-		VCSKEY=$$(openssl rand -base64 32); \
-		if [ "$$(uname)" = "Darwin" ]; then \
-			sed -i '' "s/^JWT_SECRET=.*/JWT_SECRET=$$JWT/" .env; \
-			sed -i '' "s/^POSTGRES_PASSWORD=.*/POSTGRES_PASSWORD=$$PGPASS/" .env; \
-			sed -i '' -E "s#^(DATABASE_URL=postgres://[^:]+:)[^@]*(@.*)#\1$$PGPASS\2#" .env; \
-			sed -i '' "s#^MULTICA_VCS_SECRET_KEY=.*#MULTICA_VCS_SECRET_KEY=$$VCSKEY#" .env; \
-		else \
-			sed -i "s/^JWT_SECRET=.*/JWT_SECRET=$$JWT/" .env; \
-			sed -i "s/^POSTGRES_PASSWORD=.*/POSTGRES_PASSWORD=$$PGPASS/" .env; \
-			sed -i -E "s#^(DATABASE_URL=postgres://[^:]+:)[^@]*(@.*)#\1$$PGPASS\2#" .env; \
-			sed -i "s#^MULTICA_VCS_SECRET_KEY=.*#MULTICA_VCS_SECRET_KEY=$$VCSKEY#" .env; \
-		fi; \
-		echo "==> Generated random JWT_SECRET, POSTGRES_PASSWORD, and MULTICA_VCS_SECRET_KEY"; \
-	fi
-	@echo "==> Building Multica from the current checkout..."
-	$(COMPOSE) -f docker-compose.selfhost.yml -f docker-compose.selfhost.build.yml up -d --build
-	@bash scripts/selfhost-wait.sh build
-
-selfhost-stop: ## Stop the self-hosted Docker Compose stack
-	$(REQUIRE_COMPOSE)
-	@echo "==> Stopping Multica services..."
-	$(COMPOSE) -f docker-compose.selfhost.yml down
-	@echo "✓ All services stopped."
 
 # ---------- Environments ----------
 ##@ Environments
@@ -149,12 +51,12 @@ selfhost-stop: ## Stop the self-hosted Docker Compose stack
 # One verb per lifecycle step, shared by humans and agents. C= picks the
 # components; ARGS= forwards anything else to the script.
 #
-#   make up                     api + web
-#   make up C=api,web,daemon    add the agent daemon
-#   make up C=desktop           Electron against this environment's backend
+#   make up                     local API + Electron desktop
+#   make up C=api,desktop       spell out the default components
+#   make up C=api               run only the SQLite API
 #   make up ARGS=--ephemeral    agent-owned, expires, collected by `make gc`
 
-up: ## Start this checkout's environment (C=api,web,daemon,desktop; default api,web)
+up: ## Start this checkout's environment (C=api,daemon,desktop; default api,desktop)
 	@bash scripts/dev-env.sh up $(if $(C),--components $(C)) $(ARGS)
 
 down: ## Stop this environment's processes, keeping its database and profile
@@ -181,10 +83,7 @@ env-exec: ## Run a command with this environment's variables (ARGS="-- pnpm dev:
 # The commit ldflag is what makes /health's identity useful: without it every
 # environment reports "unknown" and cannot prove which revision it is serving.
 api-dev: ## Run only the Go backend for the current env file
-	cd server && go run -ldflags "-X main.commit=$(COMMIT)" ./cmd/server
-
-web-dev: ## Run only the Next.js dev server for the current env file
-	pnpm dev:web
+	cd server && MULTICA_COMMIT=$(COMMIT) go run -ldflags "-X main.commit=$(COMMIT)" ./cmd/server
 
 desktop-dev: ## Run only the Electron desktop app for the current env file
 	pnpm dev:desktop
@@ -192,80 +91,45 @@ desktop-dev: ## Run only the Electron desktop app for the current env file
 # ---------- One-click commands ----------
 ##@ One-click
 
-setup: ## Prepare the current checkout from its env file: install deps, ensure DB, run migrations
+setup: ## Install dependencies; SQLite initializes on first start
 	$(REQUIRE_ENV)
 	@echo "==> Using env file: $(ENV_FILE)"
 	@echo "==> Installing dependencies..."
 	pnpm install
-	@bash scripts/ensure-postgres.sh "$(ENV_FILE)"
-	@echo "==> Running migrations..."
-	cd server && go run ./cmd/migrate up
 	@echo ""
-	@echo "✓ Setup complete! Run 'make start' to launch the app."
+	@echo "✓ Setup complete. SQLite initializes on first local-server start."
 
-start: ## Start backend and frontend for the current checkout and run migrations first
+start: ## Start the local SQLite backend and Electron desktop
 	$(REQUIRE_ENV)
-	@echo "Using env file: $(ENV_FILE)"
-	@echo "Backend: http://localhost:$(PORT)"
-	@echo "Frontend: http://localhost:$(FRONTEND_PORT)"
-	@bash scripts/ensure-postgres.sh "$(ENV_FILE)"
-	@echo "Running migrations..."
-	cd server && go run ./cmd/migrate up
-	@echo "Starting backend and frontend..."
-	@trap 'kill 0' EXIT; \
-		(cd server && go run ./cmd/server) & \
-		pnpm dev:web & \
-		wait
+	@$(MAKE) up C=api,desktop ENV_FILE="$(ENV_FILE)"
 
-stop: ## Stop backend and frontend processes for the current checkout
+stop: ## Stop local app processes for the current checkout
 	$(REQUIRE_ENV)
-	@echo "Stopping services..."
-	@-lsof -nP -iTCP:$(PORT) -sTCP:LISTEN -t | xargs kill -9 2>/dev/null
-	@-lsof -nP -iTCP:$(FRONTEND_PORT) -sTCP:LISTEN -t | xargs kill -9 2>/dev/null
-	@case "$(DATABASE_URL)" in \
-		""|*@localhost:*|*@localhost/*|*@127.0.0.1:*|*@127.0.0.1/*|*@\[::1\]:*|*@\[::1\]/*) \
-			echo "✓ App processes stopped. Shared PostgreSQL is still running on localhost:$(POSTGRES_PORT)." ;; \
-		*) \
-			echo "✓ App processes stopped. Remote PostgreSQL was not affected." ;; \
-	esac
+	@$(MAKE) down ENV_FILE="$(ENV_FILE)"
 
-check: ## Run typecheck, TS tests, Go tests, and Playwright E2E for the current checkout
+check: ## Run typecheck, TS tests, Go tests, and the packaged Desktop build
 	$(REQUIRE_ENV)
 	@ENV_FILE="$(ENV_FILE)" bash scripts/check.sh
 
-db-up: ## Start the shared PostgreSQL container used by main and worktrees
-	@$(COMPOSE) up -d postgres
+db-up: ## Initialize the local SQLite database
+	@mkdir -p "$(dir $(MULTICA_SQLITE_PATH))"
+	cd server && MULTICA_INIT_ONLY=1 MULTICA_SQLITE_PATH="$(MULTICA_SQLITE_PATH)" go run ./cmd/server
 
-db-down: ## Stop the shared PostgreSQL container without removing its Docker volume
-	@$(COMPOSE) down
+db-down: ## No-op: SQLite has no external database process
+	@echo "SQLite is embedded; there is no database service to stop."
 
-db-drop: ## Permanently drop the current env's local database after confirmation
+db-drop: ## Permanently delete the current env's SQLite database after confirmation
 	$(REQUIRE_ENV)
-	@status=0; bash scripts/drop-database.sh "$(ENV_FILE)" || status=$$?; \
+	@status=0; MULTICA_SQLITE_PATH="$(MULTICA_SQLITE_PATH)" bash scripts/drop-sqlite.sh "$(ENV_FILE)" || status=$$?; \
 		if [ "$$status" -eq 2 ]; then exit 0; fi; \
 		exit "$$status"
 
-# Drop + recreate the current env's database, then run all migrations.
-# Use for a clean slate in local dev. Only affects the DB named in
-# ENV_FILE (POSTGRES_DB); the shared postgres container and other
-# worktree DBs are untouched. Refuses to run against a remote host.
-db-reset: ## Drop and recreate the current env's database, then re-run all migrations
+db-reset: ## Delete and recreate the current env's SQLite database
 	$(REQUIRE_ENV)
-	@case "$(DATABASE_URL)" in \
-		""|*@localhost:*|*@localhost/*|*@127.0.0.1:*|*@127.0.0.1/*|*@\[::1\]:*|*@\[::1\]/*) ;; \
-		*) echo "Refusing to reset: DATABASE_URL points at a remote host."; exit 1 ;; \
-	esac
-	@bash scripts/ensure-postgres.sh "$(ENV_FILE)"
-	@echo "==> Dropping and recreating database '$(POSTGRES_DB)'..."
-	@$(COMPOSE) exec -T postgres psql -U $(POSTGRES_USER) -d postgres -v ON_ERROR_STOP=1 \
-		-c "DROP DATABASE IF EXISTS \"$(POSTGRES_DB)\" WITH (FORCE);" \
-		-c "CREATE DATABASE \"$(POSTGRES_DB)\";"
-	@echo "==> Running migrations..."
-	cd server && go run ./cmd/migrate up
-	@echo ""
-	@echo "✓ Database '$(POSTGRES_DB)' reset. Run 'make start' to launch the app."
+	@MULTICA_SQLITE_PATH="$(MULTICA_SQLITE_PATH)" bash scripts/drop-sqlite.sh "$(ENV_FILE)"
+	@$(MAKE) db-up ENV_FILE="$(ENV_FILE)" MULTICA_SQLITE_PATH="$(MULTICA_SQLITE_PATH)"
 
-worktree-env: ## Generate .env.worktree with a unique DB name and app ports for this worktree
+worktree-env: ## Generate .env.worktree with local SQLite and unique app ports
 	@bash scripts/init-worktree-env.sh .env.worktree
 
 setup-main: ## Prepare the main checkout using .env
@@ -298,21 +162,20 @@ stop-worktree: ## Stop this worktree's backend and frontend processes
 check-worktree: ## Run the full verification pipeline for this worktree
 	@ENV_FILE=$(WORKTREE_ENV_FILE) bash scripts/check.sh
 
-remove-worktree: ## Drop a linked worktree's database, then remove it (WORKTREE=path)
+remove-worktree: ## Delete a linked worktree's SQLite file, then remove it (WORKTREE=path)
 	@bash scripts/remove-worktree.sh "$(WORKTREE)"
 
 # ---------- Individual commands ----------
 ##@ Individual commands
 
-dev: ## Bootstrap this checkout end-to-end: create env if needed, ensure DB, migrate, start services
+dev: ## Bootstrap this checkout with SQLite and start local services
 	@bash scripts/dev.sh
 
 server: ## Run only the Go server for the current checkout
 	$(REQUIRE_ENV)
-	@bash scripts/ensure-postgres.sh "$(ENV_FILE)"
 	cd server && go run ./cmd/server
 
-daemon: ## Restart the local agent daemon using the CLI's stored auth/session
+daemon: ## Restart the local Codex execution daemon
 	@$(MAKE) multica MULTICA_ARGS="daemon restart --profile local"
 
 cli: ## Run the multica CLI with ARGS or MULTICA_ARGS from source
@@ -336,32 +199,23 @@ DATE    ?= $(shell date -u '+%Y-%m-%dT%H:%M:%SZ')
 # recursive one — which prints `go: Command not found` on frontend-only
 # checkouts with no Go toolchain installed.
 build: EXE = $(if $(filter windows,$(or $(GOOS),$(shell go env GOOS))),.exe,)
-build: ## Build the server, CLI, and migrate binaries into server/bin
+build: ## Build the local SQLite server and CLI into server/bin
 	cd server && go build -ldflags "-X main.version=$(VERSION) -X main.commit=$(COMMIT)" -o bin/server$(EXE) ./cmd/server
 	cd server && go build -ldflags "-X main.version=$(VERSION) -X main.commit=$(COMMIT) -X main.date=$(DATE)" -o bin/multica$(EXE) ./cmd/multica
-	cd server && go build -o bin/migrate$(EXE) ./cmd/migrate
 
-test: ## Run Go tests after ensuring the target DB exists and migrations are applied
-	$(REQUIRE_ENV)
-	@bash scripts/ensure-postgres.sh "$(ENV_FILE)"
-	cd server && go run ./cmd/migrate up
+test: ## Run Go tests; the local workbench tests use temporary SQLite files
 	bash scripts/test-go.sh --race
 
 # Database
 ##@ Database
 
-migrate-up: ## Create the target DB if needed, then apply database migrations
+migrate-up: ## Initialize or upgrade the local SQLite schema
 	$(REQUIRE_ENV)
-	@bash scripts/ensure-postgres.sh "$(ENV_FILE)"
-	cd server && go run ./cmd/migrate up
+	@$(MAKE) db-up ENV_FILE="$(ENV_FILE)" MULTICA_SQLITE_PATH="$(MULTICA_SQLITE_PATH)"
 
-migrate-down: ## Create the target DB if needed, then roll back database migrations
-	$(REQUIRE_ENV)
-	@bash scripts/ensure-postgres.sh "$(ENV_FILE)"
-	cd server && go run ./cmd/migrate down
-
-sqlc: ## Regenerate sqlc code
-	cd server && go run github.com/sqlc-dev/sqlc/cmd/sqlc@v1.31.1 generate
+migrate-down: ## SQLite schema changes are forward-only
+	@echo "SQLite schema rollback is not supported; restore a database backup instead." >&2
+	@exit 1
 
 # Cleanup
 ##@ Cleanup

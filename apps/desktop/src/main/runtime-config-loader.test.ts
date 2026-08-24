@@ -35,7 +35,7 @@ describe("loadRuntimeConfig", () => {
     });
   });
 
-  it("uses cloud defaults when packaged config is absent", async () => {
+  it("uses local defaults when packaged config is absent", async () => {
     const dir = await mkdtemp(join(tmpdir(), "multica-desktop-config-"));
     await expect(
       loadRuntimeConfig({
@@ -47,9 +47,9 @@ describe("loadRuntimeConfig", () => {
       ok: true,
       config: {
         schemaVersion: 1,
-        apiUrl: "https://api.multica.ai",
-        wsUrl: "wss://api.multica.ai/ws",
-        appUrl: "https://multica.ai",
+        apiUrl: "http://127.0.0.1:17824",
+        wsUrl: "ws://127.0.0.1:17824/ws",
+        appUrl: "http://localhost:3000",
       },
     });
   });
@@ -59,7 +59,7 @@ describe("loadRuntimeConfig", () => {
     const configPath = join(dir, "desktop.json");
     await writeFile(
       configPath,
-      JSON.stringify({ schemaVersion: 1, apiUrl: "https://api.example.com" }),
+      JSON.stringify({ schemaVersion: 1, apiUrl: "http://127.0.0.1:19090" }),
     );
 
     await expect(
@@ -68,11 +68,25 @@ describe("loadRuntimeConfig", () => {
       ok: true,
       config: {
         schemaVersion: 1,
-        apiUrl: "https://api.example.com",
-        wsUrl: "wss://api.example.com/ws",
-        appUrl: "https://example.com",
+        apiUrl: "http://127.0.0.1:19090",
+        wsUrl: "ws://127.0.0.1:19090/ws",
+        appUrl: "http://127.0.0.1:19090",
       },
     });
+  });
+
+  it("rejects a packaged remote API configuration", async () => {
+    const dir = await mkdtemp(join(tmpdir(), "multica-desktop-config-"));
+    const configPath = join(dir, "desktop.json");
+    await writeFile(
+      configPath,
+      JSON.stringify({ schemaVersion: 1, apiUrl: "https://api.example.com" }),
+    );
+
+    const result = await loadRuntimeConfig({ isDev: false, configPath, env: {} });
+
+    expect(result.ok).toBe(false);
+    if (!result.ok) expect(result.error.message).toContain("must use loopback");
   });
 
   it("fails closed when packaged desktop.json is invalid", async () => {

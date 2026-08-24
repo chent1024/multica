@@ -9,11 +9,10 @@ missing=()
 command -v node >/dev/null 2>&1 || missing+=("node")
 command -v pnpm >/dev/null 2>&1 || missing+=("pnpm")
 command -v go >/dev/null 2>&1 || missing+=("go")
-command -v docker >/dev/null 2>&1 || missing+=("docker")
 
 if [ ${#missing[@]} -gt 0 ]; then
   echo "✗ Missing prerequisites: ${missing[*]}"
-  echo "  Please install: Node.js 22, pnpm 10.28.2, Go 1.26.6, Docker"
+  echo "  Please install: Node.js 22, pnpm 10.28.2, Go 1.26.6"
   exit 1
 fi
 
@@ -50,19 +49,17 @@ if [ ! -d node_modules ]; then
 fi
 
 # ---------- Database ----------
-bash scripts/ensure-postgres.sh "$ENV_FILE"
-
-echo "==> Running migrations..."
-(cd server && go run ./cmd/migrate up)
+export MULTICA_SQLITE_PATH="${MULTICA_SQLITE_PATH:-$REPO_ROOT/.multica/multica.db}"
+mkdir -p "$(dirname "$MULTICA_SQLITE_PATH")"
 
 # ---------- Start services ----------
 echo ""
 echo "✓ Ready. Starting services..."
 echo "  Backend:  http://localhost:${PORT:-8080}"
-echo "  Frontend: http://localhost:${FRONTEND_PORT:-3000}"
+echo "  Desktop: local Electron workbench"
 echo ""
 
 trap 'kill 0' EXIT
 (cd server && go run ./cmd/server) &
-pnpm dev:web &
+pnpm dev:desktop &
 wait

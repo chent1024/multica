@@ -18,9 +18,6 @@ vi.mock("@multica/core/agents", () => ({
   agentTaskSnapshotOptions: () => ({ queryKey: ["snapshot"] }),
 }));
 vi.mock("./daemon-panel", () => ({ DaemonPanel: () => null }));
-vi.mock("../platform/daemon-reauth", () => ({
-  reauthenticateDaemon: vi.fn(),
-}));
 vi.mock("sonner", () => ({
   toast: { error: vi.fn(), success: vi.fn() },
 }));

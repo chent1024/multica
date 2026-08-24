@@ -453,6 +453,8 @@ export interface ApiClientIdentity {
 export interface ApiClientOptions {
   logger?: Logger;
   onUnauthorized?: () => void;
+  /** Loopback-only desktop mode has no accounts or workspace members. */
+  localMode?: boolean;
   /** Identifies the client to the server. Sent as X-Client-* headers. */
   identity?: ApiClientIdentity;
 }
@@ -635,7 +637,7 @@ export class ApiClient {
     const headers: Record<string, string> = {};
     if (this.token) headers["Authorization"] = `Bearer ${this.token}`;
     const slug = getCurrentSlug();
-    if (slug) headers["X-Workspace-Slug"] = slug;
+    if (slug && !this.options.localMode) headers["X-Workspace-Slug"] = slug;
     const csrf = this.readCsrfToken();
     if (csrf) headers["X-CSRF-Token"] = csrf;
     const id = this.options.identity;
@@ -2774,6 +2776,7 @@ export class ApiClient {
 
   // Members
   async listMembers(workspaceId: string): Promise<MemberWithUser[]> {
+    if (this.options.localMode) return [];
     return this.fetch(`/api/workspaces/${workspaceId}/members`);
   }
 
@@ -3866,6 +3869,7 @@ export class ApiClient {
 
   // Squads
   async listSquads(): Promise<Squad[]> {
+    if (this.options.localMode) return [];
     const raw = await this.fetch<unknown>(`/api/squads`);
     return parseWithFallback(raw, SquadListSchema, EMPTY_SQUAD_LIST, {
       endpoint: "GET /api/squads",

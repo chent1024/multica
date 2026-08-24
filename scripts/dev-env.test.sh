@@ -15,18 +15,6 @@ export MULTICA_DEV_WORKSPACES_PARENT="$tmp_dir/workspaces-parent"
 export MULTICA_DEV_DESKTOP_APP_DATA="$tmp_dir/app-data"
 export MULTICA_DEV_PROFILES_HOME="$tmp_dir/profiles"
 
-fake_bin="$tmp_dir/bin"
-mkdir -p "$fake_bin"
-cat > "$fake_bin/psql" <<'EOF'
-#!/usr/bin/env bash
-case " $* " in
-  *" DROP DATABASE "*) [ "${FAIL_DROP:-0}" != 1 ] ;;
-  *) printf '1\n' ;;
-esac
-EOF
-chmod +x "$fake_bin/psql"
-export PATH="$fake_bin:$PATH"
-
 fail() {
   echo "FAIL: $*" >&2
   exit 1
@@ -61,7 +49,6 @@ OFFSET=$offset
 BACKEND_PORT=$((18080 + offset))
 FRONTEND_PORT=$((13000 + offset))
 DB_NAME=multica_dev_env_test_$offset
-DATABASE_URL=postgres://multica:multica@localhost:5432/multica_dev_env_test_$offset?sslmode=disable
 PROFILE=$profile
 WORKSPACES_ROOT=$(printf '%q' "$MULTICA_DEV_WORKSPACES_PARENT/multica_workspaces_$profile")
 DESKTOP_RENDERER_PORT=$((5174 + offset))
@@ -104,15 +91,6 @@ dev_env up --ttl nope > "$out" 2>&1 || status=$?
 [ "$status" -ne 0 ] || fail "up accepted a non-numeric TTL"
 require_contains "$out" "TTL must be a positive integer"
 
-# Rewriting an allocated database name must preserve the existing connection
-# endpoint, credentials and query parameters.
-rewritten="$(bash -c 'source "$1"; database_url_with_name "$2" "$3"' _ \
-  "$root_dir/scripts/dev-env.sh" \
-  'postgres://dev:p%40ss@127.0.0.1:55432/old_db?sslmode=require&application_name=dev' \
-  'new_db')"
-[ "$rewritten" = 'postgres://dev:p%40ss@127.0.0.1:55432/new_db?sslmode=require&application_name=dev' ] \
-  || fail "database URL rewrite changed more than the database name: $rewritten"
-
 # ---------------------------------------------------------------------------
 # A registered environment is visible to both renderings, and the JSON one
 # parses — agents read it, so a stray log line in it is a broken contract.
@@ -130,7 +108,7 @@ node -e '
   const payload = JSON.parse(fs.readFileSync(process.argv[1], "utf8"));
   if (payload.name !== "probe-901") throw new Error("name = " + payload.name);
   if (payload.backend_port !== 18981) throw new Error("backend_port = " + payload.backend_port);
-  for (const key of ["api", "web", "daemon", "desktop"]) {
+  for (const key of ["api", "daemon", "desktop"]) {
     if (!payload.components[key]) throw new Error("missing component " + key);
     if (payload.components[key].state !== "stopped") {
       throw new Error(key + " state = " + payload.components[key].state);
@@ -147,7 +125,7 @@ node -e '
 # port" is that function's normal answer.
 # ---------------------------------------------------------------------------
 status=0
-dev_env down probe-901 --components api,web > "$out" 2>&1 || status=$?
+dev_env down probe-901 --components api,desktop > "$out" 2>&1 || status=$?
 if [ "$status" -ne 0 ]; then
   echo "Observed:" >&2
   sed 's/^/  /' "$out" >&2
@@ -200,17 +178,6 @@ if grep -Fq "probe-901 would be collected" "$out"; then
   fail "gc must not collect an environment whose directory still exists"
 fi
 [ -f "$MULTICA_DEV_HOME/envs/orphan-902/manifest.env" ] || fail "gc --dry-run deleted a manifest"
-
-# A failed database drop keeps the manifest and slot so cleanup can be retried;
-# destroy must never print success and forget the only deletion recipe.
-write_manifest "drop-fails-904" "$root_dir" 904
-status=0
-FAIL_DROP=1 dev_env destroy drop-fails-904 --yes > "$out" 2>&1 || status=$?
-[ "$status" -ne 0 ] || fail "destroy succeeded after DROP DATABASE failed"
-[ -f "$MULTICA_DEV_HOME/envs/drop-fails-904/manifest.env" ] \
-  || fail "destroy discarded the manifest after DROP DATABASE failed"
-require_contains "$out" "manifest and slot were kept"
-dev_env destroy drop-fails-904 --yes > "$out" 2>&1 || fail "retrying destroy after database recovery failed"
 
 # ---------------------------------------------------------------------------
 # destroy consumes the manifest: the slot is free afterwards, which is what

@@ -164,6 +164,14 @@ const configureNav: { key: NavKey; labelKey: NavLabelKey }[] = [
   { key: "settings", labelKey: "settings" },
 ];
 
+const LOCAL_NAV_KEYS = new Set<NavKey>([
+  "issues",
+  "projects",
+  "agents",
+  "runtimes",
+  "settings",
+]);
+
 function DraftDot() {
   const hasDraft = useIssueDraftStore((s) => s.hasDraft());
   if (!hasDraft) return null;
@@ -412,6 +420,8 @@ function PinSkeleton() {
 }
 
 interface AppSidebarProps {
+  /** Restrict the shell to one local workspace and suppress collaboration UI. */
+  localMode?: boolean;
   /** Rendered above SidebarHeader (e.g. desktop traffic light spacer) */
   topSlot?: React.ReactNode;
   /** Rendered in the header between workspace switcher and new-issue button (e.g. search trigger) */
@@ -422,7 +432,13 @@ interface AppSidebarProps {
   headerStyle?: React.CSSProperties;
 }
 
-export function AppSidebar({ topSlot, searchSlot, headerClassName, headerStyle }: AppSidebarProps = {}) {
+export function AppSidebar({
+  localMode = false,
+  topSlot,
+  searchSlot,
+  headerClassName,
+  headerStyle,
+}: AppSidebarProps = {}) {
   const { t } = useT("layout");
   const { pathname, push } = useNavigation();
   const user = useAuthStore((s) => s.user);
@@ -430,8 +446,14 @@ export function AppSidebar({ topSlot, searchSlot, headerClassName, headerStyle }
   const logout = useLogout();
   const workspace = useCurrentWorkspace();
   const p = useWorkspacePaths();
-  const { data: workspaces = EMPTY_WORKSPACES } = useQuery(workspaceListOptions());
-  const { data: myInvitations = EMPTY_INVITATIONS } = useQuery(myInvitationListOptions());
+  const { data: workspaces = EMPTY_WORKSPACES } = useQuery({
+    ...workspaceListOptions(),
+    enabled: !localMode,
+  });
+  const { data: myInvitations = EMPTY_INVITATIONS } = useQuery({
+    ...myInvitationListOptions(),
+    enabled: !localMode,
+  });
   const workspaceCreationDisabled = useConfigStore((s) => s.workspaceCreationDisabled);
 
   // On a phone the sidebar is a Sheet covering the page, so navigating out of
@@ -450,7 +472,7 @@ export function AppSidebar({ topSlot, searchSlot, headerClassName, headerStyle }
   const { data: inboxItems = EMPTY_INBOX } = useQuery({
     queryKey: wsId ? inboxKeys.list(wsId) : ["inbox", "disabled"],
     queryFn: () => api.listInbox(),
-    enabled: !!wsId,
+    enabled: !localMode && !!wsId,
   });
   const unreadCount = React.useMemo(
     () => deduplicateInboxItems(inboxItems).filter((i) => !i.read).length,
@@ -490,7 +512,7 @@ export function AppSidebar({ topSlot, searchSlot, headerClassName, headerStyle }
   // the endpoint resolves through the workspace-member middleware.
   const { data: unreadSummary = EMPTY_INBOX_SUMMARY } = useQuery({
     ...inboxUnreadSummaryOptions(),
-    enabled: !!wsId,
+    enabled: !localMode && !!wsId,
   });
   const otherWorkspaceUnread = React.useMemo(
     () => hasOtherWorkspaceUnread(unreadSummary, wsId),
@@ -598,7 +620,19 @@ export function AppSidebar({ topSlot, searchSlot, headerClassName, headerStyle }
         <SidebarHeader className={cn("py-3", headerClassName)} style={headerStyle}>
           <SidebarMenu>
             <SidebarMenuItem>
-              <DropdownMenu>
+              {localMode ? (
+                <SidebarMenuButton aria-label={workspace?.name ?? "Local"}>
+                  <WorkspaceAvatar
+                    name={workspace?.name ?? "Local"}
+                    avatarUrl={workspace?.avatar_url}
+                    size="sm"
+                  />
+                  <span className="flex-1 truncate font-medium">
+                    {workspace?.name ?? "Local"}
+                  </span>
+                </SidebarMenuButton>
+              ) : (
+                <DropdownMenu>
                 <DropdownMenuTrigger
                   render={
                     <SidebarMenuButton>
@@ -723,7 +757,8 @@ export function AppSidebar({ topSlot, searchSlot, headerClassName, headerStyle }
                     </DropdownMenuItem>
                   </DropdownMenuGroup>
                 </DropdownMenuContent>
-              </DropdownMenu>
+                </DropdownMenu>
+              )}
             </SidebarMenuItem>
           </SidebarMenu>
           <SidebarMenu>
@@ -755,37 +790,39 @@ export function AppSidebar({ topSlot, searchSlot, headerClassName, headerStyle }
           <SidebarGroup>
             <SidebarGroupContent>
               <SidebarMenu className="gap-0.5">
-                {personalNav.map((item) => {
-                  const href = p[item.key]();
-                  const Icon = routeIconForPath(href);
-                  const isActive = isNavActive(pathname, href);
-                  return (
-                    <SidebarMenuItem key={item.key}>
-                      <SidebarMenuButton
-                        isActive={isActive}
-                        render={<AppLink href={href} />}
-                        className="text-muted-foreground hover:not-data-active:bg-sidebar-accent/70 data-active:bg-sidebar-accent data-active:text-sidebar-accent-foreground"
-                      >
-                        <Icon />
-                        <span>{t(($) => $.nav[item.labelKey])}</span>
-                        {item.key === "inbox" && unreadCount > 0 && (
-                          <CappedNumberFlow
-                            value={unreadCount}
-                            animated={false}
-                            className="ml-auto text-caption"
-                          />
-                        )}
-                        {item.key === "chat" && chatUnreadCount > 0 && (
-                          <CappedNumberFlow
-                            value={chatUnreadCount}
-                            animated={false}
-                            className="ml-auto text-caption"
-                          />
-                        )}
-                      </SidebarMenuButton>
-                    </SidebarMenuItem>
-                  );
-                })}
+                {personalNav
+                  .filter(() => !localMode)
+                  .map((item) => {
+                    const href = p[item.key]();
+                    const Icon = routeIconForPath(href);
+                    const isActive = isNavActive(pathname, href);
+                    return (
+                      <SidebarMenuItem key={item.key}>
+                        <SidebarMenuButton
+                          isActive={isActive}
+                          render={<AppLink href={href} />}
+                          className="text-muted-foreground hover:not-data-active:bg-sidebar-accent/70 data-active:bg-sidebar-accent data-active:text-sidebar-accent-foreground"
+                        >
+                          <Icon />
+                          <span>{t(($) => $.nav[item.labelKey])}</span>
+                          {item.key === "inbox" && unreadCount > 0 && (
+                            <CappedNumberFlow
+                              value={unreadCount}
+                              animated={false}
+                              className="ml-auto text-caption"
+                            />
+                          )}
+                          {item.key === "chat" && chatUnreadCount > 0 && (
+                            <CappedNumberFlow
+                              value={chatUnreadCount}
+                              animated={false}
+                              className="ml-auto text-caption"
+                            />
+                          )}
+                        </SidebarMenuButton>
+                      </SidebarMenuItem>
+                    );
+                  })}
               </SidebarMenu>
             </SidebarGroupContent>
           </SidebarGroup>
@@ -829,7 +866,7 @@ export function AppSidebar({ topSlot, searchSlot, headerClassName, headerStyle }
             <SidebarGroupLabel>{t(($) => $.sidebar.workspace_group)}</SidebarGroupLabel>
             <SidebarGroupContent>
               <SidebarMenu className="gap-0.5">
-                {workspaceNav.map((item) => {
+                {workspaceNav.filter((item) => !localMode || LOCAL_NAV_KEYS.has(item.key)).map((item) => {
                   const href = p[item.key]();
                   const Icon = routeIconForPath(href);
                   const isActive = !isActivePinnedRoute && isNavActive(pathname, href);
@@ -854,7 +891,7 @@ export function AppSidebar({ topSlot, searchSlot, headerClassName, headerStyle }
             <SidebarGroupLabel>{t(($) => $.sidebar.configure_group)}</SidebarGroupLabel>
             <SidebarGroupContent>
               <SidebarMenu className="gap-0.5">
-                {configureNav.map((item) => {
+                {configureNav.filter((item) => !localMode || LOCAL_NAV_KEYS.has(item.key)).map((item) => {
                   const href = p[item.key]();
                   const Icon = routeIconForPath(href);
                   const isActive = isNavActive(pathname, href);
@@ -881,7 +918,7 @@ export function AppSidebar({ topSlot, searchSlot, headerClassName, headerStyle }
               help trigger was leaving empty. `justify-end` keeps the trigger
               right-aligned once the Discord link is dismissed. */}
           <div className="flex items-center justify-end gap-1">
-            <JoinDiscordCard />
+            {!localMode && <JoinDiscordCard />}
             <HelpLauncher />
           </div>
         </SidebarFooter>

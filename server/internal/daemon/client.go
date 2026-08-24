@@ -583,31 +583,7 @@ type WorkspaceInfo struct {
 	Name string `json:"name"`
 }
 
-// RenewTokenResponse mirrors handler.RenewPATResponse — kept loose (string +
-// bool) because the daemon never parses the timestamp itself; it just logs it
-// for operator visibility.
-type RenewTokenResponse struct {
-	ExpiresAt string `json:"expires_at"`
-	Renewed   bool   `json:"renewed"`
-}
-
-// RenewToken asks the server to extend the daemon's current PAT in place when
-// it's within the server-side renewal window. The server is authoritative on
-// the threshold — the daemon doesn't know the token's expires_at locally —
-// so this is safe to call on any cadence; the only thing extra calls cost is
-// one round trip and one cheap SELECT.
-func (c *Client) RenewToken(ctx context.Context) (*RenewTokenResponse, error) {
-	var resp RenewTokenResponse
-	if err := c.postJSON(ctx, "/api/tokens/current/renew", map[string]any{}, &resp); err != nil {
-		return nil, err
-	}
-	return &resp, nil
-}
-
-// ListWorkspaces fetches the minimal workspace membership set used by the
-// daemon. New servers expose a daemon-specific endpoint with ETag support;
-// when an installed daemon talks to an older server, the first 404 switches
-// this process to the legacy full-workspace endpoint for compatibility.
+// ListWorkspaces fetches the single local data space used by the daemon.
 func (c *Client) ListWorkspaces(ctx context.Context) ([]WorkspaceInfo, error) {
 	c.workspaceMu.Lock()
 	defer c.workspaceMu.Unlock()

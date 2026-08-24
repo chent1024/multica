@@ -514,7 +514,7 @@ func TestTaskScopedAuthToken(t *testing.T) {
 		t.Run(tt.name, func(t *testing.T) {
 			t.Parallel()
 
-			got, err := taskScopedAuthToken(Task{AuthToken: tt.token})
+			got, err := taskScopedAuthToken(Task{AuthToken: tt.token}, "https://api.multica.test", false)
 			if tt.wantErr != "" {
 				if err == nil {
 					t.Fatalf("taskScopedAuthToken() error = nil, want %q", tt.wantErr)
@@ -531,6 +531,19 @@ func TestTaskScopedAuthToken(t *testing.T) {
 				t.Fatalf("taskScopedAuthToken() = %q, want %q", got, tt.want)
 			}
 		})
+	}
+}
+
+func TestTaskScopedAuthTokenAllowsNoTokenOnlyForMarkedLoopbackWorkbench(t *testing.T) {
+	token, err := taskScopedAuthToken(Task{}, "http://127.0.0.1:8080", true)
+	if err != nil || token != "" {
+		t.Fatalf("marked local workbench token = %q, err = %v", token, err)
+	}
+	if _, err := taskScopedAuthToken(Task{}, "http://127.0.0.1:8080", false); err == nil {
+		t.Fatal("unmarked loopback server accepted a missing task token")
+	}
+	if _, err := taskScopedAuthToken(Task{}, "https://api.example.test", true); err == nil {
+		t.Fatal("marked non-loopback server accepted a missing task token")
 	}
 }
 

@@ -38,12 +38,6 @@ interface DesktopAPI {
   /** Retire the breadcrumb with this exact timestamp once its event has been
    *  handed to analytics. Unacknowledged breadcrumbs are retried next boot. */
   ackFreeze: (ts: number) => void;
-  /** Report the resolved account identity so stale issue windows can close. */
-  reportAuthSession: (userId: string | null) => void;
-  /** Listen for auth token delivered via deep link. Returns an unsubscribe function. */
-  onAuthToken: (callback: (token: string) => void) => () => void;
-  /** Listen for invitation IDs delivered via deep link. Returns an unsubscribe function. */
-  onInviteOpen: (callback: (invitationId: string) => void) => () => void;
   /** Open a URL in the default browser. */
   openExternal: (url: string) => Promise<void>;
   /** Download a file by URL through Electron's native download system.
@@ -51,24 +45,6 @@ interface DesktopAPI {
   downloadURL: (url: string) => Promise<void>;
   /** Hide macOS traffic lights for full-screen modals; restore when false. */
   setImmersiveMode: (immersive: boolean) => Promise<void>;
-  /** Show a native OS notification for a new inbox item. */
-  showNotification: (payload: {
-    slug: string;
-    itemId: string;
-    issueKey: string;
-    title: string;
-    body: string;
-  }) => void;
-  /** Update the OS dock / taskbar unread badge. Pass 0 to clear. */
-  setUnreadBadge: (count: number) => void;
-  /** Listen for "open inbox row" requests from notification clicks. Returns an unsubscribe function. */
-  onInboxOpen: (
-    callback: (payload: {
-      slug: string;
-      itemId: string;
-      issueKey: string;
-    }) => void,
-  ) => () => void;
   /** Listen for native macOS back/forward swipe gestures. Returns an unsubscribe function. */
   onNavigationGesture: (callback: (gesture: NavigationGesture) => void) => () => void;
   /** Report the renderer's memory-router path for recovery diagnostics. */
@@ -116,11 +92,6 @@ interface DesktopAPI {
   ) => Promise<{ ok: true } | { ok: false; reason: "invalid_request" }>;
 }
 
-type DaemonReauthResult =
-  | { ok: true }
-  | { ok: false; reason: "session_invalid" }
-  | { ok: false; reason: "transient"; message: string };
-
 interface DaemonAPI {
   start: () => Promise<{ success: boolean; error?: string }>;
   stop: () => Promise<{ success: boolean; error?: string }>;
@@ -130,12 +101,6 @@ interface DaemonAPI {
   getHostName: () => Promise<string>;
   onStatusChange: (callback: (status: DaemonStatus) => void) => () => void;
   setTargetApiUrl: (url: string) => Promise<void>;
-  syncToken: (token: string, userId: string) => Promise<void>;
-  clearToken: () => Promise<void>;
-  reauthenticate: (
-    token: string,
-    userId: string,
-  ) => Promise<DaemonReauthResult>;
   isCliInstalled: () => Promise<boolean>;
   getPrefs: () => Promise<DaemonPrefs>;
   setPrefs: (prefs: Partial<DaemonPrefs>) => Promise<DaemonPrefs>;

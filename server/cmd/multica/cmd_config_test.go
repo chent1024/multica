@@ -165,11 +165,11 @@ func TestRunConfigCommandsFailClosedWithoutTaskRoot(t *testing.T) {
 	}
 
 	cmd := newConfigTestCmd()
-	if _, err := captureStdout(t, func() error { return runConfigShow(cmd, nil) }); err == nil || !strings.Contains(err.Error(), "task-local") {
-		t.Fatalf("runConfigShow error = %v, want missing task-local config root", err)
+	if _, err := captureStdout(t, func() error { return runConfigShow(cmd, nil) }); err == nil || !strings.Contains(err.Error(), "MULTICA_TASK_CONFIG_ROOT") {
+		t.Fatalf("runConfigShow error = %v, want missing local config root", err)
 	}
-	if err := runConfigSet(cmd, []string{"server_url", "https://task.invalid"}); err == nil || !strings.Contains(err.Error(), "task-local") {
-		t.Fatalf("runConfigSet error = %v, want missing task-local config root", err)
+	if err := runConfigSet(cmd, []string{"server_url", "https://task.invalid"}); err == nil || !strings.Contains(err.Error(), "MULTICA_TASK_CONFIG_ROOT") {
+		t.Fatalf("runConfigSet error = %v, want missing local config root", err)
 	}
 	after, err := os.ReadFile(ownerPath)
 	if err != nil {

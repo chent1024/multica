@@ -26,16 +26,6 @@ case "$#" in
 esac
 
 cd "$REPO_ROOT/server"
-packages=$(go list ./...)
-regular_packages=()
-for package in $packages; do
-  case "$package" in
-    */pkg/agent|*/pkg/agent/*) ;;
-    *) regular_packages+=("$package") ;;
-  esac
-done
-
-"$GUARD_SCRIPT" -- go "${go_test_args[@]}" "${regular_packages[@]}"
 # Subprocess-backed agent tests have hard deadlines. Limit both package and
 # within-package parallelism so race builds do not starve their parent loops.
-"$GUARD_SCRIPT" -- go "${go_test_args[@]}" -p 2 -parallel 2 ./pkg/agent/...
+"$GUARD_SCRIPT" -- go "${go_test_args[@]}" -p 2 -parallel 2 ./...

@@ -64,7 +64,11 @@ function workspaceDetailsEqual(
   );
 }
 
-export function WorkspaceTab() {
+export function WorkspaceTab({
+  localMode = false,
+}: {
+  localMode?: boolean;
+} = {}) {
   const { t } = useT("settings");
   const user = useAuthStore((s) => s.user);
   const workspace = useCurrentWorkspace();
@@ -467,7 +471,7 @@ export function WorkspaceTab() {
       {/* Danger Zone — gated on the member query settling so the owner-only
           Delete button and the sole-owner Leave guidance don't flash in
           after mount. */}
-      {membersFetched && (
+      {!localMode && membersFetched && (
         <SettingsSection
           title={
             <span className="inline-flex items-center gap-2">
@@ -541,18 +545,20 @@ export function WorkspaceTab() {
         </AlertDialogContent>
       </AlertDialog>
 
-      <DeleteWorkspaceDialog
-        workspaceName={workspace.name}
-        loading={actionId === "delete-workspace"}
-        open={deleteDialogOpen}
-        onOpenChange={(open) => {
-          // Ignore close requests while the delete mutation is in flight
-          // so the user can't accidentally dismiss mid-operation.
-          if (actionId === "delete-workspace" && !open) return;
-          setDeleteDialogOpen(open);
-        }}
-        onConfirm={handleConfirmDelete}
-      />
+      {!localMode && (
+        <DeleteWorkspaceDialog
+          workspaceName={workspace.name}
+          loading={actionId === "delete-workspace"}
+          open={deleteDialogOpen}
+          onOpenChange={(open) => {
+            // Ignore close requests while the delete mutation is in flight
+            // so the user can't accidentally dismiss mid-operation.
+            if (actionId === "delete-workspace" && !open) return;
+            setDeleteDialogOpen(open);
+          }}
+          onConfirm={handleConfirmDelete}
+        />
+      )}
     </SettingsTab>
   );
 }

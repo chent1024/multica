@@ -1,5 +1,5 @@
 import { useState, useEffect, useCallback, type ReactNode } from "react";
-import { AlertCircle, Info, LogIn } from "lucide-react";
+import { Info } from "lucide-react";
 import { Button } from "@multica/ui/components/ui/button";
 import { Switch } from "@multica/ui/components/ui/switch";
 import { cn } from "@multica/ui/lib/utils";
@@ -10,7 +10,6 @@ import {
   SettingsSection,
   SettingsTab,
 } from "@multica/views/settings";
-import { reauthenticateDaemon } from "../platform/daemon-reauth";
 import type { DaemonPrefs, DaemonStatus } from "../../../shared/daemon-types";
 import {
   DAEMON_STATE_COLORS,
@@ -50,19 +49,12 @@ export function DaemonSettingsTab() {
   const [cliInstalled, setCliInstalled] = useState<boolean | null>(null);
   const [saving, setSaving] = useState(false);
   const [status, setStatus] = useState<DaemonStatus>({ state: "stopped" });
-  const [reauthLoading, setReauthLoading] = useState(false);
 
   useEffect(() => {
     window.daemonAPI.getPrefs().then(setPrefs);
     window.daemonAPI.isCliInstalled().then(setCliInstalled);
     window.daemonAPI.getStatus().then(setStatus);
     return window.daemonAPI.onStatusChange(setStatus);
-  }, []);
-
-  const handleReauth = useCallback(async () => {
-    setReauthLoading(true);
-    await reauthenticateDaemon();
-    setReauthLoading(false);
   }, []);
 
   const updatePref = useCallback(
@@ -95,30 +87,6 @@ export function DaemonSettingsTab() {
       description="Configure how the local agent daemon behaves with the desktop app."
     >
 
-      {status.state === "auth_expired" && (
-        <div className="mt-4 flex items-start gap-3 rounded-lg border border-destructive/40 bg-destructive/5 px-4 py-3">
-          <AlertCircle className="mt-0.5 size-4 shrink-0 text-destructive" />
-          <div className="min-w-0 flex-1">
-            <p className="text-body font-medium text-destructive">
-              Sign-in expired
-            </p>
-            <p className="mt-0.5 text-body text-muted-foreground">
-              The local daemon couldn&apos;t authenticate, so this device
-              can&apos;t take tasks. Sign in again to restore it.
-            </p>
-          </div>
-          <Button
-            size="sm"
-            className="shrink-0"
-            onClick={handleReauth}
-            disabled={reauthLoading}
-          >
-            <LogIn className="size-3.5 mr-1.5" />
-            Sign in again
-          </Button>
-        </div>
-      )}
-
       {externallyManaged && (
         <div className="mt-4 flex items-start gap-3 rounded-lg border bg-muted/30 px-4 py-3">
           <Info className="mt-0.5 size-4 shrink-0 text-muted-foreground" />
@@ -135,7 +103,7 @@ export function DaemonSettingsTab() {
       <SettingsCard>
         <SettingsRow
           label="Auto-start on launch"
-          description="Automatically start the daemon when the app opens and you are logged in."
+          description="Automatically start the local daemon when the app opens."
         >
           <Switch
             checked={prefs.autoStart}

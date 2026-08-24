@@ -296,6 +296,25 @@ describe("workspace-switcher unread dot", () => {
   });
 });
 
+describe("local mode sidebar", () => {
+  it("keeps local work navigation without workspace or collaboration controls", () => {
+    workspaces.current = [
+      { id: "ws-1", name: "Acme", slug: "acme", avatar_url: null },
+      { id: "ws-2", name: "Legacy", slug: "legacy", avatar_url: null },
+    ];
+
+    const { container } = render(<AppSidebar localMode />);
+
+    expect(container.querySelector('button[data-href="/acme/issues"]')).not.toBeNull();
+    expect(container.querySelector('button[data-href="/acme/projects"]')).not.toBeNull();
+    expect(container.querySelector('button[data-href="/acme/inbox"]')).toBeNull();
+    expect(container.querySelector('button[data-href="/acme/my-issues"]')).toBeNull();
+    expect(screen.queryByText("Legacy")).not.toBeInTheDocument();
+    expect(screen.queryByText("Create workspace")).not.toBeInTheDocument();
+    expect(screen.queryByText("Log out")).not.toBeInTheDocument();
+  });
+});
+
 describe("workspace-switcher dropdown per-workspace dot", () => {
   beforeEach(() => {
     summary.current = [];

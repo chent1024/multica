@@ -17,7 +17,8 @@ export type AuthStatus =
   | "authenticating"
   | "authenticated"
   | "unauthenticated"
-  | "recovering";
+  | "recovering"
+  | "local";
 
 export interface AuthState {
   user: User | null;

@@ -11,22 +11,11 @@
 import { describe, expect, it, vi, beforeEach, afterEach } from "vitest";
 import { render } from "@testing-library/react";
 
-const authState = { user: null as { id: string } | null };
-const overlayState = { overlay: null as { type: string } | null };
 const tabState = {
   slug: null as string | null,
   tabId: null as string | null,
   url: null as string | null,
 };
-
-vi.mock("@multica/core/auth", () => ({
-  useAuthStore: (selector: (s: typeof authState) => unknown) => selector(authState),
-}));
-
-vi.mock("@/stores/window-overlay-store", () => ({
-  useWindowOverlayStore: (selector: (s: typeof overlayState) => unknown) =>
-    selector(overlayState),
-}));
 
 vi.mock("@/stores/tab-store", () => ({
   useActiveTabIdentity: () => ({ slug: tabState.slug, tabId: tabState.tabId }),
@@ -40,8 +29,6 @@ const setRendererRouteContext = vi.fn();
 
 beforeEach(() => {
   setRendererRouteContext.mockClear();
-  authState.user = { id: "u-1" };
-  overlayState.overlay = null;
   tabState.slug = "acme";
   tabState.tabId = "tab-1";
   tabState.url = "/acme/issues";
@@ -87,28 +74,6 @@ describe("DiagnosticRouteReporter", () => {
     expect(getDiagnosticRoute()).toBe("/:slug/issues/:id");
   });
 
-  it("reports the login surface before a user exists", () => {
-    authState.user = null;
-
-    render(<DiagnosticRouteReporter />);
-
-    expect(setRendererRouteContext).toHaveBeenCalledWith({
-      surface: "login",
-      path: "/login",
-    });
-  });
-
-  it("reports an overlay, which is window state rather than a tab route", () => {
-    overlayState.overlay = { type: "onboarding" };
-
-    render(<DiagnosticRouteReporter />);
-
-    expect(setRendererRouteContext).toHaveBeenCalledWith({
-      surface: "overlay",
-      path: "/onboarding",
-    });
-  });
-
   it("does not re-send an unchanged context", () => {
     const { rerender } = render(<DiagnosticRouteReporter />);
     expect(setRendererRouteContext).toHaveBeenCalledTimes(1);
@@ -120,14 +85,14 @@ describe("DiagnosticRouteReporter", () => {
 
   it("re-reports when the tab navigates to another page", () => {
     const { rerender } = render(<DiagnosticRouteReporter />);
-    tabState.url = "/acme/inbox";
+    tabState.url = "/acme/projects";
 
     rerender(<DiagnosticRouteReporter />);
 
     expect(setRendererRouteContext).toHaveBeenLastCalledWith({
       surface: "tab",
-      path: "/:slug/inbox",
+      path: "/:slug/projects",
     });
-    expect(getDiagnosticRoute()).toBe("/:slug/inbox");
+    expect(getDiagnosticRoute()).toBe("/:slug/projects");
   });
 });

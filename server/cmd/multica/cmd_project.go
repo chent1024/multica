@@ -134,7 +134,7 @@ func init() {
 	projectCreateCmd.Flags().String("description", "", "Project description")
 	projectCreateCmd.Flags().String("status", "", "Project status")
 	projectCreateCmd.Flags().String("icon", "", "Project icon (emoji)")
-	projectCreateCmd.Flags().String("lead", "", "Lead name (member or agent)")
+	projectCreateCmd.Flags().String("lead", "", "Lead local agent name")
 	projectCreateCmd.Flags().String("start-date", "", "Start date (calendar day, YYYY-MM-DD)")
 	projectCreateCmd.Flags().String("due-date", "", "Due date (calendar day, YYYY-MM-DD)")
 	projectCreateCmd.Flags().StringArray("repo", nil, "Attach a github_repo resource by URL (may be repeated)")
@@ -181,7 +181,7 @@ func init() {
 	projectUpdateCmd.Flags().String("description", "", "New description")
 	projectUpdateCmd.Flags().String("status", "", "New status")
 	projectUpdateCmd.Flags().String("icon", "", "New icon (emoji)")
-	projectUpdateCmd.Flags().String("lead", "", "New lead name (member or agent)")
+	projectUpdateCmd.Flags().String("lead", "", "New lead local agent name")
 	projectUpdateCmd.Flags().String("start-date", "", "New start date (calendar day, YYYY-MM-DD; pass empty string to clear)")
 	projectUpdateCmd.Flags().String("due-date", "", "New due date (calendar day, YYYY-MM-DD; pass empty string to clear)")
 	projectUpdateCmd.Flags().String("output", "json", "Output format: table or json")
@@ -331,7 +331,7 @@ func runProjectCreate(cmd *cobra.Command, _ []string) error {
 		body["icon"] = v
 	}
 	if v, _ := cmd.Flags().GetString("lead"); v != "" {
-		aType, aID, resolveErr := resolveAssignee(ctx, client, v, memberOrAgentKinds)
+		aType, aID, resolveErr := resolveAssignee(ctx, client, v)
 		if resolveErr != nil {
 			return fmt.Errorf("resolve lead: %w", resolveErr)
 		}
@@ -422,7 +422,7 @@ func runProjectUpdate(cmd *cobra.Command, args []string) error {
 	}
 	if cmd.Flags().Changed("lead") {
 		v, _ := cmd.Flags().GetString("lead")
-		aType, aID, resolveErr := resolveAssignee(ctx, client, v, memberOrAgentKinds)
+		aType, aID, resolveErr := resolveAssignee(ctx, client, v)
 		if resolveErr != nil {
 			return fmt.Errorf("resolve lead: %w", resolveErr)
 		}

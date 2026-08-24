@@ -30,7 +30,6 @@ import {
   SlidersHorizontal,
   Tag,
   Unlink,
-  Users,
 } from "lucide-react";
 import { BreadcrumbHeader, type BreadcrumbSegment } from "../../layout/breadcrumb-header";
 import { Skeleton } from "@multica/ui/components/ui/skeleton";
@@ -46,17 +45,8 @@ import {
   TooltipTrigger,
   TooltipContent,
 } from "@multica/ui/components/ui/tooltip";
-import {
-  DropdownMenu,
-  DropdownMenuTrigger,
-  DropdownMenuContent,
-  DropdownMenuItem,
-} from "@multica/ui/components/ui/dropdown-menu";
 import { Popover, PopoverTrigger, PopoverContent } from "@multica/ui/components/ui/popover";
 import { Dialog, DialogContent, DialogHeader, DialogTitle } from "@multica/ui/components/ui/dialog";
-import { Checkbox } from "@multica/ui/components/ui/checkbox";
-import { Command, CommandInput, CommandList, CommandEmpty, CommandGroup, CommandItem } from "@multica/ui/components/ui/command";
-import { AvatarGroup, AvatarGroupCount } from "@multica/ui/components/ui/avatar";
 import { ActorAvatar } from "../../common/actor-avatar";
 import { PropRow } from "../../common/prop-row";
 import { PropertyIcon } from "../../common/property-icon";
@@ -89,10 +79,6 @@ import { ThreadNavPanel, mentionsUser, type ThreadNavThread } from "./thread-nav
 import { collectThreadReplies, deriveThreadResolution } from "./thread-utils";
 import { IssueAgentHeaderChip } from "./issue-agent-header-chip";
 import { ExecutionLogSection } from "./execution-log-section";
-import { QuickActionsSection } from "./quick-actions-section";
-import { PluginPanelSection } from "../../plugins";
-import { PullRequestList } from "./pull-request-list";
-import { useGitHubSettings } from "@multica/core/github";
 import { useQuery } from "@tanstack/react-query";
 import { useAuthStore } from "@multica/core/auth";
 import { useWorkspacePaths } from "@multica/core/paths";
@@ -104,7 +90,6 @@ import { projectDetailOptions } from "@multica/core/projects/queries";
 import { ProjectIcon } from "../../projects/components/project-icon";
 import { issueLabelsOptions } from "@multica/core/labels";
 import { propertyListOptions } from "@multica/core/properties";
-import { memberListOptions, agentListOptions } from "@multica/core/workspace/queries";
 import {
   selectExpandedResolved,
   useRecentIssuesStore,
@@ -118,9 +103,6 @@ import {
 import { useIssueSelectionStore } from "@multica/core/issues/stores/selection-store";
 import { BatchActionToolbar } from "./batch-action-toolbar";
 import { useIssueTimeline } from "../hooks/use-issue-timeline";
-import { useIssueReactions } from "../hooks/use-issue-reactions";
-import { useIssueSubscribers } from "../hooks/use-issue-subscribers";
-import { ReactionBar } from "@multica/ui/components/common/reaction-bar";
 import { useTimeAgo } from "../../i18n";
 import {
   useRestoredScrollOffset,
@@ -132,7 +114,6 @@ import { cn } from "@multica/ui/lib/utils";
 import { PAGE_GUTTER } from "../../layout/page-header";
 
 import { ProgressRing } from "./progress-ring";
-import { matchesPinyin } from "../../editor/extensions/pinyin-match";
 import { useT } from "../../i18n";
 import { useIssueDetailScrollRestore } from "../hooks/use-issue-detail-scroll-restore";
 import { useInPageFind } from "../hooks/use-in-page-find";
@@ -155,107 +136,6 @@ import {
  */
 export function issueHighlightMementoKey(issueId: string): string {
   return `highlight:${issueId}`;
-}
-
-// Shared by the subscribe button and the unsubscribe menu trigger so the two
-// stay one control visually — they occupy the same slot and only differ in
-// what a click does.
-const SUBSCRIPTION_ACTION_CLASS =
-  "text-caption text-muted-foreground hover:text-foreground transition-colors disabled:pointer-events-none disabled:opacity-50";
-
-function SubscriberPopoverContent({
-  members,
-  agents,
-  subscribers,
-  toggleSubscriber,
-  togglesDisabled,
-  t,
-}: {
-  members: { user_id: string; name: string }[];
-  agents: { id: string; name: string; archived_at?: string | null }[];
-  subscribers: { user_type: string; user_id: string }[];
-  toggleSubscriber: (id: string, type: "member" | "agent", subscribed: boolean) => void;
-  /**
-   * Every checkbox here is drawn from `subscribers`, which defaults to an empty
-   * list until the query resolves — so an unresolved query renders everyone as
-   * unsubscribed. Acting on that is not a harmless no-op: an explicit subscribe
-   * rewrites the target's reason to 'manual' and clears any opt-out scope
-   * (server/pkg/db/queries/subscriber.sql), which would quietly discard a
-   * delegated subscription or someone's deliberate opt-out. So these rows wait
-   * for a real answer, not just for the in-flight mutation (MUL-5714).
-   */
-  togglesDisabled: boolean;
-  t: ActivityT;
-}) {
-  const [search, setSearch] = useState("");
-  const q = search.trim().toLowerCase();
-
-  const uniqueMembers = members.filter((m, i, arr) => arr.findIndex((x) => x.user_id === m.user_id) === i);
-  const activeAgents = agents.filter((a) => !a.archived_at);
-
-  const filteredMembers = q
-    ? uniqueMembers.filter((m) => m.name.toLowerCase().includes(q) || matchesPinyin(m.name, q))
-    : uniqueMembers;
-  const filteredAgents = q
-    ? activeAgents.filter((a) => a.name.toLowerCase().includes(q) || matchesPinyin(a.name, q))
-    : activeAgents;
-
-  return (
-    <PopoverContent align="end" className="w-64 p-0">
-      <Command shouldFilter={false}>
-        <CommandInput
-          placeholder={t(($) => $.detail.change_subscribers_placeholder)}
-          value={search}
-          onValueChange={setSearch}
-        />
-        <CommandList className="max-h-64">
-          {filteredMembers.length === 0 && filteredAgents.length === 0 && (
-            <CommandEmpty>{t(($) => $.detail.no_subscribers_results)}</CommandEmpty>
-          )}
-          {filteredMembers.length > 0 && (
-            <CommandGroup heading={t(($) => $.detail.members_group)}>
-              {filteredMembers.map((m) => {
-                const sub = subscribers.find((s) => s.user_type === "member" && s.user_id === m.user_id);
-                const isSubbed = !!sub;
-                return (
-                  <CommandItem
-                    key={`member-${m.user_id}`}
-                    onSelect={() => toggleSubscriber(m.user_id, "member", isSubbed)}
-                    disabled={togglesDisabled}
-                    className="flex items-center gap-2.5"
-                  >
-                    <Checkbox checked={isSubbed} className="pointer-events-none" />
-                    <ActorAvatar actorType="member" actorId={m.user_id} size="md" />
-                    <span className="truncate flex-1">{m.name}</span>
-                  </CommandItem>
-                );
-              })}
-            </CommandGroup>
-          )}
-          {filteredAgents.length > 0 && (
-            <CommandGroup heading={t(($) => $.detail.agents_group)}>
-              {filteredAgents.map((a) => {
-                const sub = subscribers.find((s) => s.user_type === "agent" && s.user_id === a.id);
-                const isSubbed = !!sub;
-                return (
-                  <CommandItem
-                    key={`agent-${a.id}`}
-                    onSelect={() => toggleSubscriber(a.id, "agent", isSubbed)}
-                    disabled={togglesDisabled}
-                    className="flex items-center gap-2.5"
-                  >
-                    <Checkbox checked={isSubbed} className="pointer-events-none" />
-                    <ActorAvatar actorType="agent" actorId={a.id} size="md" showStatusDot />
-                    <span className="truncate flex-1">{a.name}</span>
-                  </CommandItem>
-                );
-              })}
-            </CommandGroup>
-          )}
-        </CommandList>
-      </Command>
-    </PopoverContent>
-  );
 }
 
 function shortDate(date: string | null): string {
@@ -1127,15 +1007,8 @@ export function IssueDetail({ issueId, onDelete, onDone, defaultSidebarOpen = tr
 
   // Issue navigation — read from TQ list cache
   const wsId = useWorkspaceId();
-  const { data: members = [] } = useQuery(memberListOptions(wsId));
-  const { data: agents = [] } = useQuery(agentListOptions(wsId));
-  // Workspace owners and admins moderate any comment authored by anyone
-  // (mirrors backend `comment.go:507-512`). Computed here so per-comment
-  // rendering doesn't have to re-derive it for every row.
-  const currentUserRole =
-    members.find((m) => m.user_id === user?.id)?.role ?? null;
-  const canModerateComments =
-    currentUserRole === "owner" || currentUserRole === "admin";
+  // Local mode has no roles or cross-user moderation.
+  const canModerateComments = false;
   const { data: allIssues = [] } = useQuery(issueListOptions(wsId));
   const { getActorName } = useActorName();
   const resolveStatusLabel = useStatusLabel(wsId);
@@ -1179,9 +1052,7 @@ export function IssueDetail({ issueId, onDelete, onDone, defaultSidebarOpen = tr
   const [propertiesOpen, setPropertiesOpen] = useState(true);
   const [detailsOpen, setDetailsOpen] = useState(true);
   const [parentIssueOpen, setParentIssueOpen] = useState(true);
-  const [pullRequestsOpen, setPullRequestsOpen] = useState(true);
   const [metadataOpen, setMetadataOpen] = useState(false);
-  const githubSettings = useGitHubSettings();
 
   // Per-issue, per-session set of optional properties currently visible in
   // the sidebar Properties section. Seeded on issue switch with whichever
@@ -1387,11 +1258,11 @@ export function IssueDetail({ issueId, onDelete, onDone, defaultSidebarOpen = tr
     }
   }, [issue, issueLoading, onDelete]);
 
-  // Custom hooks — encapsulate timeline, reactions, subscribers
+  // Local timeline keeps comments, task progress, and execution events.
   const {
     timeline, loading: timelineLoading,
     submitComment, submitReply,
-    editComment, deleteComment, toggleResolveComment, toggleReaction: handleToggleReaction,
+    editComment, deleteComment, toggleResolveComment,
   } = useIssueTimeline(id, user?.id);
 
   // Resolve / unresolve must always clear the per-session expand entry so
@@ -1750,18 +1621,6 @@ export function IssueDetail({ issueId, onDelete, onDone, defaultSidebarOpen = tr
     threadNavPinned,
   ]);
 
-  const {
-    reactions: issueReactions,
-    toggleReaction: handleToggleIssueReaction,
-  } = useIssueReactions(id, user?.id);
-
-  const {
-    subscribers, isSubscribed, subscriptionReason, subscriptionKnown,
-    togglePending, subtreePending,
-    toggleSubscribe: handleToggleSubscribe, toggleSubscriber,
-    unsubscribeFromSubtree: handleUnsubscribeSubtree,
-  } = useIssueSubscribers(id, user?.id);
-
   // Attachments uploaded against this issue. Drives the description
   // editor's click-time fresh-sign download: NodeViews match
   // `src`/`href` against this list to resolve an attachment id before
@@ -1783,21 +1642,10 @@ export function IssueDetail({ issueId, onDelete, onDone, defaultSidebarOpen = tr
     ...projectDetailOptions(wsId, issueProjectId ?? ""),
     enabled: !!issueProjectId,
   });
-  const {
-    data: childIssues = [],
-    isSuccess: childIssuesLoaded,
-    isFetching: childIssuesFetching,
-  } = useQuery({
+  const { data: childIssues = [] } = useQuery({
     ...childIssuesOptions(wsId, id),
     enabled: !!issue,
   });
-  // Whether this issue has sub-issues, as opposed to "we have not looked yet".
-  // childIssuesOptions sets refetchOnMount: "always", so a cached snapshot is
-  // re-fetched on every mount and isSuccess alone still describes the previous
-  // visit. The unsubscribe control below picks a different server write from
-  // this answer, so a defaulted or stale empty array must not count as "no
-  // sub-issues" (MUL-5714).
-  const childCountKnown = childIssuesLoaded && !childIssuesFetching;
   // Parent's children — used to render the "x/y" progress next to the
   // "Sub-issue of …" breadcrumb under the title.
   const { data: parentChildIssues = [] } = useQuery({
@@ -2482,15 +2330,6 @@ export function IssueDetail({ issueId, onDelete, onDone, defaultSidebarOpen = tr
         </div>}
       </div>
 
-      {/* Quick actions — the sidebar's only "do something" block, so it sits
-          directly under Properties and above every read-only section. Renders
-          nothing when the workspace has no active action visible to this
-          member. It is NOT filtered by invoke permission: a member can see and
-          click an action they cannot run, and the refusal is explained at run
-          time rather than by a silently shorter list. */}
-      <QuickActionsSection issueId={issue.id} />
-      <PluginPanelSection issueId={issue.id} />
-
       {/* Parent issue — standalone section, only when the issue has a
           parent. Setting a parent is reachable via the issue actions menu;
           this card surfaces an existing parent without occupying sidebar
@@ -2530,23 +2369,6 @@ export function IssueDetail({ issueId, onDelete, onDone, defaultSidebarOpen = tr
               </button>
             </div>
           </div>}
-        </div>
-      )}
-
-      {/* Pull requests — hidden when the workspace disables the PR sidebar
-          (or the GitHub master switch is off). Backend data is kept either
-          way so re-enabling restores the section instantly. */}
-      {githubSettings.prSidebar && (
-        <div>
-          <button
-            type="button"
-            className={`flex w-full items-center gap-1 rounded-md px-2 py-1 text-caption font-medium transition-colors mb-2 hover:bg-accent/70 ${pullRequestsOpen ? "" : "text-muted-foreground hover:text-foreground"}`}
-            onClick={() => setPullRequestsOpen(!pullRequestsOpen)}
-          >
-            {t(($) => $.detail.section_pull_requests)}
-            <ChevronRight className={`!size-3 shrink-0 stroke-[2.5] text-muted-foreground transition-transform ${pullRequestsOpen ? "rotate-90" : ""}`} />
-          </button>
-          {pullRequestsOpen && <div className="pl-2"><PullRequestList issueId={id} /></div>}
         </div>
       )}
 
@@ -2652,7 +2474,6 @@ export function IssueDetail({ issueId, onDelete, onDone, defaultSidebarOpen = tr
             onReplyAccepted={scrollToTimelineBottom}
             onEdit={editComment}
             onDelete={deleteComment}
-            onToggleReaction={handleToggleReaction}
             onResolveToggle={handleResolveToggle}
             onCollapseResolved={isResolved ? () => toggleResolvedExpand(item.id, false) : undefined}
             expandedResolvedIds={expandedResolved}
@@ -3114,12 +2935,6 @@ export function IssueDetail({ issueId, onDelete, onDone, defaultSidebarOpen = tr
             ) : null}
 
             <div className="flex items-center gap-1 mt-3">
-              <ReactionBar
-                reactions={issueReactions}
-                currentUserId={user?.id}
-                onToggle={handleToggleIssueReaction}
-                getActorName={getActorName}
-              />
               <FileUploadButton
                 size="sm"
                 multiple
@@ -3253,120 +3068,6 @@ export function IssueDetail({ issueId, onDelete, onDone, defaultSidebarOpen = tr
             <div className="flex items-center justify-between">
               <div className="flex items-center gap-3">
                 <h2 className="text-title-sm font-semibold">{t(($) => $.detail.activity_section)}</h2>
-              </div>
-              <div className="flex items-center gap-2">
-                {/* A delegated subscription is one the user never opted into
-                    by hand — their agent created this issue for them. Saying
-                    so is what keeps it from reading as the product quietly
-                    adding them to things (MUL-5483). */}
-                {isSubscribed && subscriptionReason === "delegated" && (
-                  <Tooltip>
-                    {/* Quiet surface, not plain body text: this is metadata
-                        explaining a state, and must not read as a second
-                        action sitting next to Unsubscribe. Uses the shared
-                        caption role rather than an ad-hoc size (MUL-5451). */}
-                    <TooltipTrigger className="cursor-default rounded-full bg-muted px-2 py-0.5 text-caption text-muted-foreground">
-                      {t(($) => $.detail.delegated_subscription_badge)}
-                    </TooltipTrigger>
-                    <TooltipContent side="top" className="max-w-64">
-                      {t(($) => $.detail.delegated_subscription_hint)}
-                    </TooltipContent>
-                  </Tooltip>
-                )}
-                {/* Nothing until the subscribers query resolves: the default
-                    empty list reads as "not subscribed" for everyone, so
-                    rendering it flashes Subscribe at someone who is already
-                    subscribed, and a click landing in that window sends a
-                    subscribe instead of the unsubscribe they meant. An
-                    unresolved state is better shown as no control than as the
-                    wrong one (MUL-5714). */}
-                {subscriptionKnown &&
-                  (!isSubscribed || (childCountKnown && childIssues.length === 0) ? (
-                    /* One button, no menu, when there is nothing for the
-                       subtree option to cover. This is the root-only path
-                       (opt_out_scope='issue'), NOT the subtree one: even at
-                       zero children the two are different server writes,
-                       because a subtree tombstone also keeps FUTURE children
-                       from re-subscribing the user
-                       (server/pkg/db/queries/subscriber.sql). Declining one
-                       issue must not silently opt someone out of a tree that
-                       does not exist yet. While the child count is unknown we
-                       keep the menu below — it never picks a scope for the
-                       user. */
-                    <button
-                      type="button"
-                      onClick={handleToggleSubscribe}
-                      disabled={togglePending || !user?.id}
-                      className={SUBSCRIPTION_ACTION_CLASS}
-                    >
-                      {isSubscribed
-                        ? t(($) => $.detail.unsubscribe)
-                        : t(($) => $.detail.subscribe)}
-                    </button>
-                  ) : (
-                    <DropdownMenu>
-                      <DropdownMenuTrigger
-                        disabled={togglePending || subtreePending || !user?.id}
-                        className={SUBSCRIPTION_ACTION_CLASS}
-                      >
-                        {t(($) => $.detail.unsubscribe)}
-                      </DropdownMenuTrigger>
-                      {/* onClick, not onSelect: Base UI's Menu.Item exposes no
-                          onSelect (that is the Radix spelling), and because its
-                          props extend the full div attribute set, an onSelect
-                          typechecks and silently lands on the DOM node as the
-                          native text-selection event — the handler never runs
-                          (MUL-5710). */}
-                      <DropdownMenuContent align="end">
-                        <DropdownMenuItem
-                          onClick={handleToggleSubscribe}
-                          disabled={togglePending}
-                        >
-                          {t(($) => $.detail.unsubscribe_this)}
-                        </DropdownMenuItem>
-                        <DropdownMenuItem
-                          onClick={handleUnsubscribeSubtree}
-                          disabled={subtreePending}
-                        >
-                          {t(($) => $.detail.unsubscribe_subtree)}
-                        </DropdownMenuItem>
-                      </DropdownMenuContent>
-                    </DropdownMenu>
-                  ))}
-                <Popover>
-                  <PopoverTrigger className="cursor-pointer hover:opacity-80 transition-opacity">
-                    {subscribers.length > 0 ? (
-                      <AvatarGroup>
-                        {subscribers.slice(0, 4).map((sub) => (
-                          <ActorAvatar
-                            key={`${sub.user_type}-${sub.user_id}`}
-                            actorType={sub.user_type}
-                            actorId={sub.user_id}
-                            size="md"
-                            enableHoverCard
-                          />
-                        ))}
-                        {subscribers.length > 4 && (
-                          <AvatarGroupCount>+{subscribers.length - 4}</AvatarGroupCount>
-                        )}
-                      </AvatarGroup>
-                    ) : (
-                      <span className="flex items-center justify-center h-6 w-6 rounded-full border border-dashed border-muted-foreground/30 text-muted-foreground">
-                        <Users className="h-3 w-3" />
-                      </span>
-                    )}
-                  </PopoverTrigger>
-                  <SubscriberPopoverContent
-                    members={members}
-                    agents={agents}
-                    subscribers={subscribers}
-                    toggleSubscriber={toggleSubscriber}
-                    togglesDisabled={
-                      !subscriptionKnown || togglePending || !user?.id
-                    }
-                    t={t}
-                  />
-                </Popover>
               </div>
             </div>
 

@@ -1,8 +1,8 @@
 #!/usr/bin/env bash
 # Local development environments as named, listable, deletable objects.
 #
-#   make up                      # start this checkout's environment (api + web)
-#   make up C=api,web,daemon     # pick the components
+#   make up                      # start this checkout's environment (api + desktop)
+#   make up C=api,desktop        # pick the components
 #   make status                  # what is running, and is it mine
 #   make list                    # every environment on this machine
 #   make down                    # stop the processes, keep the data
@@ -10,16 +10,13 @@
 #
 # Three rules the old flow got wrong, and why they are here:
 #
-#  1. Ports, database names and CLI profiles are ALLOCATED under a lock and
+#  1. Ports, SQLite paths and CLI profiles are ALLOCATED under a lock and
 #     recorded in a registry, not recomputed from cksum($PWD) by every caller.
 #     Deriving an identity in a 1000-slot namespace with no coordination
 #     collides, and a collision here is silent: the loser's process fails to
 #     bind while the winner keeps answering.
-#  2. Nothing prints a checkmark for a resource it has not reached the way the
-#     application reaches it. The database is verified through DATABASE_URL,
-#     never through `docker exec` — when a native PostgreSQL owns 5432 the
-#     container never binds the host port, so a docker-exec create lands in a
-#     server the backend never talks to.
+#  2. Each environment owns a SQLite file under its registry directory. No
+#     external database service is started or probed.
 #  3. Creating an environment writes down how to destroy it. Without that
 #     record there is no destroy, only archaeology; the databases, ports and
 #     daemons leak, and nothing on the machine can even list them.
@@ -34,13 +31,11 @@ DEV_WORKSPACES_PARENT="${MULTICA_DEV_WORKSPACES_PARENT:-$HOME}"
 DEV_DESKTOP_APP_DATA="${MULTICA_DEV_DESKTOP_APP_DATA:-}"
 DEV_PROFILES_HOME="${MULTICA_DEV_PROFILES_HOME:-$HOME/.multica/profiles}"
 
-DEV_EMAIL="${MULTICA_DEV_EMAIL:-dev@localhost}"
-DEV_CODE_DEFAULT=888888
 WORKSPACE_NAME="${MULTICA_DEV_WORKSPACE_NAME:-Dev}"
 WORKSPACE_SLUG="${MULTICA_DEV_WORKSPACE_SLUG:-dev}"
 
-ALL_COMPONENTS="api web daemon desktop"
-DEFAULT_COMPONENTS="api web"
+ALL_COMPONENTS="api daemon desktop"
+DEFAULT_COMPONENTS="api desktop"
 
 # An agent runs with TMPDIR=/tmp/multica-task-<id>, deleted when the run ends.
 # Anything the Go toolchain builds there goes with it, so a binary started from
@@ -315,37 +310,13 @@ load_env_file() {
   . "$root/scripts/local-env.sh"
 }
 
-# The verification code has to be in the file BEFORE the backend starts: the
-# handler reads the variable at request time, but the process loads the file
-# once. Setting it here removes the start → edit → restart detour, and is what
-# makes `up` able to log itself in without a human reading a log for a code.
-ensure_dev_code() {
-  local file="$REPO_ROOT/$1" tmp
-  if grep -qE '^MULTICA_DEV_VERIFICATION_CODE=[0-9]{6}$' "$file"; then
-    return 0
-  fi
-  if grep -q '^MULTICA_DEV_VERIFICATION_CODE=' "$file"; then
-    tmp="$(mktemp)"
-    sed "s/^MULTICA_DEV_VERIFICATION_CODE=.*/MULTICA_DEV_VERIFICATION_CODE=$DEV_CODE_DEFAULT/" "$file" > "$tmp"
-    mv "$tmp" "$file"
-  else
-    printf '\nMULTICA_DEV_VERIFICATION_CODE=%s\n' "$DEV_CODE_DEFAULT" >> "$file"
-  fi
-  info "Set MULTICA_DEV_VERIFICATION_CODE=$DEV_CODE_DEFAULT in $1 (ignored when APP_ENV=production)."
-}
-
 rewrite_env_ports() {
-  local file="$REPO_ROOT/$1" offset=$2 backend=$3 frontend=$4 db=$5 tmp database_url escaped_database_url
-  database_url="$(database_url_with_name "${DATABASE_URL:-}" "$db")" \
-    || die "DATABASE_URL is not a valid PostgreSQL URL: ${DATABASE_URL:-<unset>}"
-  escaped_database_url="$(printf '%s' "$database_url" | sed 's/[\\&|]/\\&/g')"
+  local file="$REPO_ROOT/$1" offset=$2 backend=$3 frontend=$4 tmp
   tmp="$(mktemp)"
   sed \
     -e "s|^PORT=.*|PORT=${backend}|" \
     -e "s|^FRONTEND_PORT=.*|FRONTEND_PORT=${frontend}|" \
     -e "s|^FRONTEND_ORIGIN=.*|FRONTEND_ORIGIN=http://localhost:${frontend}|" \
-    -e "s|^POSTGRES_DB=.*|POSTGRES_DB=${db}|" \
-    -e "s|^DATABASE_URL=.*|DATABASE_URL=${escaped_database_url}|" \
     -e "s|^MULTICA_SERVER_URL=.*|MULTICA_SERVER_URL=ws://localhost:${backend}/ws|" \
     -e "s|^MULTICA_PUBLIC_URL=.*|MULTICA_PUBLIC_URL=http://localhost:${backend}|" \
     -e "s|^MULTICA_APP_URL=.*|MULTICA_APP_URL=http://localhost:${frontend}|" \
@@ -353,71 +324,6 @@ rewrite_env_ports() {
     -e "s|^NEXT_PUBLIC_WS_URL=.*|NEXT_PUBLIC_WS_URL=ws://localhost:${backend}/ws|" \
     "$file" > "$tmp"
   mv "$tmp" "$file"
-}
-
-# ---------------------------------------------------------------- database ---
-
-admin_database_url() {
-  node -e '
-    const url = new URL(process.argv[1]);
-    url.pathname = "/postgres";
-    process.stdout.write(url.toString());
-  ' "$1" 2>/dev/null || true
-}
-
-database_url_with_name() {
-  node -e '
-    const url = new URL(process.argv[1]);
-    if (url.protocol !== "postgres:" && url.protocol !== "postgresql:") process.exit(1);
-    url.pathname = "/" + process.argv[2];
-    process.stdout.write(url.toString());
-  ' "$1" "$2" 2>/dev/null
-}
-
-# Diagnoses the failure mode this whole script exists to make impossible:
-# something other than the container owns 5432, so the container never bound
-# the host port and a docker-exec create landed in the wrong server.
-diagnose_database() {
-  local owner
-  owner="$(lsof -nP -iTCP:"${POSTGRES_PORT:-5432}" -sTCP:LISTEN 2>/dev/null | awk 'NR==2 {print $1" (pid "$2", user "$3")"}')"
-  printf '\n'
-  warn "The database the tooling created is not the one the application reaches."
-  info "Port ${POSTGRES_PORT:-5432} is served by: ${owner:-nothing}"
-  info "DATABASE_URL: ${DATABASE_URL}"
-  info "If that is a native PostgreSQL, the Docker container never bound the host port."
-  info "Either stop it (brew services stop postgresql@17) or point DATABASE_URL at it."
-}
-
-ensure_database() {
-  local admin_url=""
-  if command -v psql >/dev/null 2>&1 && [ -n "${DATABASE_URL:-}" ]; then
-    admin_url="$(admin_database_url "$DATABASE_URL")"
-  fi
-
-  # Preferred path: create through the same connection string the application
-  # uses, so "created" and "reachable" cannot describe two different servers.
-  if [ -n "$admin_url" ] && PGCONNECT_TIMEOUT=3 psql "$admin_url" -tAc 'SELECT 1' >/dev/null 2>&1; then
-    if ! PGCONNECT_TIMEOUT=3 psql "$admin_url" -tAc "SELECT 1 FROM pg_database WHERE datname='${POSTGRES_DB}'" | grep -q 1; then
-      psql "$admin_url" -v ON_ERROR_STOP=1 -c "CREATE DATABASE \"${POSTGRES_DB}\"" >/dev/null
-      info "Created database ${POSTGRES_DB} through DATABASE_URL."
-    fi
-  else
-    info "Nothing is answering on ${POSTGRES_PORT:-5432} yet; starting the shared container."
-    bash "$REPO_ROOT/scripts/ensure-postgres.sh" "$ENV_FILE" | sed 's/^/    /'
-  fi
-}
-
-migrate_database() {
-  # `migrate up` connects with DATABASE_URL and pings before doing anything, so
-  # a successful run is the proof that the application can reach the database
-  # this script just prepared. That is why nothing above prints a checkmark.
-  if ! (cd "$REPO_ROOT/server" && go run ./cmd/migrate up) > "$LOG_DIR/migrate.log" 2>&1; then
-    tail -5 "$LOG_DIR/migrate.log" | sed 's/^/    /' >&2 || true
-    if grep -q '3D000\|does not exist' "$LOG_DIR/migrate.log"; then
-      diagnose_database
-    fi
-    die "Migrations failed. Full log: $LOG_DIR/migrate.log"
-  fi
 }
 
 # -------------------------------------------------------------- components ---
@@ -551,47 +457,13 @@ Run 'make down' here first — a leftover instance answers /health with 200 and 
   die "api never became healthy. Log: $(log_file api)"
 }
 
-start_web() {
-  local waited=0 listener
-  if curl -sf --max-time 15 "http://localhost:${FRONTEND_PORT}" >/dev/null 2>&1 \
-    && listener_belongs_to_component web "$FRONTEND_PORT"; then
-    ok "web already running on :$FRONTEND_PORT"
-    return 0
-  fi
-  if ! port_free "$FRONTEND_PORT"; then
-    die "Port $FRONTEND_PORT is busy: $(describe_port_owner "$FRONTEND_PORT"). Run 'make down' here first."
-  fi
-
-  launch_detached web make -C "$REPO_ROOT" -s web-dev ENV_FILE="$ENV_FILE"
-  info "web launching (pid $(cat "$(pid_file web)")), log: $(log_file web)"
-
-  while [ "$waited" -lt 300 ]; do
-    if curl -sf --max-time 15 "http://localhost:${FRONTEND_PORT}" >/dev/null 2>&1; then
-      listener="$(port_listener_pid "$FRONTEND_PORT")"
-      if ! listener_belongs_to_component web "$FRONTEND_PORT"; then
-        stop_component web
-        die "Web on :$FRONTEND_PORT is not owned by the process group this environment launched."
-      fi
-      ok "web serving http://localhost:$FRONTEND_PORT (pid ${listener:-?})"
-      return 0
-    fi
-    component_pid web >/dev/null || { tail -20 "$(log_file web)" | sed 's/^/    /' >&2; die "web exited during startup. Log: $(log_file web)"; }
-    sleep 2
-    waited=$((waited + 2))
-  done
-  die "web never came up. Log: $(log_file web)"
-}
-
-# send-code once, verify-code once. Repeated verify attempts lock the code out
-# and start returning 400 even when it is correct, so retrying is self-defeating.
 write_profile_config() {
-  local config=$1 pat=$2 ws=$3
+  local config=$1 ws=$2
   mkdir -p "$PROFILE_DIR"
   cat > "$config" <<EOF
 {
   "server_url": "http://localhost:${BACKEND_PORT}",
-  "app_url": "http://localhost:${FRONTEND_PORT}",
-  "token": "$(json_escape "$pat")",
+  "app_url": "http://localhost:${BACKEND_PORT}",
   "workspace_id": "$(json_escape "$ws")",
   "workspaces_root": "$(json_escape "$WORKSPACES_ROOT")"
 }
@@ -599,69 +471,28 @@ EOF
   chmod 600 "$config"
 }
 
-ensure_credentials() {
+ensure_local_profile() {
   local server="http://localhost:${BACKEND_PORT}" config="$PROFILE_DIR/config.json"
-  local code="${MULTICA_DEV_VERIFICATION_CODE:-$DEV_CODE_DEFAULT}"
-  local verify jwt pat ws
+  local ws workspaces
 
-  if [ -f "$config" ]; then
-    pat="$(json_field "$(cat "$config")" token || true)"
-    ws="$(json_field "$(cat "$config")" workspace_id || true)"
-    if [ -n "$pat" ] && curl -sf --max-time 5 "$server/api/me" -H "Authorization: Bearer $pat" >/dev/null 2>&1; then
-      WORKSPACE_ID="$ws"
-      write_profile_config "$config" "$pat" "$ws"
-      ok "CLI profile $PROFILE already authenticated"
-      return 0
-    fi
-  fi
+  workspaces="$(curl -sS --max-time 5 "$server/api/workspaces")"
+  ws="$(node -e '
+    let list;
+    try { list = JSON.parse(process.argv[1]); } catch { process.exit(1); }
+    if (!Array.isArray(list) || list.length !== 1 || !list[0]?.id) process.exit(1);
+    process.stdout.write(list[0].id);
+  ' "$workspaces" 2>/dev/null || true)"
+  [ -n "$ws" ] || die "Local workbench did not expose exactly one workspace"
 
-  curl -sf -X POST "$server/auth/send-code" -H 'Content-Type: application/json' \
-    -d "{\"email\":\"${DEV_EMAIL}\"}" >/dev/null \
-    || die "send-code failed. Is MULTICA_DEV_VERIFICATION_CODE set and APP_ENV non-production?"
-
-  verify="$(curl -sS -X POST "$server/auth/verify-code" -H 'Content-Type: application/json' \
-    -d "{\"email\":\"${DEV_EMAIL}\",\"code\":\"${code}\"}")"
-  jwt="$(json_field "$verify" token || true)"
-  [ -n "$jwt" ] || die "verify-code failed: $verify
-Do not retry immediately — repeated attempts lock the code. Wait ~40s and re-run."
-
-  local pat_response
-  pat_response="$(curl -sS -X POST "$server/api/tokens" -H "Authorization: Bearer $jwt" \
-    -H 'Content-Type: application/json' -d '{"name":"dev-env","expires_in_days":365}')"
-  pat="$(json_field "$pat_response" token || true)"
-  [ -n "$pat" ] || die "Personal access token creation failed: $pat_response"
-
-  local ws_response
-  ws_response="$(curl -sS -X POST "$server/api/workspaces" -H "Authorization: Bearer $pat" \
-    -H 'Content-Type: application/json' \
-    -d "{\"name\":\"${WORKSPACE_NAME}\",\"slug\":\"${WORKSPACE_SLUG}\"}")"
-  ws="$(json_field "$ws_response" id || true)"
-  if [ -z "$ws" ]; then
-    ws="$(node -e '
-      let list;
-      try { list = JSON.parse(process.argv[1]); } catch { process.exit(1); }
-      const match = (Array.isArray(list) ? list : []).find(w => w.slug === process.argv[2]);
-      if (!match) process.exit(1);
-      process.stdout.write(match.id);
-    ' "$(curl -sS "$server/api/workspaces" -H "Authorization: Bearer $pat")" "$WORKSPACE_SLUG" 2>/dev/null || true)"
-  fi
-  [ -n "$ws" ] || die "Workspace creation failed: $ws_response"
-
-  # A fresh user has onboarded_at = NULL and a browser login is bounced to
-  # /onboarding, so the URL this script prints would not land in the app.
-  curl -sS -X POST "$server/api/me/onboarding/complete" \
-    -H "Authorization: Bearer $pat" -H "X-Workspace-ID: $ws" \
-    -H 'Content-Type: application/json' -d '{"exit":"existing"}' >/dev/null 2>&1 || true
-
-  write_profile_config "$config" "$pat" "$ws"
+  write_profile_config "$config" "$ws"
   WORKSPACE_ID="$ws"
-  ok "Logged in as $DEV_EMAIL and wrote profile $PROFILE"
+  ok "CLI profile $PROFILE uses the local workspace"
 }
 
 # The CLI refuses `daemon start` anywhere under a daemon-task marker, so a task
 # cannot spawn a second daemon that competes for its own work. Checking the
 # marker here turns that refusal into one actionable line, before this component
-# has spent a login and a CLI build on an outcome it cannot reach.
+# has spent a CLI build on an outcome it cannot reach.
 daemon_task_marker() {
   local dir="$REPO_ROOT" marker
   while :; do
@@ -678,7 +509,7 @@ daemon_task_marker() {
 
 start_daemon() {
   local status state
-  ensure_credentials
+  ensure_local_profile
 
   # Built, never `go run`: the daemon records its own executable path at startup
   # and re-execs it as the execution-environment helper for every task. Under
@@ -688,10 +519,10 @@ start_daemon() {
   info "Building $MULTICA_BIN (a go run daemon would fail every task later)."
   (cd "$REPO_ROOT/server" && go build -o bin/multica ./cmd/multica) || die "Failed to build the multica CLI."
 
-  "${CLEAN_ENV[@]}" MULTICA_WORKSPACES_ROOT="$WORKSPACES_ROOT" \
+	"${CLEAN_ENV[@]}" MULTICA_WORKSPACES_ROOT="$WORKSPACES_ROOT" MULTICA_LOCAL_WORKBENCH=1 \
     "$MULTICA_BIN" daemon start --profile "$PROFILE" 2>&1 | sed 's/^/    /' || true
 
-  status="$("${CLEAN_ENV[@]}" MULTICA_WORKSPACES_ROOT="$WORKSPACES_ROOT" \
+	status="$("${CLEAN_ENV[@]}" MULTICA_WORKSPACES_ROOT="$WORKSPACES_ROOT" MULTICA_LOCAL_WORKBENCH=1 \
     "$MULTICA_BIN" daemon status --profile "$PROFILE" --output json 2>/dev/null || true)"
   state="$(json_field "$status" status || echo unknown)"
   # `daemon status` reports "stopped" plus port_conflict when the daemon
@@ -832,7 +663,6 @@ stop_component() {
   local port=""
   case "$name" in
     api) port="$BACKEND_PORT" ;;
-    web) port="$FRONTEND_PORT" ;;
     desktop) port="$DESKTOP_RENDERER_PORT" ;;
   esac
   if [ -n "$port" ]; then
@@ -878,16 +708,6 @@ component_state() {
         printf 'stopped|http://localhost:%s|' "$BACKEND_PORT"
       fi
       ;;
-    web)
-      if curl -sf --max-time 10 "http://localhost:${FRONTEND_PORT}" >/dev/null 2>&1 \
-        && listener_belongs_to_component web "$FRONTEND_PORT"; then
-        printf 'running|http://localhost:%s|pid %s' "$FRONTEND_PORT" "$(port_listener_pid "$FRONTEND_PORT")"
-      elif [ -n "$(port_listener_pid "$FRONTEND_PORT")" ]; then
-        printf 'mismatch|http://localhost:%s|listener is not owned by this environment' "$FRONTEND_PORT"
-      else
-        printf 'stopped|http://localhost:%s|' "$FRONTEND_PORT"
-      fi
-      ;;
     daemon)
       local status state
       if [ -x "$MULTICA_BIN" ]; then
@@ -927,7 +747,8 @@ print_status_human() {
     url="${row%%|*}"; detail="${row#*|}"
     printf '  %-9s %-9s %-32s %s\n' "$comp" "$state" "${url:--}" "${detail:--}"
   done
-  printf '  %-9s %-9s %-32s %s\n' database "$(database_state)" "$DB_NAME" "${DATABASE_URL%%\?*}"
+  local sqlite_path="$STATE_DIR/data/multica.db"
+  printf '  %-9s %-9s %-32s %s\n' database "$( [ -f "$sqlite_path" ] && printf present || printf new )" sqlite "$sqlite_path"
   printf '\n  owner %s · created %s%s\n' "$OWNER" "$CREATED_AT" "$( [ "${TTL_HOURS:-0}" != 0 ] && printf ' · expires %s' "$EXPIRES_AT" )"
   printf '  logs  %s\n' "$LOG_DIR"
 }
@@ -935,15 +756,7 @@ print_status_human() {
 # Reported from the connection string the application uses, so "present" can
 # never mean "present in a server nothing talks to".
 database_state() {
-  local admin_url
-  command -v psql >/dev/null 2>&1 || { printf 'unknown'; return; }
-  admin_url="$(admin_database_url "$DATABASE_URL")"
-  PGCONNECT_TIMEOUT=3 psql "$admin_url" -tAc 'SELECT 1' >/dev/null 2>&1 || { printf 'no-server'; return; }
-  if PGCONNECT_TIMEOUT=3 psql "$admin_url" -tAc "SELECT 1 FROM pg_database WHERE datname='${DB_NAME}'" 2>/dev/null | grep -q 1; then
-    printf 'present'
-  else
-    printf 'missing'
-  fi
+  [ -f "$STATE_DIR/data/multica.db" ] && printf 'present' || printf 'new'
 }
 
 print_status_json() {
@@ -968,9 +781,7 @@ print_status_json() {
 
 print_handoff() {
   local entrypoint
-  if component_selected web; then
-    entrypoint="Open        http://localhost:${FRONTEND_PORT}/${WORKSPACE_SLUG}/issues"
-  elif component_selected desktop; then
+  if component_selected desktop; then
     entrypoint="Desktop     renderer http://localhost:${DESKTOP_RENDERER_PORT} → backend :${BACKEND_PORT}"
   else
     entrypoint="API only    http://localhost:${BACKEND_PORT}"
@@ -980,7 +791,7 @@ print_handoff() {
 ${C_GREEN}✓ Environment ready.${C_OFF}
 
   ${entrypoint}
-  Sign in     ${DEV_EMAIL}  ·  code ${MULTICA_DEV_VERIFICATION_CODE:-$DEV_CODE_DEFAULT}
+  Mode        local only  ·  no account authentication
   Backend     http://localhost:${BACKEND_PORT}   (GET /health reports pid + commit + started_at)
   Commit      $(git -C "$REPO_ROOT" rev-parse --short HEAD 2>/dev/null || echo unknown)
   Environment ${NAME}$( [ "${TTL_HOURS:-0}" != 0 ] && printf ' (expires %s)' "$EXPIRES_AT" )
@@ -1013,6 +824,7 @@ bind_paths() {
   DESKTOP_APP_SUFFIX="${DESKTOP_APP_SUFFIX:-$NAME}"
   DESKTOP_USER_DATA_DIR="${DESKTOP_USER_DATA_DIR:-$(desktop_user_data_dir "$DESKTOP_APP_SUFFIX")}"
   DESKTOP_ENV_FILE="${DESKTOP_ENV_FILE:-$DIR/apps/desktop/.env.development.local}"
+  DB_NAME="$STATE_DIR/data/multica.db"
   EXPIRES_AT="${EXPIRES_AT:-}"
   MULTICA_BIN="$DIR/server/bin/multica"
   if [ ! -x "$MULTICA_BIN" ] && [ -x "$REPO_ROOT/server/bin/multica" ]; then
@@ -1034,7 +846,6 @@ save_manifest() {
     write_manifest_value BACKEND_PORT "$BACKEND_PORT"
     write_manifest_value FRONTEND_PORT "$FRONTEND_PORT"
     write_manifest_value DB_NAME "$DB_NAME"
-    write_manifest_value DATABASE_URL "$DATABASE_URL"
     write_manifest_value PROFILE "$PROFILE"
     write_manifest_value WORKSPACES_ROOT "$WORKSPACES_ROOT"
     write_manifest_value DESKTOP_RENDERER_PORT "$DESKTOP_RENDERER_PORT"
@@ -1064,7 +875,7 @@ cmd_up() {
   for comp in $requested; do
     case " $ALL_COMPONENTS " in *" $comp "*) ;; *) die "Unknown component '$comp'. Valid: $ALL_COMPONENTS" ;; esac
   done
-  # web, daemon and desktop are all clients of the backend; selecting one
+  # daemon and desktop are clients of the backend; selecting one
   # without api would produce an environment that cannot serve a single request.
   case " $requested " in *" api "*) ;; *) requested="api $requested" ;; esac
   COMPONENTS="$requested"
@@ -1077,7 +888,7 @@ cmd_up() {
   local missing=() tool needed="node go curl"
   # pnpm is only required by the components that actually build JavaScript, so
   # `up C=api` works on a checkout that has never run an install.
-  if component_selected web || component_selected desktop; then needed="$needed pnpm"; fi
+  if component_selected desktop; then needed="$needed pnpm"; fi
   for tool in $needed; do
     command -v "$tool" >/dev/null 2>&1 || missing+=("$tool")
   done
@@ -1095,7 +906,7 @@ cmd_up() {
     [ -z "$marker" ] || die "The daemon component cannot start under a daemon-managed task.
 This checkout sits below $marker, and the CLI refuses 'daemon start' there so a
 task cannot spawn a second daemon competing for its own work.
-Start the rest with 'make up C=api,web', or run 'make up C=daemon' from your own shell."
+Start the rest with 'make up C=api,desktop', or run 'make up C=daemon' from your own shell."
   fi
 
   step "Environment"
@@ -1108,7 +919,6 @@ Start the rest with 'make up C=api,web', or run 'make up C=daemon' from your own
     fi
     info "Created $ENV_FILE"
   fi
-  ensure_dev_code "$ENV_FILE"
   load_env_file "$ENV_FILE"
 
   acquire_lock
@@ -1129,7 +939,7 @@ Start the rest with 'make up C=api,web', or run 'make up C=daemon' from your own
       EXPIRES_AT="$(expires_at_after_hours "$ttl")"
       save_manifest
     fi
-    info "Reusing environment $NAME (ports $BACKEND_PORT/$FRONTEND_PORT, database $DB_NAME)"
+    info "Reusing environment $NAME (ports $BACKEND_PORT/$FRONTEND_PORT, SQLite $DB_NAME)"
   else
     offset=$((PORT - 18080))
     # A slot is adopted only when the registry does not hold it and both ports
@@ -1145,10 +955,9 @@ Start the rest with 'make up C=api,web', or run 'make up C=daemon' from your own
       fi
       offset="$(allocate_offset "$REPO_ROOT")" || die "No free slot left; run 'make gc' or 'make list'."
       local new_backend=$((18080 + offset)) new_frontend=$((13000 + offset))
-      local new_db="multica_$(slugify "$(basename "$REPO_ROOT")")_${offset}"
-      rewrite_env_ports "$ENV_FILE" "$offset" "$new_backend" "$new_frontend" "$new_db"
+      rewrite_env_ports "$ENV_FILE" "$offset" "$new_backend" "$new_frontend"
       load_env_file "$ENV_FILE"
-      info "Allocated slot $offset — backend $new_backend, frontend $new_frontend, database $new_db"
+      info "Allocated slot $offset — backend $new_backend, frontend $new_frontend"
     fi
 
     NAME="${name:-$(slugify "$(basename "$REPO_ROOT")")-${offset}}"
@@ -1169,7 +978,7 @@ Start the rest with 'make up C=api,web', or run 'make up C=daemon' from your own
     [ "$ttl" = 0 ] || EXPIRES_AT="$(expires_at_after_hours "$ttl")"
     OFFSET="$offset"
     BACKEND_PORT="$PORT"
-    DB_NAME="$POSTGRES_DB"
+    DB_NAME="$(env_dir "$NAME")/data/multica.db"
     save_manifest
     load_manifest "$NAME"
     ok "Registered environment $NAME"
@@ -1180,21 +989,20 @@ Start the rest with 'make up C=api,web', or run 'make up C=daemon' from your own
   bind_paths
   # The manifest is the source of truth from here on; re-export so every child
   # sees the same values the registry recorded.
-  export PORT="$BACKEND_PORT" FRONTEND_PORT DATABASE_URL POSTGRES_DB="$DB_NAME"
+  export PORT="$BACKEND_PORT" FRONTEND_PORT
+  export MULTICA_SQLITE_PATH="$STATE_DIR/data/multica.db"
+  mkdir -p "$STATE_DIR/data"
 
-  if [ ! -d "$REPO_ROOT/node_modules" ] && { component_selected web || component_selected desktop; }; then
+  if [ ! -d "$REPO_ROOT/node_modules" ] && component_selected desktop; then
     step "Dependencies"
     (cd "$REPO_ROOT" && pnpm install) || die "pnpm install failed."
   fi
 
   step "Database"
-  ensure_database
-  migrate_database
-  ok "$DB_NAME reachable through DATABASE_URL and migrated"
+  ok "SQLite will initialize at $MULTICA_SQLITE_PATH"
 
   step "Components: $COMPONENTS"
   component_selected api && start_api
-  component_selected web && start_web
   component_selected daemon && start_daemon
   component_selected desktop && start_desktop
 
@@ -1211,7 +1019,7 @@ cmd_down() {
     esac
   done
   resolve_env_for_read "$name"
-  export PORT="$BACKEND_PORT" FRONTEND_PORT DATABASE_URL POSTGRES_DB="$DB_NAME"
+  export PORT="$BACKEND_PORT" FRONTEND_PORT MULTICA_SQLITE_PATH="$STATE_DIR/data/multica.db"
 
   step "Stopping $NAME: $requested"
   local comp
@@ -1235,33 +1043,22 @@ cmd_destroy() {
   resolve_env_for_read "$name"
 
   if [ "$assume_yes" != 1 ]; then
-    printf 'Destroy %s? This drops database %s and profile %s. [y/N] ' "$NAME" "$DB_NAME" "$PROFILE"
+    printf 'Destroy %s? This removes its SQLite database and profile %s. [y/N] ' "$NAME" "$PROFILE"
     read -r reply || reply=n
     case "$reply" in y|Y|yes|YES) ;; *) printf 'Cancelled.\n'; return 0 ;; esac
   fi
 
-  export PORT="$BACKEND_PORT" FRONTEND_PORT DATABASE_URL POSTGRES_DB="$DB_NAME"
+  export PORT="$BACKEND_PORT" FRONTEND_PORT MULTICA_SQLITE_PATH="$STATE_DIR/data/multica.db"
   step "Destroying $NAME"
   local comp
   for comp in $ALL_COMPONENTS; do
     if ! stop_component "$comp"; then failures=$((failures + 1)); fi
   done
 
-  if command -v psql >/dev/null 2>&1; then
-    admin_url="$(admin_database_url "$DATABASE_URL")"
-    if PGCONNECT_TIMEOUT=3 psql "$admin_url" -tAc 'SELECT 1' >/dev/null 2>&1; then
-      if psql "$admin_url" -v ON_ERROR_STOP=1 -c "DROP DATABASE IF EXISTS \"$DB_NAME\" WITH (FORCE)" >/dev/null; then
-        ok "dropped database $DB_NAME"
-      else
-        warn "failed to drop database $DB_NAME; keeping its manifest"
-        failures=$((failures + 1))
-      fi
-    else
-      warn "Nothing answered on the database host; $DB_NAME was left in place."
-      failures=$((failures + 1))
-    fi
+  if rm -f "$MULTICA_SQLITE_PATH" "$MULTICA_SQLITE_PATH-wal" "$MULTICA_SQLITE_PATH-shm"; then
+    ok "removed SQLite database $MULTICA_SQLITE_PATH"
   else
-    warn "psql not found; $DB_NAME was left in place."
+    warn "failed to remove SQLite database $MULTICA_SQLITE_PATH"
     failures=$((failures + 1))
   fi
 
@@ -1422,7 +1219,7 @@ cmd_exec() {
   mkdir -p "$DEV_TMPDIR"
   cd "$DIR"
   load_env_file "$ENV_FILE" "$DIR"
-  export PORT="$BACKEND_PORT" FRONTEND_PORT DATABASE_URL POSTGRES_DB="$DB_NAME"
+  export PORT="$BACKEND_PORT" FRONTEND_PORT MULTICA_SQLITE_PATH="$STATE_DIR/data/multica.db"
   export TMPDIR="$DEV_TMPDIR" TMP="$DEV_TMPDIR" TEMP="$DEV_TMPDIR"
   export MULTICA_DEV_PROFILE="$PROFILE"
   exec "${CLEAN_ENV[@]}" MULTICA_WORKSPACES_ROOT="$WORKSPACES_ROOT" "$@"
@@ -1432,7 +1229,7 @@ usage() {
   cat <<'EOF'
 Local development environments: named, listable, deletable.
 
-  dev-env.sh up      [--components api,web,daemon,desktop] [--all]
+  dev-env.sh up      [--components api,daemon,desktop] [--all]
                      [--name N] [--ephemeral] [--ttl HOURS]
   dev-env.sh status  [name] [--json]
   dev-env.sh list    [--json]
@@ -1441,7 +1238,7 @@ Local development environments: named, listable, deletable.
   dev-env.sh gc      [--dry-run]
   dev-env.sh exec    [name] -- <command> [args...]
 
-Components: api (Go backend), web (Next.js), daemon (agent daemon),
+Components: api (Go backend), daemon (agent daemon),
 desktop (Electron). Anything selected implies api.
 
 down keeps the database, the CLI profile and the allocated slot.

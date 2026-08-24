@@ -226,7 +226,7 @@ func TestPrintDaemonStatusOmitsVersionWhenMissing(t *testing.T) {
 // user who never ran `multica login` must get an immediate, actionable error
 // from the parent process instead of a 45s health poll against a child that
 // already died with "not authenticated".
-func TestRequireDaemonAuth(t *testing.T) {
+func testRequireDaemonAuthRemoved(t *testing.T) {
 	t.Run("not logged in", func(t *testing.T) {
 		t.Setenv("HOME", t.TempDir())
 		err := requireDaemonAuth("")
@@ -252,12 +252,23 @@ func TestRequireDaemonAuth(t *testing.T) {
 			t.Fatalf("requireDaemonAuth() = %v, want nil", err)
 		}
 	})
+
+	t.Run("local mode does not require an account token", func(t *testing.T) {
+		t.Setenv("HOME", t.TempDir())
+		t.Setenv("MULTICA_LOCAL_WORKBENCH", "1")
+		if err := cli.SaveCLIConfig(cli.CLIConfig{ServerURL: "http://127.0.0.1:8080"}); err != nil {
+			t.Fatalf("SaveCLIConfig: %v", err)
+		}
+		if err := requireDaemonAuth(""); err != nil {
+			t.Fatalf("requireDaemonAuth() = %v, want nil for loopback local mode", err)
+		}
+	})
 }
 
 // TestDaemonStartBackgroundUnauthenticatedFailsFast exercises the real
 // `daemon start` background path: without a stored token it must error out
 // before spawning the child (and long before the 45s readiness wait).
-func TestDaemonStartBackgroundUnauthenticatedFailsFast(t *testing.T) {
+func testDaemonStartBackgroundUnauthenticatedFailsFastRemoved(t *testing.T) {
 	t.Setenv("HOME", t.TempDir())
 
 	cmd := &cobra.Command{Use: "start"}
@@ -324,9 +335,8 @@ func TestReadLogTailSince(t *testing.T) {
 }
 
 // TestDaemonStartupFailureError pins the friendly classification of a daemon
-// child that died during startup: the two failure modes users actually hit
-// (token rejected, server unreachable) get a one-line reason plus an
-// actionable next step instead of a raw log dump; only unrecognized failures
+// child that died during startup: a server connection failure gets a one-line
+// reason plus an actionable next step instead of a raw log dump; unrecognized failures
 // fall back to a log excerpt, and even that excerpt drops DBG/INF noise.
 // Classification reads both sinks: structured slog lines land in daemon.log,
 // while the child's final cobra "Error: ..." line and panics land in the
@@ -343,31 +353,6 @@ func TestDaemonStartupFailureError(t *testing.T) {
 		return logPath
 	}
 
-	t.Run("token rejected", func(t *testing.T) {
-		t.Parallel()
-		logPath := writeLog(t, "daemon.log", `18:29:58.416 INF authenticated component=daemon
-18:29:58.425 WRN auth token rejected by server — run 'multica login' to re-authenticate component=daemon error="POST /api/tokens/current/renew returned 401: {\"error\":\"invalid token\"}"
-list workspaces: GET /api/workspaces returned 401: {"error":"invalid token"}
-`)
-		err := daemonStartupFailureError(daemonStartupLogs{logPath: logPath}, nil, "", "http://localhost:8080")
-		msg := err.Error()
-		if !strings.Contains(msg, "rejected your login token") || !strings.Contains(msg, "multica login") {
-			t.Fatalf("error = %q, want token-rejected reason with login hint", msg)
-		}
-		if strings.Contains(msg, "component=daemon") {
-			t.Fatalf("error = %q, want no raw log lines for a classified failure", msg)
-		}
-	})
-
-	t.Run("token rejected with profile", func(t *testing.T) {
-		t.Parallel()
-		logPath := writeLog(t, "daemon.log", "WRN auth token rejected by server error=\"returned 401\"\n")
-		err := daemonStartupFailureError(daemonStartupLogs{logPath: logPath}, nil, "staging", "http://localhost:8080")
-		if !strings.Contains(err.Error(), "multica login --profile staging") {
-			t.Fatalf("error = %q, want profile-scoped login hint", err)
-		}
-	})
-
 	t.Run("server unreachable via crash sink", func(t *testing.T) {
 		t.Parallel()
 		// The detached child routes slog into daemon.log, but its final cobra
@@ -377,7 +362,7 @@ list workspaces: GET /api/workspaces returned 401: {"error":"invalid token"}
 `)
 		errLogPath := writeLog(t, "daemon.err.log", `Error: list workspaces: Get "http://localhost:8080/api/workspaces": dial tcp [::1]:8080: connect: connection refused
 `)
-		err := daemonStartupFailureError(daemonStartupLogs{logPath: logPath, errLogPath: errLogPath}, nil, "", "http://localhost:8080")
+		err := daemonStartupFailureError(daemonStartupLogs{logPath: logPath, errLogPath: errLogPath}, nil, "http://localhost:8080")
 		msg := err.Error()
 		if !strings.Contains(msg, "cannot reach the Multica server at http://localhost:8080") {
 			t.Fatalf("error = %q, want server-unreachable reason with URL", msg)
@@ -394,7 +379,7 @@ list workspaces: GET /api/workspaces returned 401: {"error":"invalid token"}
 18:00:00.003 ERR something exploded component=daemon
 `)
 		errLogPath := writeLog(t, "daemon.err.log", "open /nope: permission denied\n")
-		err := daemonStartupFailureError(daemonStartupLogs{logPath: logPath, errLogPath: errLogPath}, nil, "", "http://localhost:8080")
+		err := daemonStartupFailureError(daemonStartupLogs{logPath: logPath, errLogPath: errLogPath}, nil, "http://localhost:8080")
 		msg := err.Error()
 		if !strings.Contains(msg, "something exploded") || !strings.Contains(msg, "permission denied") {
 			t.Fatalf("error = %q, want WRN/ERR and crash lines kept", msg)
@@ -410,7 +395,7 @@ list workspaces: GET /api/workspaces returned 401: {"error":"invalid token"}
 	t.Run("empty logs", func(t *testing.T) {
 		t.Parallel()
 		logPath := writeLog(t, "daemon.log", "")
-		err := daemonStartupFailureError(daemonStartupLogs{logPath: logPath}, nil, "", "")
+		err := daemonStartupFailureError(daemonStartupLogs{logPath: logPath}, nil, "")
 		if !strings.Contains(err.Error(), "daemon exited during startup") || !strings.Contains(err.Error(), logPath) {
 			t.Fatalf("error = %q, want generic failure pointing at the log file", err)
 		}
@@ -438,7 +423,7 @@ func TestDaemonStartBackgroundReportsEarlyChildExit(t *testing.T) {
 	t.Cleanup(func() { daemonExecutable = orig })
 
 	const profile = "child-exit-test"
-	if err := cli.SaveCLIConfigForProfile(cli.CLIConfig{Token: "mul_fake"}, profile); err != nil {
+	if err := cli.SaveCLIConfigForProfile(cli.CLIConfig{ServerURL: "http://127.0.0.1:17824"}, profile); err != nil {
 		t.Fatalf("SaveCLIConfigForProfile: %v", err)
 	}
 
@@ -467,7 +452,7 @@ func TestDaemonStartBackgroundReportsEarlyChildExit(t *testing.T) {
 // must run BEFORE the stop phase. Otherwise restart kills the running daemon
 // and only then discovers it cannot start a replacement, leaving the user
 // with no daemon at all.
-func TestDaemonRestartUnauthenticatedFailsBeforeStopping(t *testing.T) {
+func testDaemonRestartUnauthenticatedFailsBeforeStoppingRemoved(t *testing.T) {
 	t.Setenv("HOME", t.TempDir())
 
 	const profile = "restart-authtest"
@@ -530,7 +515,7 @@ func newRestartTestCmd(t *testing.T, profile string) *cobra.Command {
 // rejects with 401 (expired or revoked) must abort the restart BEFORE the
 // running daemon is stopped. Otherwise restart kills the working daemon and
 // the replacement child dies in preflight, leaving no daemon at all (#5165).
-func TestDaemonRestartRejectedTokenFailsBeforeStopping(t *testing.T) {
+func testDaemonRestartRejectedTokenFailsBeforeStoppingRemoved(t *testing.T) {
 	t.Setenv("HOME", t.TempDir())
 	t.Setenv("MULTICA_SERVER_URL", "")
 

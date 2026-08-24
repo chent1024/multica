@@ -32,7 +32,10 @@ function I18nWrapper({ children }: { children: ReactNode }) {
   );
 }
 
-const renderSearch = () => render(<SearchCommand />, { wrapper: I18nWrapper });
+const renderSearch = (localMode = false) =>
+  render(<SearchCommand localMode={localMode} />, {
+    wrapper: I18nWrapper,
+  });
 
 const {
   mockPush,
@@ -528,6 +531,31 @@ describe("SearchCommand", () => {
     expect(useSearchStore.getState().open).toBe(false);
   });
 
+  it("omits Inbox and member results in local mode", async () => {
+    const user = userEvent.setup();
+    mockMembers.current = [
+      {
+        id: "member-1",
+        workspace_id: "ws-test",
+        user_id: "user-1",
+        role: "member",
+        created_at: "2026-01-01T00:00:00Z",
+        name: "Alice Zhang",
+        email: "alice@example.com",
+        avatar_url: null,
+      },
+    ];
+    renderSearch(true);
+
+    const input = screen.getByPlaceholderText("Type a command or search...");
+    await user.type(input, "alice");
+    expect(screen.queryByText("Alice Zhang")).not.toBeInTheDocument();
+
+    await user.clear(input);
+    await user.type(input, "inbox");
+    expect(screen.queryByText("Inbox")).not.toBeInTheDocument();
+  });
+
   it("renders recent issues from query cache joined with store visit records", () => {
     mockRecentItems.current = [
       { id: "issue-1", visitedAt: 1000 },
@@ -625,6 +653,27 @@ describe("SearchCommand", () => {
     expect(mockToastSuccess).toHaveBeenCalledWith("Copied MUL-42");
 
     writeSpy.mockRestore();
+  });
+
+  it("keeps local identifiers but removes share-link commands", async () => {
+    const user = userEvent.setup();
+    mockPathname.current = "/ws-test/issues/issue-1";
+    mockAllIssues.current = [
+      { id: "issue-1", identifier: "MUL-42", title: "Demo", status: "todo" },
+    ];
+    renderSearch(true);
+
+    const input = screen.getByPlaceholderText("Type a command or search...");
+    await user.type(input, "copy");
+
+    expect(screen.queryByText("Copy Issue Link")).not.toBeInTheDocument();
+    expect(
+      screen.getByText(
+        (_, element) =>
+          element?.textContent === "Copy Identifier (MUL-42)" &&
+          element.tagName === "SPAN",
+      ),
+    ).toBeInTheDocument();
   });
 
   it("hides fold/unfold-all-comments commands off issue detail routes", async () => {

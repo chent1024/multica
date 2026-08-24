@@ -18,6 +18,7 @@ import { defaultStorage } from "./storage";
 import { AuthInitializer } from "./auth-initializer";
 import type { CoreProviderProps, ClientIdentity } from "./types";
 import type { StorageAdapter } from "../types/storage";
+import type { User } from "../types";
 import { ClientUsageReporter } from "../client-usage";
 import {
   configureShortcutPlatform,
@@ -29,12 +30,28 @@ import {
 let initialized = false;
 let authStore: ReturnType<typeof createAuthStore>;
 let chatStore: ReturnType<typeof createChatStore>;
+const LOCAL_ACTOR_TIMESTAMP = "2026-01-01T00:00:00Z";
+const LOCAL_ACTOR: User = {
+  id: "00000000-0000-4000-8000-000000000001",
+  name: "Local",
+  email: "",
+  avatar_url: null,
+  onboarded_at: LOCAL_ACTOR_TIMESTAMP,
+  onboarding_questionnaire: {},
+  starter_content_state: "imported",
+  language: null,
+  profile_description: "",
+  timezone: null,
+  created_at: LOCAL_ACTOR_TIMESTAMP,
+  updated_at: LOCAL_ACTOR_TIMESTAMP,
+};
 function initCore(
   apiBaseUrl: string,
   storage: StorageAdapter,
   onLogin?: () => void,
   onLogout?: () => void,
   cookieAuth?: boolean,
+  localMode?: boolean,
   identity?: ClientIdentity,
 ) {
   if (initialized) return;
@@ -55,6 +72,7 @@ function initCore(
 
   const api = new ApiClient(apiBaseUrl, {
     logger: createLogger("api"),
+    localMode,
     onUnauthorized: () => {
       storage.removeItem("multica_token");
     },
@@ -64,7 +82,7 @@ function initCore(
   setSchemaLogger(createLogger("api-schema"));
 
   // In token mode, hydrate token from storage.
-  if (!cookieAuth) {
+  if (!cookieAuth && !localMode) {
     const token = storage.getItem("multica_token");
     if (token) api.setToken(token);
   }
@@ -74,6 +92,11 @@ function initCore(
   // header. No boot-time hydration from storage is required.
 
   authStore = createAuthStore({ api, storage, onLogin, onLogout, cookieAuth });
+  if (localMode) {
+    // Shared views still use the historical actor-shaped authorship fields.
+    // This is an in-memory system actor, not an account or authenticated session.
+    authStore.setState({ user: LOCAL_ACTOR, isLoading: false, status: "local" });
+  }
   registerAuthStore(authStore);
 
   chatStore = createChatStore({ storage });
@@ -88,6 +111,7 @@ export function CoreProvider({
   wsUrl = "ws://localhost:8080/ws",
   storage = defaultStorage,
   cookieAuth,
+  localMode,
   onLogin,
   onLogout,
   identity,
@@ -98,7 +122,7 @@ export function CoreProvider({
   // Initialize singletons on first render only. Dependencies are read-once:
   // apiBaseUrl, storage, and callbacks are set at app boot and never change at runtime.
   // eslint-disable-next-line react-hooks/exhaustive-deps
-  useMemo(() => initCore(apiBaseUrl, storage, onLogin, onLogout, cookieAuth, identity), []);
+  useMemo(() => initCore(apiBaseUrl, storage, onLogin, onLogout, cookieAuth, localMode, identity), []);
 
   // Client-only freeze watchdog — shared by web and desktop. No-op on the
   // server and idempotent, so mounting it here covers both apps in one place.
@@ -116,6 +140,7 @@ export function CoreProvider({
         onLogout={onLogout}
         storage={storage}
         cookieAuth={cookieAuth}
+        localMode={localMode}
         identity={identity}
       >
         {/* Desktop's reporter owns both activity and runtime state so it must
@@ -128,6 +153,7 @@ export function CoreProvider({
           authStore={authStore}
           storage={storage}
           cookieAuth={cookieAuth}
+          localMode={localMode}
           identity={identity}
         >
           {children}

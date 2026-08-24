@@ -4,7 +4,6 @@ import {
   type LinkClickIntent,
   type NavigationAdapter,
 } from "@multica/views/navigation";
-import { useAuthStore } from "@multica/core/auth";
 import { isReservedSlug } from "@multica/core/paths";
 import {
   useTabStore,
@@ -12,7 +11,6 @@ import {
   splitTabUrl,
   useActiveTabUrl,
 } from "@/stores/tab-store";
-import { useWindowOverlayStore } from "@/stores/window-overlay-store";
 
 function requireRuntimeAppUrl(scope: string): string {
   const runtimeConfig = window.desktopAPI.runtimeConfig;
@@ -36,63 +34,29 @@ function extractWorkspaceSlug(path: string): string | null {
 }
 
 /**
- * Intercept navigation to "transition" paths — pre-workspace flows that on
- * desktop are rendered as a window-level overlay instead of a tab route.
- * Returns `true` if the navigation was handled (caller should NOT proceed).
- *
- * MUL-4741 note: the old adapter also parked the tab's router at "/" when
- * opening these overlays. Under the session architecture the Coordinator
- * parks the single router automatically whenever `activeWorkspaceSlug` goes
- * null (the zero-workspace flows), and an overlay opened over a still-valid
- * workspace simply covers the mounted tab — no navigation happens at all.
+ * Cloud-auth and collaborative transition routes are deliberately inert in
+ * local mode. Shared views can still emit these paths,
+ * but they must not resurrect login, workspace creation, or invitation UI.
  */
-function tryRouteToOverlay(path: string): boolean {
-  const overlay = useWindowOverlayStore.getState();
-  if (path === "/workspaces/new") {
-    overlay.open({ type: "new-workspace" });
-    return true;
-  }
-  if (path === "/onboarding") {
-    overlay.open({ type: "onboarding" });
-    return true;
-  }
-  if (path === "/invitations") {
-    overlay.open({ type: "invitations" });
-    return true;
-  }
-  if (path.startsWith("/invite/")) {
-    let id = "";
-    try {
-      id = decodeURIComponent(path.slice("/invite/".length));
-    } catch {
-      return true;
-    }
-    if (id) {
-      overlay.open({ type: "invite", invitationId: id });
-      return true;
-    }
-  }
-  // Any other navigation cancels a live overlay.
-  if (overlay.overlay) overlay.close();
-  return false;
+function isDisabledLocalTransition(path: string): boolean {
+  return (
+    path === "/login" ||
+    path === "/workspaces/new" ||
+    path === "/onboarding" ||
+    path === "/invitations" ||
+    path.startsWith("/invite/")
+  );
 }
 
 /**
- * Intercept pushes that change workspace. Returns `true` if the navigation
- * was delegated to the tab store (caller should NOT proceed).
- *
- * This is the entry point that makes shared code platform-agnostic:
- * sidebar dropdown, cmd+k "switch workspace", post-delete redirects,
- * invite-accept flow — they all call `useNavigation().push(path)` with a
- * full workspace URL, and on desktop we translate "target slug differs
- * from active" into "switch the tab-group that's visible in the TabBar".
+ * Reject paths targeting another workspace. Historical workspace data stays
+ * untouched in the server, but the local desktop exposes exactly one of them.
  */
 function tryRouteToOtherWorkspace(path: string): boolean {
   const targetSlug = extractWorkspaceSlug(path);
   if (!targetSlug) return false;
-  const { activeWorkspaceSlug, switchWorkspace } = useTabStore.getState();
+  const { activeWorkspaceSlug } = useTabStore.getState();
   if (targetSlug === activeWorkspaceSlug) return false;
-  switchWorkspace(targetSlug, path);
   return true;
 }
 
@@ -103,10 +67,7 @@ function tryRouteToOtherWorkspace(path: string): boolean {
  * every other internal link — and modifier clicks open a background or
  * foreground tab.
  *
- * A content link can also address another workspace — a pasted app URL, an
- * agent quoting a cross-workspace issue — and opening that inside the active
- * workspace's tab group would mount it under the wrong group, so the slug
- * check routes it through switchWorkspace exactly like an adapter push does.
+ * A content link targeting a historical workspace is ignored in local mode.
  */
 export function routeContentLinkPath(
   path: string,
@@ -115,7 +76,6 @@ export function routeContentLinkPath(
   const store = useTabStore.getState();
   const slug = extractWorkspaceSlug(path);
   if (slug && slug !== store.activeWorkspaceSlug) {
-    store.switchWorkspace(slug, path);
     return;
   }
   if (disposition === "push") {
@@ -186,11 +146,7 @@ export function DesktopNavigationProvider({
   const adapter: NavigationAdapter = useMemo(
     () => ({
       push: (path: string) => {
-        if (path === "/login") {
-          useAuthStore.getState().logout();
-          return;
-        }
-        if (tryRouteToOverlay(path)) return;
+        if (isDisabledLocalTransition(path)) return;
         const store = useTabStore.getState();
         const active = getActiveTab(store);
         if (active && active.url === path) return;
@@ -199,7 +155,7 @@ export function DesktopNavigationProvider({
         store.navigateActiveSession(path);
       },
       replace: (path: string) => {
-        if (tryRouteToOverlay(path)) return;
+        if (isDisabledLocalTransition(path)) return;
         if (tryRouteToOtherWorkspace(path)) return;
         useTabStore.getState().navigateActiveSession(path, { replace: true });
       },
@@ -223,20 +179,10 @@ export function DesktopNavigationProvider({
         title?: string,
         opts?: { activate?: boolean },
       ) => {
-        // Cross-workspace "open in new tab" switches workspace and opens
-        // the path there (focus follows the user), REGARDLESS of
-        // `opts.activate`. This is a deliberate product exception to the
-        // background-tab contract (decided with MUL-5860): a background tab
-        // added to a non-visible workspace's group would give the user zero
-        // feedback — "nothing happened" is worse than losing the background
-        // semantics for the rare cross-workspace link. Same-workspace
-        // defaults to background tab (browser cmd+click semantics); callers
-        // that represent an explicit "Open in new tab" CTA pass
-        // `activate: true` to bring the new tab to the foreground.
+        // Historical workspaces are not addressable from local mode.
         const slug = extractWorkspaceSlug(path);
         const store = useTabStore.getState();
         if (slug && slug !== store.activeWorkspaceSlug) {
-          store.switchWorkspace(slug, path);
           return;
         }
         store.openTab(path, title ?? "", { activate: opts?.activate });

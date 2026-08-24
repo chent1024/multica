@@ -73,11 +73,13 @@ function renderInitializer({
   api,
   storage = makeStorage({ multica_token: "token-1" }),
   cookieAuth = false,
+  localMode = false,
   platform = "desktop",
 }: {
   api: ApiClient;
   storage?: StorageAdapter;
   cookieAuth?: boolean;
+  localMode?: boolean;
   platform?: "desktop" | "web";
 }) {
   const onLogin = vi.fn();
@@ -89,11 +91,19 @@ function renderInitializer({
   registerAuthStore(
     createAuthStore({ api, storage, cookieAuth, onLogin, onLogout }),
   );
+  if (localMode) {
+    useAuthStore.setState({
+      user: fakeUser,
+      isLoading: false,
+      status: "local",
+    });
+  }
 
   const result = render(
     <QueryClientProvider client={queryClient}>
       <AuthInitializer
         cookieAuth={cookieAuth}
+        localMode={localMode}
         identity={{ platform }}
         onLogin={onLogin}
         onLogout={onLogout}
@@ -116,6 +126,18 @@ afterEach(() => {
 });
 
 describe("AuthInitializer recovery", () => {
+  it("does not start an authentication lifecycle in local mode", async () => {
+    const storage = makeStorage({});
+    const api = makeApi();
+    const { onLogout } = renderInitializer({ api, storage, localMode: true });
+
+    expect(useAuthStore.getState().status).toBe("local");
+    expect(api.getMe).not.toHaveBeenCalled();
+    expect(api.setToken).not.toHaveBeenCalled();
+    expect(storage.snapshot()).toEqual({});
+    expect(onLogout).not.toHaveBeenCalled();
+  });
+
   it("keeps the token and recovers on the online event after a network failure", async () => {
     const storage = makeStorage({ multica_token: "token-1" });
     const getMe = vi

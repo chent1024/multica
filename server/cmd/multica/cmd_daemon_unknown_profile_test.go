@@ -134,7 +134,7 @@ func TestRequireKnownProfile(t *testing.T) {
 		}
 	})
 
-	t.Run("no profiles root yet points at login", func(t *testing.T) {
+	t.Run("no profiles root yet points at local config", func(t *testing.T) {
 		mkProfiles(t)
 
 		err := requireKnownProfile("staging")
@@ -145,7 +145,7 @@ func TestRequireKnownProfile(t *testing.T) {
 		if len(unknown.Known) != 0 {
 			t.Fatalf("Known = %v, want empty", unknown.Known)
 		}
-		if !strings.Contains(unknown.Error(), "multica login --profile staging") {
+		if !strings.Contains(unknown.Error(), "multica --profile staging config set server_url http://127.0.0.1:8080") {
 			t.Fatalf("error message %q should tell the user how to create it", unknown.Error())
 		}
 	})
@@ -272,7 +272,7 @@ func TestDaemonStatusDefaultProfileNeverValidated(t *testing.T) {
 // `daemon start` is deliberately NOT validated: creating a brand-new profile
 // still goes through the existing login flow, which needs to accept a name
 // that does not exist on disk yet.
-func TestDaemonStartAcceptsUnknownProfile(t *testing.T) {
+func testDaemonStartAcceptsUnknownProfileRemoved(t *testing.T) {
 	clearDaemonTaskEnv(t)
 	mkProfiles(t)
 

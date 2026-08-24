@@ -1104,10 +1104,10 @@ func TestInjectRuntimeConfigAvailableCommandsCoreOnly(t *testing.T) {
 		}
 	}
 
-	// Squad maintenance is squad-leader surface and is gated on that (MUL-5442):
-	// an agent leading no squad has no squad whose roles it could change.
+	// Local mode never exposes team-management commands, even if a legacy task
+	// payload still carries the historical squad-leader bit.
 	if strings.Contains(s, "### Squad maintenance") {
-		t.Errorf("non-leader brief must not carry the squad maintenance block\n---\n%s", s)
+		t.Errorf("local brief must not carry the squad maintenance block\n---\n%s", s)
 	}
 	leaderDir := t.TempDir()
 	if _, err := InjectRuntimeConfig(leaderDir, "codex", TaskContextForEnv{IssueID: "issue-1", IsSquadLeader: true}); err != nil {
@@ -1117,13 +1117,8 @@ func TestInjectRuntimeConfigAvailableCommandsCoreOnly(t *testing.T) {
 	if err != nil {
 		t.Fatalf("failed to read leader AGENTS.md: %v", err)
 	}
-	for _, want := range []string{
-		"### Squad maintenance",
-		"multica squad member set-role <squad-id>",
-	} {
-		if !strings.Contains(string(leader), want) {
-			t.Errorf("squad-leader AGENTS.md missing %q\n---\n%s", want, leader)
-		}
+	if strings.Contains(string(leader), "multica squad member") {
+		t.Errorf("legacy squad-leader payload re-enabled team commands\n---\n%s", leader)
 	}
 
 	for _, banned := range []string{

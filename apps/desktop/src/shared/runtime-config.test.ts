@@ -3,17 +3,18 @@ import { describe, expect, it } from "vitest";
 import {
   DEFAULT_RUNTIME_CONFIG,
   deriveWsUrl,
+  isLoopbackApiUrl,
   parseRuntimeConfig,
   runtimeConfigFromDevEnv,
 } from "./runtime-config";
 
 describe("runtime config", () => {
-  it("uses cloud defaults without a desktop.json file", () => {
+  it("uses local defaults without a desktop.json file", () => {
     expect(DEFAULT_RUNTIME_CONFIG).toEqual({
       schemaVersion: 1,
-      apiUrl: "https://api.multica.ai",
-      wsUrl: "wss://api.multica.ai/ws",
-      appUrl: "https://multica.ai",
+      apiUrl: "http://127.0.0.1:17824",
+      wsUrl: "ws://127.0.0.1:17824/ws",
+      appUrl: "http://localhost:3000",
     });
   });
 
@@ -48,6 +49,13 @@ describe("runtime config", () => {
 
   it("derives ws for http api URLs", () => {
     expect(deriveWsUrl("http://localhost:8080")).toBe("ws://localhost:8080/ws");
+  });
+
+  it("recognizes loopback APIs without treating remote hosts as local", () => {
+    expect(isLoopbackApiUrl("http://localhost:8080")).toBe(true);
+    expect(isLoopbackApiUrl("http://127.0.0.1:8080")).toBe(true);
+    expect(isLoopbackApiUrl("http://[::1]:8080")).toBe(true);
+    expect(isLoopbackApiUrl("https://api.multica.ai")).toBe(false);
   });
 
   it("accepts explicit appUrl and wsUrl", () => {

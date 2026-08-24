@@ -3,6 +3,7 @@ import { readFile } from "fs/promises";
 import { join } from "path";
 import {
   DEFAULT_RUNTIME_CONFIG,
+  isLoopbackApiUrl,
   parseRuntimeConfig,
   runtimeConfigFromDevEnv,
   type RuntimeConfig,
@@ -26,7 +27,11 @@ export async function loadRuntimeConfig(options: {
   const configPath = options.configPath ?? desktopConfigPath();
   try {
     const raw = await readFile(configPath, "utf-8");
-    return { ok: true, config: parseRuntimeConfig(raw) };
+    const config = parseRuntimeConfig(raw);
+    if (!isLoopbackApiUrl(config.apiUrl)) {
+      throw new Error("Desktop runtime config apiUrl must use loopback");
+    }
+    return { ok: true, config };
   } catch (err) {
     if (isMissingFileError(err)) {
       return { ok: true, config: { ...DEFAULT_RUNTIME_CONFIG } };

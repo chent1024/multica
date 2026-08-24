@@ -36,6 +36,7 @@ export function AuthInitializer({
   onLogout,
   storage = defaultStorage,
   cookieAuth,
+  localMode,
   identity,
 }: {
   children: ReactNode;
@@ -43,6 +44,7 @@ export function AuthInitializer({
   onLogout?: () => void;
   storage?: StorageAdapter;
   cookieAuth?: boolean;
+  localMode?: boolean;
   identity?: ClientIdentity;
 }) {
   const qc = useQueryClient();
@@ -86,7 +88,7 @@ export function AuthInitializer({
         configStore
           .getState()
           .setLocalWorktreeSupported(cfg.local_worktree_supported === true);
-        if (cfg.posthog_key) {
+        if (!localMode && cfg.posthog_key) {
           initAnalytics({
             key: cfg.posthog_key,
             host: cfg.posthog_host || "",
@@ -103,12 +105,12 @@ export function AuthInitializer({
       });
     configRequestRef.current = request;
     return request;
-  }, [identity?.version]);
+  }, [identity?.version, localMode]);
 
   useEffect(() => {
     // Stamp attribution before anything else — the signup event (server-side)
     // reads this cookie, so it has to be present before the user hits submit.
-    captureSignupSource();
+    if (!localMode) captureSignupSource();
 
     // Configuration is optional for startup, but an offline boot must still
     // self-heal once connectivity returns. Keep retries rate-limited at the
@@ -179,9 +181,10 @@ export function AuthInitializer({
       window.removeEventListener("online", retryNow);
       if (retryTimer !== undefined) clearTimeout(retryTimer);
     };
-  }, [loadConfig]);
+  }, [loadConfig, localMode]);
 
   useEffect(() => {
+    if (localMode) return;
     const api = getApi();
     let cancelled = false;
     let settled = false;
@@ -198,7 +201,9 @@ export function AuthInitializer({
         isLoading: false,
         status: "authenticated",
       });
-      identifyAnalytics(user.id, { email: user.email, name: user.name });
+      if (!localMode) {
+        identifyAnalytics(user.id, { email: user.email, name: user.name });
+      }
       if (authRecoveryPendingRef.current) {
         authRecoveryPendingRef.current = false;
         // A network-not-ready boot can fail both auth and config requests;
@@ -208,7 +213,7 @@ export function AuthInitializer({
     };
 
     const onAuthFailure = () => {
-      onLogout?.();
+      if (!localMode) onLogout?.();
       resetAnalytics();
       useAuthStore.setState({
         user: null,
@@ -221,7 +226,15 @@ export function AuthInitializer({
       settled = true;
       window.removeEventListener("online", retryNow);
       if (retryTimer !== undefined) clearTimeout(retryTimer);
-      if (!cookieAuth) {
+      if (localMode) {
+        useAuthStore.setState({
+          user: null,
+          isLoading: false,
+          status: "recovering",
+        });
+        return;
+      }
+      if (!cookieAuth && !localMode) {
         setCurrentWorkspace(null, null);
       }
       onAuthFailure();
@@ -313,7 +326,7 @@ export function AuthInitializer({
       void attempt();
     };
 
-    if (!cookieAuth) {
+    if (!cookieAuth && !localMode) {
       const token = storage.getItem("multica_token");
       if (!token) {
         settled = true;
@@ -339,7 +352,7 @@ export function AuthInitializer({
       if (retryTimer !== undefined) clearTimeout(retryTimer);
     };
   // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [retryGeneration]);
+  }, [retryGeneration, localMode]);
 
   return <>{children}</>;
 }

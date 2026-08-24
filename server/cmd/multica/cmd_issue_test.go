@@ -13,7 +13,6 @@ import (
 	"strconv"
 	"strings"
 	"testing"
-	"time"
 
 	"github.com/spf13/cobra"
 
@@ -565,74 +564,6 @@ func TestRunIssueCreateShowsDuplicateMessage(t *testing.T) {
 	}
 }
 
-func newIssuePullRequestsTestCmd() *cobra.Command {
-	cmd := &cobra.Command{Use: "pull-requests"}
-	cmd.Flags().String("output", "table", "")
-	return cmd
-}
-
-func TestRunIssuePullRequestsListsLinkedPRsAsJSON(t *testing.T) {
-	var gotPaths []string
-	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		gotPaths = append(gotPaths, r.URL.Path)
-		switch r.URL.Path {
-		case "/api/issues/MUL-2818":
-			json.NewEncoder(w).Encode(map[string]any{
-				"id":         "issue-uuid",
-				"identifier": "MUL-2818",
-				"title":      "CLI PR lookup",
-			})
-		case "/api/issues/issue-uuid/pull-requests":
-			json.NewEncoder(w).Encode(map[string]any{
-				"pull_requests": []map[string]any{
-					{
-						"url":    "https://github.com/multica-ai/multica/pull/42",
-						"number": float64(42),
-						"state":  "open",
-						"title":  "MUL-2818 add issue PR CLI",
-					},
-				},
-			})
-		default:
-			http.NotFound(w, r)
-		}
-	}))
-	defer srv.Close()
-
-	t.Setenv("MULTICA_SERVER_URL", srv.URL)
-	t.Setenv("MULTICA_WORKSPACE_ID", "ws-1")
-	t.Setenv("MULTICA_TOKEN", "test-token")
-
-	cmd := newIssuePullRequestsTestCmd()
-	_ = cmd.Flags().Set("output", "json")
-	old := os.Stdout
-	r, w, _ := os.Pipe()
-	os.Stdout = w
-	err := runIssuePullRequests(cmd, []string{"MUL-2818"})
-	_ = w.Close()
-	os.Stdout = old
-	out, _ := io.ReadAll(r)
-	if err != nil {
-		t.Fatalf("runIssuePullRequests: %v", err)
-	}
-
-	if want := []string{"/api/issues/MUL-2818", "/api/issues/issue-uuid/pull-requests"}; fmt.Sprint(gotPaths) != fmt.Sprint(want) {
-		t.Fatalf("paths = %v, want %v", gotPaths, want)
-	}
-	var payload map[string]any
-	if err := json.Unmarshal(out, &payload); err != nil {
-		t.Fatalf("decode JSON output: %v\n%s", err, string(out))
-	}
-	prs, _ := payload["pull_requests"].([]any)
-	if len(prs) != 1 {
-		t.Fatalf("pull_requests length = %d, want 1", len(prs))
-	}
-	pr, _ := prs[0].(map[string]any)
-	if pr["url"] != "https://github.com/multica-ai/multica/pull/42" || pr["number"] != float64(42) || pr["state"] != "open" || pr["title"] != "MUL-2818 add issue PR CLI" {
-		t.Fatalf("unexpected PR payload: %#v", pr)
-	}
-}
-
 func newIssueUsageTestCmd() *cobra.Command {
 	cmd := &cobra.Command{Use: "usage"}
 	cmd.Flags().String("output", "table", "")
@@ -695,29 +626,6 @@ func TestRunIssueUsageReturnsTokenSummaryAsJSON(t *testing.T) {
 	}
 }
 
-func TestRunIssuePullRequestsTableIncludesCoreFields(t *testing.T) {
-	prs := []map[string]any{{
-		"url":    "https://github.com/multica-ai/multica/pull/42",
-		"number": float64(42),
-		"state":  "open",
-		"title":  "MUL-2818 add issue PR CLI",
-	}}
-
-	old := os.Stdout
-	r, w, _ := os.Pipe()
-	os.Stdout = w
-	printIssuePullRequestsTable(prs)
-	_ = w.Close()
-	os.Stdout = old
-	out, _ := io.ReadAll(r)
-	text := string(out)
-	for _, want := range []string{"NUMBER", "STATE", "TITLE", "URL", "42", "open", "MUL-2818 add issue PR CLI", "https://github.com/multica-ai/multica/pull/42"} {
-		if !strings.Contains(text, want) {
-			t.Fatalf("table output missing %q:\n%s", want, text)
-		}
-	}
-}
-
 func TestTruncateID(t *testing.T) {
 	tests := []struct {
 		name string
@@ -743,12 +651,8 @@ func TestTruncateID(t *testing.T) {
 func TestFormatAssignee(t *testing.T) {
 	actors := actorDisplayLookup{
 		state: &actorDisplayLookupState{
-			members:       map[string]string{"abcdefgh-1234": "Alice"},
-			agents:        map[string]string{"xyz": "CodeBot"},
-			squads:        map[string]string{"sq-1": "Super Human"},
-			membersLoaded: true,
-			agentsLoaded:  true,
-			squadsLoaded:  true,
+			agents:       map[string]string{"xyz": "CodeBot"},
+			agentsLoaded: true,
 		},
 	}
 	tests := []struct {
@@ -758,10 +662,9 @@ func TestFormatAssignee(t *testing.T) {
 	}{
 		{"empty", map[string]any{}, ""},
 		{"no type", map[string]any{"assignee_id": "abc"}, ""},
-		{"no id", map[string]any{"assignee_type": "member"}, ""},
-		{"member", map[string]any{"assignee_type": "member", "assignee_id": "abcdefgh-1234"}, "member:Alice"},
+		{"no id", map[string]any{"assignee_type": "agent"}, ""},
 		{"agent", map[string]any{"assignee_type": "agent", "assignee_id": "xyz"}, "agent:CodeBot"},
-		{"squad", map[string]any{"assignee_type": "squad", "assignee_id": "sq-1"}, "squad:Super Human"},
+		{"system", map[string]any{"assignee_type": "system", "assignee_id": "local"}, "local"},
 		{"unknown fallback", map[string]any{"assignee_type": "agent", "assignee_id": "missing"}, "agent:missing"},
 	}
 	for _, tt := range tests {
@@ -774,17 +677,15 @@ func TestFormatAssignee(t *testing.T) {
 	}
 }
 
-func TestActorDisplayLookupLazyLoads(t *testing.T) {
-	var memberCalls, agentCalls int
+func TestActorDisplayLookupOnlyLoadsLocalAgents(t *testing.T) {
+	var unexpectedCalls, agentCalls int
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		switch r.URL.Path {
-		case "/api/workspaces/ws-1/members":
-			memberCalls++
-			json.NewEncoder(w).Encode([]map[string]any{{"user_id": "user-1", "name": "Alice"}})
 		case "/api/agents":
 			agentCalls++
 			json.NewEncoder(w).Encode([]map[string]any{{"id": "agent-1", "name": "CodeBot"}})
 		default:
+			unexpectedCalls++
 			http.NotFound(w, r)
 		}
 	}))
@@ -796,20 +697,20 @@ func TestActorDisplayLookupLazyLoads(t *testing.T) {
 	if got := lookup.agent("agent-1"); got != "CodeBot" {
 		t.Fatalf("agent() = %q, want CodeBot", got)
 	}
-	if memberCalls != 0 || agentCalls != 1 {
-		t.Fatalf("after agent lookup: memberCalls=%d agentCalls=%d, want 0/1", memberCalls, agentCalls)
+	if unexpectedCalls != 0 || agentCalls != 1 {
+		t.Fatalf("after agent lookup: unexpectedCalls=%d agentCalls=%d, want 0/1", unexpectedCalls, agentCalls)
 	}
-	if got := lookup.actor("member", "user-1"); got != "member:Alice" {
-		t.Fatalf("actor(member) = %q, want member:Alice", got)
+	if got := lookup.actor("system", "local"); got != "local" {
+		t.Fatalf("actor(system) = %q, want local", got)
 	}
-	if memberCalls != 1 || agentCalls != 1 {
-		t.Fatalf("after member lookup: memberCalls=%d agentCalls=%d, want 1/1", memberCalls, agentCalls)
+	if unexpectedCalls != 0 || agentCalls != 1 {
+		t.Fatalf("system lookup must not call another endpoint: unexpectedCalls=%d agentCalls=%d", unexpectedCalls, agentCalls)
 	}
 	if got := lookup.actor("member", "missing"); got != "member:missing" {
-		t.Fatalf("actor(missing member) = %q", got)
+		t.Fatalf("legacy actor fallback = %q", got)
 	}
-	if memberCalls != 1 || agentCalls != 1 {
-		t.Fatalf("lookup should cache per type: memberCalls=%d agentCalls=%d", memberCalls, agentCalls)
+	if unexpectedCalls != 0 || agentCalls != 1 {
+		t.Fatalf("legacy actor fallback must not call cloud endpoints: unexpectedCalls=%d agentCalls=%d", unexpectedCalls, agentCalls)
 	}
 }
 
@@ -1164,1020 +1065,104 @@ func TestRunIssueRunMessagesResolvesShortTaskPrefix(t *testing.T) {
 	}
 }
 
-func TestResolveAssignee(t *testing.T) {
-	membersResp := []map[string]any{
-		{"user_id": "user-1111", "name": "Alice Smith", "email": "alice@example.com"},
-		{"user_id": "user-2222", "name": "Bob Jones", "email": "bob@example.com"},
+func TestResolveAssigneeLocalAgentsOnly(t *testing.T) {
+	agents := []map[string]any{
+		{"id": "5fb87ac7-23b5-4a7a-81fa-ed295a54545d", "name": "CodeBot"},
+		{"id": "aaaaaaaa-1111-1111-1111-111111111111", "name": "Peer CodeBot"},
 	}
-	agentsResp := []map[string]any{
-		{"id": "agent-3333", "name": "CodeBot"},
-		// Deliberate collision: this agent's NAME contains Alice's email, so
-		// the substring path would match it. Email must still win outright.
-		{"id": "agent-5555", "name": "Mailer for alice@example.com"},
-	}
-	squadsResp := []map[string]any{
-		{"id": "squad-4444", "name": "Super Human"},
-	}
-
+	var requestedPaths []string
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		switch r.URL.Path {
-		case "/api/workspaces/ws-1/members":
-			json.NewEncoder(w).Encode(membersResp)
-		case "/api/agents":
-			json.NewEncoder(w).Encode(agentsResp)
-		case "/api/squads":
-			json.NewEncoder(w).Encode(squadsResp)
-		default:
+		requestedPaths = append(requestedPaths, r.URL.Path)
+		if r.URL.Path != "/api/agents" {
 			http.NotFound(w, r)
+			return
 		}
+		json.NewEncoder(w).Encode(agents)
 	}))
 	defer srv.Close()
+	client := cli.NewAPIClient(srv.URL, "ws-1", "")
 
-	client := cli.NewAPIClient(srv.URL, "ws-1", "test-token")
-	ctx := context.Background()
-
-	t.Run("exact match member", func(t *testing.T) {
-		aType, aID, err := resolveAssignee(ctx, client, "Alice Smith", issueAssigneeKinds)
-		if err != nil {
-			t.Fatalf("unexpected error: %v", err)
-		}
-		if aType != "member" || aID != "user-1111" {
-			t.Errorf("got (%q, %q), want (member, user-1111)", aType, aID)
-		}
-	})
-
-	t.Run("case-insensitive substring", func(t *testing.T) {
-		aType, aID, err := resolveAssignee(ctx, client, "bob", issueAssigneeKinds)
-		if err != nil {
-			t.Fatalf("unexpected error: %v", err)
-		}
-		if aType != "member" || aID != "user-2222" {
-			t.Errorf("got (%q, %q), want (member, user-2222)", aType, aID)
-		}
-	})
-
-	// MUL-6286: the CLI documents member email as a way to address an actor
-	// property value ("--value alice@example.com"), so email has to resolve.
-	t.Run("match member by email", func(t *testing.T) {
-		aType, aID, err := resolveAssignee(ctx, client, "alice@example.com", memberOnlyKinds)
-		if err != nil {
-			t.Fatalf("unexpected error: %v", err)
-		}
-		if aType != "member" || aID != "user-1111" {
-			t.Errorf("got (%q, %q), want (member, user-1111)", aType, aID)
-		}
-	})
-
-	t.Run("match member by email case-insensitively", func(t *testing.T) {
-		aType, aID, err := resolveAssignee(ctx, client, "BOB@EXAMPLE.COM", issueAssigneeKinds)
-		if err != nil {
-			t.Fatalf("unexpected error: %v", err)
-		}
-		if aType != "member" || aID != "user-2222" {
-			t.Errorf("got (%q, %q), want (member, user-2222)", aType, aID)
-		}
-	})
-
-	// An email beats a substring collision on someone else's name, because it
-	// is ranked with id matches rather than with name matches. agentsResp
-	// carries an agent whose name embeds this exact email, so without the
-	// ranking this resolves to that agent (or errors as ambiguous).
-	t.Run("email outranks a name substring match", func(t *testing.T) {
-		aType, aID, err := resolveAssignee(ctx, client, "alice@example.com", issueAssigneeKinds)
-		if err != nil {
-			t.Fatalf("unexpected error: %v", err)
-		}
-		if aType != "member" || aID != "user-1111" {
-			t.Errorf("got (%q, %q), want (member, user-1111)", aType, aID)
-		}
-	})
-
-	t.Run("resolveActorPropertyRef renders a prefixed reference", func(t *testing.T) {
-		ref, err := resolveActorPropertyRef(ctx, client, "alice@example.com")
-		if err != nil {
-			t.Fatalf("unexpected error: %v", err)
-		}
-		if ref != "member:user-1111" {
-			t.Errorf("got %q, want member:user-1111", ref)
-		}
-	})
-
-	t.Run("resolveActorPropertyRef rejects a non-member kind", func(t *testing.T) {
-		if _, err := resolveActorPropertyRef(ctx, client, "codebot"); err == nil {
-			t.Error("expected an agent name to be unresolvable for an actor property")
-		}
-	})
-
-	t.Run("match agent", func(t *testing.T) {
-		aType, aID, err := resolveAssignee(ctx, client, "codebot", issueAssigneeKinds)
-		if err != nil {
-			t.Fatalf("unexpected error: %v", err)
-		}
-		if aType != "agent" || aID != "agent-3333" {
-			t.Errorf("got (%q, %q), want (agent, agent-3333)", aType, aID)
-		}
-	})
-
-	// MUL-2165: squad names must resolve to (squad, <id>) so the autopilot
-	// quick-create prompt can route work to a squad (e.g. "Super Human")
-	// instead of falling through to "Unrecognized assignee".
-	t.Run("match squad by exact name", func(t *testing.T) {
-		aType, aID, err := resolveAssignee(ctx, client, "Super Human", issueAssigneeKinds)
-		if err != nil {
-			t.Fatalf("unexpected error: %v", err)
-		}
-		if aType != "squad" || aID != "squad-4444" {
-			t.Errorf("got (%q, %q), want (squad, squad-4444)", aType, aID)
-		}
-	})
-
-	t.Run("match squad by case-insensitive substring", func(t *testing.T) {
-		aType, aID, err := resolveAssignee(ctx, client, "super", issueAssigneeKinds)
-		if err != nil {
-			t.Fatalf("unexpected error: %v", err)
-		}
-		if aType != "squad" || aID != "squad-4444" {
-			t.Errorf("got (%q, %q), want (squad, squad-4444)", aType, aID)
-		}
-	})
-
-	t.Run("match squad by bare @ display name", func(t *testing.T) {
-		aType, aID, err := resolveAssignee(ctx, client, "@Super Human", issueAssigneeKinds)
-		if err != nil {
-			t.Fatalf("unexpected error: %v", err)
-		}
-		if aType != "squad" || aID != "squad-4444" {
-			t.Errorf("got (%q, %q), want (squad, squad-4444)", aType, aID)
-		}
-	})
-
-	t.Run("no match", func(t *testing.T) {
-		_, _, err := resolveAssignee(ctx, client, "nobody", issueAssigneeKinds)
-		if err == nil {
-			t.Fatal("expected error for no match")
-		}
-	})
-
-	t.Run("ambiguous", func(t *testing.T) {
-		// Both "Alice Smith" and "Bob Jones" contain a space — but let's use a broader query
-		// "e" matches "Alice Smith" and "Bob Jones" and "CodeBot"
-		_, _, err := resolveAssignee(ctx, client, "o", issueAssigneeKinds)
-		if err == nil {
-			t.Fatal("expected error for ambiguous match")
-		}
-		if got := err.Error(); !strings.Contains(got, "ambiguous") {
-			t.Errorf("expected ambiguous error, got: %s", got)
-		}
-	})
-
-	t.Run("missing workspace ID", func(t *testing.T) {
-		noWSClient := cli.NewAPIClient(srv.URL, "", "test-token")
-		_, _, err := resolveAssignee(ctx, noWSClient, "alice", issueAssigneeKinds)
-		if err == nil {
-			t.Fatal("expected error for missing workspace ID")
-		}
-	})
-}
-
-func TestResolveAssigneeRetriesTransientNetworkErrors(t *testing.T) {
-	origSleep := assigneeResolveRetrySleep
-	assigneeResolveRetrySleep = func(context.Context, time.Duration) bool { return false }
-	t.Cleanup(func() { assigneeResolveRetrySleep = origSleep })
-
-	var memberHits int
-	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		switch r.URL.Path {
-		case "/api/workspaces/ws-1/members":
-			memberHits++
-			if memberHits == 1 {
-				hj, ok := w.(http.Hijacker)
-				if !ok {
-					t.Fatal("response writer does not support hijacking")
-				}
-				conn, _, err := hj.Hijack()
-				if err != nil {
-					t.Fatalf("hijack: %v", err)
-				}
-				_ = conn.Close()
-				return
-			}
-			json.NewEncoder(w).Encode([]map[string]any{
-				{"user_id": "user-1111", "name": "Alice Smith"},
-			})
-		case "/api/agents":
-			json.NewEncoder(w).Encode([]map[string]any{})
-		case "/api/squads":
-			json.NewEncoder(w).Encode([]map[string]any{})
-		default:
-			http.NotFound(w, r)
-		}
-	}))
-	defer srv.Close()
-
-	client := cli.NewAPIClient(srv.URL, "ws-1", "test-token")
-	aType, aID, err := resolveAssignee(context.Background(), client, "Alice", issueAssigneeKinds)
-	if err != nil {
-		t.Fatalf("resolveAssignee should retry transient EOF: %v", err)
+	aType, aID, err := resolveAssignee(context.Background(), client, "CodeBot")
+	if err != nil || aType != "agent" || aID != "5fb87ac7-23b5-4a7a-81fa-ed295a54545d" {
+		t.Fatalf("resolve exact agent = (%q, %q, %v)", aType, aID, err)
 	}
-	if aType != "member" || aID != "user-1111" {
-		t.Fatalf("got (%q, %q), want Alice member", aType, aID)
+	aType, aID, err = resolveAssignee(context.Background(), client, "5fb87ac7")
+	if err != nil || aType != "agent" || aID != "5fb87ac7-23b5-4a7a-81fa-ed295a54545d" {
+		t.Fatalf("resolve short agent ID = (%q, %q, %v)", aType, aID, err)
 	}
-	if memberHits != 2 {
-		t.Fatalf("member endpoint hits = %d, want 2", memberHits)
+	if _, _, err := resolveAssignee(context.Background(), client, "code"); err == nil || !strings.Contains(err.Error(), "ambiguous") {
+		t.Fatalf("expected ambiguous agent error, got %v", err)
+	}
+	for _, path := range requestedPaths {
+		if path != "/api/agents" {
+			t.Fatalf("resolver requested non-local actor endpoint %q", path)
+		}
 	}
 }
 
-func TestResolveAssigneeDoesNotRetryHTTPStatusErrors(t *testing.T) {
-	var memberHits int
+func TestResolveAssigneeByIDLocalAgentOnly(t *testing.T) {
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		switch r.URL.Path {
-		case "/api/workspaces/ws-1/members":
-			memberHits++
-			http.Error(w, "bad workspace", http.StatusBadRequest)
-		case "/api/agents":
-			json.NewEncoder(w).Encode([]map[string]any{})
-		case "/api/squads":
-			json.NewEncoder(w).Encode([]map[string]any{})
-		default:
+		if r.URL.Path != "/api/agents" {
 			http.NotFound(w, r)
+			return
 		}
+		json.NewEncoder(w).Encode([]map[string]any{{"id": "5fb87ac7-23b5-4a7a-81fa-ed295a54545d", "name": "CodeBot"}})
 	}))
 	defer srv.Close()
+	client := cli.NewAPIClient(srv.URL, "ws-1", "")
 
-	client := cli.NewAPIClient(srv.URL, "ws-1", "test-token")
-	_, _, err := resolveAssignee(context.Background(), client, "Alice", issueAssigneeKinds)
-	if err == nil {
-		t.Fatal("expected not-found error after non-retryable members fetch")
+	aType, aID, err := resolveAssigneeByID(context.Background(), client, "5FB87AC7-23B5-4A7A-81FA-ED295A54545D")
+	if err != nil || aType != "agent" || aID != "5fb87ac7-23b5-4a7a-81fa-ed295a54545d" {
+		t.Fatalf("resolve agent UUID = (%q, %q, %v)", aType, aID, err)
 	}
-	if memberHits != 1 {
-		t.Fatalf("member endpoint hits = %d, want 1", memberHits)
+	if _, _, err := resolveAssigneeByID(context.Background(), client, "not-a-uuid"); err == nil || !strings.Contains(err.Error(), "canonical UUID") {
+		t.Fatalf("expected strict UUID error, got %v", err)
+	}
+	if _, _, err := resolveAssigneeByID(context.Background(), client, "deadbeef-1111-1111-1111-111111111111"); err == nil || !strings.Contains(err.Error(), "no agent") {
+		t.Fatalf("expected local-agent not-found error, got %v", err)
 	}
 }
 
-func TestNormalizeAssigneeLookupInput(t *testing.T) {
-	tests := []struct {
-		name string
-		in   string
-		want string
-	}{
-		{"plain name", "Super Human", "Super Human"},
-		{"bare at name", "@Super Human", "Super Human"},
-		{"fullwidth at name", "＠独立团", "独立团"},
-		{"spaced at name", "  @  Super Human  ", "Super Human"},
-		{
-			name: "mention link",
-			in:   "[@Super Human](mention://squad/ccccccc1-2222-3333-4444-555555555555)",
-			want: "ccccccc1-2222-3333-4444-555555555555",
-		},
+func TestNormalizeAssigneeLookupInputLocalAgent(t *testing.T) {
+	tests := map[string]string{
+		"CodeBot":  "CodeBot",
+		"@CodeBot": "CodeBot",
+		"＠CodeBot": "CodeBot",
+		"[@CodeBot](mention://agent/5fb87ac7-23b5-4a7a-81fa-ed295a54545d)": "5fb87ac7-23b5-4a7a-81fa-ed295a54545d",
 	}
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			if got := normalizeAssigneeLookupInput(tt.in); got != tt.want {
-				t.Errorf("normalizeAssigneeLookupInput(%q) = %q, want %q", tt.in, got, tt.want)
-			}
-		})
+	for input, want := range tests {
+		if got := normalizeAssigneeLookupInput(input); got != want {
+			t.Errorf("normalizeAssigneeLookupInput(%q) = %q, want %q", input, got, want)
+		}
 	}
 }
 
-// TestResolveAssigneeRespectsKinds covers the MUL-2165 follow-up: callers
-// whose target schema is member-or-agent-only (project.lead_type DB CHECK
-// at server/migrations/034_projects.up.sql:10, and the subscriber handler's
-// isWorkspaceEntity switch at server/internal/handler/handler.go:414) must
-// be able to opt out of squad resolution. Without this, "--lead <SquadName>"
-// would return (squad, ...) and the request would 500/403 server-side
-// instead of failing with a clean CLI-side resolution error.
-func TestResolveAssigneeRespectsKinds(t *testing.T) {
-	membersResp := []map[string]any{
-		{"user_id": "user-1111", "name": "Alice"},
-	}
-	agentsResp := []map[string]any{
-		{"id": "agent-3333", "name": "CodeBot"},
-	}
-	squadsResp := []map[string]any{
-		{"id": "ccccccc1-2222-3333-4444-555555555555", "name": "Super Human"},
-	}
-
-	var squadsHits int
+func TestPickAssigneeFromFlagsLocalAgent(t *testing.T) {
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		switch r.URL.Path {
-		case "/api/workspaces/ws-1/members":
-			json.NewEncoder(w).Encode(membersResp)
-		case "/api/agents":
-			json.NewEncoder(w).Encode(agentsResp)
-		case "/api/squads":
-			squadsHits++
-			json.NewEncoder(w).Encode(squadsResp)
-		default:
-			http.NotFound(w, r)
-		}
+		json.NewEncoder(w).Encode([]map[string]any{{"id": "5fb87ac7-23b5-4a7a-81fa-ed295a54545d", "name": "CodeBot"}})
 	}))
 	defer srv.Close()
-
-	client := cli.NewAPIClient(srv.URL, "ws-1", "test-token")
-	ctx := context.Background()
-
-	t.Run("memberOrAgentKinds skips the /api/squads fetch entirely", func(t *testing.T) {
-		before := squadsHits
-		_, _, _ = resolveAssignee(ctx, client, "Alice", memberOrAgentKinds)
-		if squadsHits != before {
-			t.Errorf("expected memberOrAgentKinds to skip /api/squads, but it was called %d time(s)", squadsHits-before)
-		}
-	})
-
-	t.Run("memberOrAgentKinds rejects a squad name with a member-or-agent-only error", func(t *testing.T) {
-		_, _, err := resolveAssignee(ctx, client, "Super Human", memberOrAgentKinds)
-		if err == nil {
-			t.Fatal("expected resolution error for squad name under memberOrAgentKinds")
-		}
-		if !strings.Contains(err.Error(), "no member or agent") {
-			t.Errorf("expected member-or-agent error wording, got: %v", err)
-		}
-		if strings.Contains(err.Error(), "squad") {
-			t.Errorf("error must not mention squad when squads are not allowed, got: %v", err)
-		}
-	})
-
-	t.Run("memberOrAgentKinds rejects a squad UUID via the strict resolver", func(t *testing.T) {
-		_, _, err := resolveAssigneeByID(ctx, client, "ccccccc1-2222-3333-4444-555555555555", memberOrAgentKinds)
-		if err == nil {
-			t.Fatal("expected not-found error for squad UUID under memberOrAgentKinds")
-		}
-		if !strings.Contains(err.Error(), "no member or agent") {
-			t.Errorf("expected member-or-agent error wording, got: %v", err)
-		}
-	})
-
-	t.Run("issueAssigneeKinds still resolves the same squad name (control)", func(t *testing.T) {
-		aType, aID, err := resolveAssignee(ctx, client, "Super Human", issueAssigneeKinds)
-		if err != nil {
-			t.Fatalf("unexpected error: %v", err)
-		}
-		if aType != "squad" || aID != "ccccccc1-2222-3333-4444-555555555555" {
-			t.Errorf("got (%q, %q), want (squad, ccccccc1-...)", aType, aID)
-		}
-	})
-}
-
-// TestResolveAssigneeExactMatchWins covers the substring-collision scenario from
-// multica-ai/multica#1620: when one name is a substring of another (e.g.
-// "reviewer" vs "peer-reviewer"), an exact match on the shorter name must
-// short-circuit substring matching instead of erroring out as ambiguous.
-func TestResolveAssigneeExactMatchWins(t *testing.T) {
-	agentsResp := []map[string]any{
-		{"id": "f656eab8-1111-1111-1111-111111111111", "name": "reviewer"},
-		{"id": "9b0ff9a2-2222-2222-2222-222222222222", "name": "peer-reviewer"},
-	}
-	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		switch r.URL.Path {
-		case "/api/workspaces/ws-1/members":
-			json.NewEncoder(w).Encode([]map[string]any{})
-		case "/api/agents":
-			json.NewEncoder(w).Encode(agentsResp)
-		case "/api/squads":
-			json.NewEncoder(w).Encode([]map[string]any{})
-		default:
-			http.NotFound(w, r)
-		}
-	}))
-	defer srv.Close()
-
-	client := cli.NewAPIClient(srv.URL, "ws-1", "test-token")
-	ctx := context.Background()
-
-	t.Run("exact shorter name resolves to shorter agent", func(t *testing.T) {
-		aType, aID, err := resolveAssignee(ctx, client, "reviewer", issueAssigneeKinds)
-		if err != nil {
-			t.Fatalf("unexpected error: %v", err)
-		}
-		if aType != "agent" || aID != "f656eab8-1111-1111-1111-111111111111" {
-			t.Errorf("got (%q, %q), want (agent, f656eab8-...)", aType, aID)
-		}
-	})
-
-	t.Run("exact longer name still resolves unambiguously", func(t *testing.T) {
-		aType, aID, err := resolveAssignee(ctx, client, "peer-reviewer", issueAssigneeKinds)
-		if err != nil {
-			t.Fatalf("unexpected error: %v", err)
-		}
-		if aType != "agent" || aID != "9b0ff9a2-2222-2222-2222-222222222222" {
-			t.Errorf("got (%q, %q), want (agent, 9b0ff9a2-...)", aType, aID)
-		}
-	})
-
-	t.Run("exact match is case-insensitive and tolerates whitespace", func(t *testing.T) {
-		aType, aID, err := resolveAssignee(ctx, client, "  Reviewer  ", issueAssigneeKinds)
-		if err != nil {
-			t.Fatalf("unexpected error: %v", err)
-		}
-		if aType != "agent" || aID != "f656eab8-1111-1111-1111-111111111111" {
-			t.Errorf("got (%q, %q), want exact reviewer agent", aType, aID)
-		}
-	})
-
-	t.Run("substring-only input falls back and stays ambiguous", func(t *testing.T) {
-		// "review" matches both agents via substring and neither via exact name,
-		// so the existing ambiguity error is preserved.
-		_, _, err := resolveAssignee(ctx, client, "review", issueAssigneeKinds)
-		if err == nil {
-			t.Fatal("expected error for ambiguous substring match")
-		}
-		if got := err.Error(); !strings.Contains(got, "ambiguous") {
-			t.Errorf("expected ambiguous error, got: %s", got)
-		}
-	})
-}
-
-// TestResolveAssigneeByID covers the ID/ShortID escape hatch from
-// multica-ai/multica#1620: passing a full UUID or its 8-char prefix must
-// resolve directly without going through name matching.
-func TestResolveAssigneeByID(t *testing.T) {
-	membersResp := []map[string]any{
-		{"user_id": "aaaaaaaa-1111-1111-1111-111111111111", "name": "Alice"},
-	}
-	agentsResp := []map[string]any{
-		{"id": "f656eab8-1111-1111-1111-111111111111", "name": "reviewer"},
-		{"id": "9b0ff9a2-2222-2222-2222-222222222222", "name": "peer-reviewer"},
-	}
-	squadsResp := []map[string]any{
-		{"id": "ccccccc1-2222-3333-4444-555555555555", "name": "Super Human"},
-	}
-	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		switch r.URL.Path {
-		case "/api/workspaces/ws-1/members":
-			json.NewEncoder(w).Encode(membersResp)
-		case "/api/agents":
-			json.NewEncoder(w).Encode(agentsResp)
-		case "/api/squads":
-			json.NewEncoder(w).Encode(squadsResp)
-		default:
-			http.NotFound(w, r)
-		}
-	}))
-	defer srv.Close()
-
-	client := cli.NewAPIClient(srv.URL, "ws-1", "test-token")
-	ctx := context.Background()
-
-	t.Run("full UUID resolves agent", func(t *testing.T) {
-		aType, aID, err := resolveAssignee(ctx, client, "f656eab8-1111-1111-1111-111111111111", issueAssigneeKinds)
-		if err != nil {
-			t.Fatalf("unexpected error: %v", err)
-		}
-		if aType != "agent" || aID != "f656eab8-1111-1111-1111-111111111111" {
-			t.Errorf("got (%q, %q), want reviewer agent", aType, aID)
-		}
-	})
-
-	t.Run("8-char ShortID resolves agent", func(t *testing.T) {
-		aType, aID, err := resolveAssignee(ctx, client, "f656eab8", issueAssigneeKinds)
-		if err != nil {
-			t.Fatalf("unexpected error: %v", err)
-		}
-		if aType != "agent" || aID != "f656eab8-1111-1111-1111-111111111111" {
-			t.Errorf("got (%q, %q), want reviewer agent", aType, aID)
-		}
-	})
-
-	t.Run("uppercase ShortID still resolves", func(t *testing.T) {
-		aType, aID, err := resolveAssignee(ctx, client, "F656EAB8", issueAssigneeKinds)
-		if err != nil {
-			t.Fatalf("unexpected error: %v", err)
-		}
-		if aType != "agent" || aID != "f656eab8-1111-1111-1111-111111111111" {
-			t.Errorf("got (%q, %q), want reviewer agent", aType, aID)
-		}
-	})
-
-	t.Run("ShortID resolves a member", func(t *testing.T) {
-		aType, aID, err := resolveAssignee(ctx, client, "aaaaaaaa", issueAssigneeKinds)
-		if err != nil {
-			t.Fatalf("unexpected error: %v", err)
-		}
-		if aType != "member" || aID != "aaaaaaaa-1111-1111-1111-111111111111" {
-			t.Errorf("got (%q, %q), want Alice", aType, aID)
-		}
-	})
-}
-
-// TestResolveAssigneeByIDStrict covers the strict UUID resolver that backs
-// --assignee-id / --to-id / --user-id. Unlike resolveAssignee it must reject
-// non-UUID inputs (no name fallback) and surface a clear error when the UUID
-// is well-formed but not present in the workspace.
-func TestResolveAssigneeByIDStrict(t *testing.T) {
-	membersResp := []map[string]any{
-		{"user_id": "aaaaaaaa-1111-1111-1111-111111111111", "name": "Alice"},
-	}
-	agentsResp := []map[string]any{
-		{"id": "5fb87ac7-23b5-4a7a-81fa-ed295a54545d", "name": "J"},
-		{"id": "192b9cca-2222-2222-2222-222222222222", "name": "Open Claw - J"},
-	}
-	squadsResp := []map[string]any{
-		{"id": "ccccccc1-2222-3333-4444-555555555555", "name": "Super Human"},
-	}
-	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		switch r.URL.Path {
-		case "/api/workspaces/ws-1/members":
-			json.NewEncoder(w).Encode(membersResp)
-		case "/api/agents":
-			json.NewEncoder(w).Encode(agentsResp)
-		case "/api/squads":
-			json.NewEncoder(w).Encode(squadsResp)
-		default:
-			http.NotFound(w, r)
-		}
-	}))
-	defer srv.Close()
-
-	client := cli.NewAPIClient(srv.URL, "ws-1", "test-token")
-	ctx := context.Background()
-
-	t.Run("full UUID resolves the right agent in a substring-collision workspace", func(t *testing.T) {
-		// This is the MUL-1254 scenario: agent "J" is unreachable by name
-		// because every other agent has "J" in it. UUID lookup must
-		// deterministically pick the right one.
-		aType, aID, err := resolveAssigneeByID(ctx, client, "5fb87ac7-23b5-4a7a-81fa-ed295a54545d", issueAssigneeKinds)
-		if err != nil {
-			t.Fatalf("unexpected error: %v", err)
-		}
-		if aType != "agent" || aID != "5fb87ac7-23b5-4a7a-81fa-ed295a54545d" {
-			t.Errorf("got (%q, %q), want agent J", aType, aID)
-		}
-	})
-
-	t.Run("uppercase UUID is normalized", func(t *testing.T) {
-		aType, aID, err := resolveAssigneeByID(ctx, client, "5FB87AC7-23B5-4A7A-81FA-ED295A54545D", issueAssigneeKinds)
-		if err != nil {
-			t.Fatalf("unexpected error: %v", err)
-		}
-		if aType != "agent" || aID != "5fb87ac7-23b5-4a7a-81fa-ed295a54545d" {
-			t.Errorf("got (%q, %q), want agent J", aType, aID)
-		}
-	})
-
-	t.Run("UUID resolves a member", func(t *testing.T) {
-		aType, aID, err := resolveAssigneeByID(ctx, client, "aaaaaaaa-1111-1111-1111-111111111111", issueAssigneeKinds)
-		if err != nil {
-			t.Fatalf("unexpected error: %v", err)
-		}
-		if aType != "member" || aID != "aaaaaaaa-1111-1111-1111-111111111111" {
-			t.Errorf("got (%q, %q), want Alice", aType, aID)
-		}
-	})
-
-	// MUL-2165: --assignee-id <squad-uuid> must resolve to (squad, <id>) so
-	// scripts that read the squad list and pin its UUID can assign work to a
-	// squad in a single deterministic call.
-	t.Run("UUID resolves a squad", func(t *testing.T) {
-		aType, aID, err := resolveAssigneeByID(ctx, client, "ccccccc1-2222-3333-4444-555555555555", issueAssigneeKinds)
-		if err != nil {
-			t.Fatalf("unexpected error: %v", err)
-		}
-		if aType != "squad" || aID != "ccccccc1-2222-3333-4444-555555555555" {
-			t.Errorf("got (%q, %q), want squad Super Human", aType, aID)
-		}
-	})
-
-	t.Run("non-UUID input is rejected without name fallback", func(t *testing.T) {
-		_, _, err := resolveAssigneeByID(ctx, client, "Alice", issueAssigneeKinds)
-		if err == nil {
-			t.Fatal("expected error for non-UUID input")
-		}
-		if !strings.Contains(err.Error(), "UUID") {
-			t.Errorf("expected UUID error, got: %v", err)
-		}
-	})
-
-	t.Run("UUID prefix (ShortID) is rejected — strict mode requires canonical form", func(t *testing.T) {
-		_, _, err := resolveAssigneeByID(ctx, client, "5fb87ac7", issueAssigneeKinds)
-		if err == nil {
-			t.Fatal("expected error for ShortID")
-		}
-	})
-
-	t.Run("well-formed UUID with no matching entity errors", func(t *testing.T) {
-		_, _, err := resolveAssigneeByID(ctx, client, "deadbeef-1111-1111-1111-111111111111", issueAssigneeKinds)
-		if err == nil {
-			t.Fatal("expected error for missing entity")
-		}
-		if !strings.Contains(err.Error(), "no member, agent, or squad") {
-			t.Errorf("expected not-found error, got: %v", err)
-		}
-	})
-
-	t.Run("missing workspace ID", func(t *testing.T) {
-		noWSClient := cli.NewAPIClient(srv.URL, "", "test-token")
-		_, _, err := resolveAssigneeByID(ctx, noWSClient, "5fb87ac7-23b5-4a7a-81fa-ed295a54545d", issueAssigneeKinds)
-		if err == nil {
-			t.Fatal("expected error for missing workspace ID")
-		}
-	})
-}
-
-func TestResolveAssigneeByIDRetriesTransientNetworkErrors(t *testing.T) {
-	origSleep := assigneeResolveRetrySleep
-	assigneeResolveRetrySleep = func(context.Context, time.Duration) bool { return false }
-	t.Cleanup(func() { assigneeResolveRetrySleep = origSleep })
-
-	var agentsHits int
-	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		switch r.URL.Path {
-		case "/api/workspaces/ws-1/members":
-			json.NewEncoder(w).Encode([]map[string]any{})
-		case "/api/agents":
-			agentsHits++
-			if agentsHits == 1 {
-				hj, ok := w.(http.Hijacker)
-				if !ok {
-					t.Fatal("response writer does not support hijacking")
-				}
-				conn, _, err := hj.Hijack()
-				if err != nil {
-					t.Fatalf("hijack: %v", err)
-				}
-				_ = conn.Close()
-				return
-			}
-			json.NewEncoder(w).Encode([]map[string]any{
-				{"id": "5fb87ac7-23b5-4a7a-81fa-ed295a54545d", "name": "J"},
-			})
-		case "/api/squads":
-			json.NewEncoder(w).Encode([]map[string]any{})
-		default:
-			http.NotFound(w, r)
-		}
-	}))
-	defer srv.Close()
-
-	client := cli.NewAPIClient(srv.URL, "ws-1", "test-token")
-	aType, aID, err := resolveAssigneeByID(context.Background(), client, "5fb87ac7-23b5-4a7a-81fa-ed295a54545d", issueAssigneeKinds)
-	if err != nil {
-		t.Fatalf("resolveAssigneeByID should retry transient EOF: %v", err)
-	}
-	if aType != "agent" || aID != "5fb87ac7-23b5-4a7a-81fa-ed295a54545d" {
-		t.Fatalf("got (%q, %q), want agent J", aType, aID)
-	}
-	if agentsHits != 2 {
-		t.Fatalf("agents endpoint hits = %d, want 2", agentsHits)
-	}
-}
-
-// TestPickAssigneeFromFlags covers the flag-pair picker that backs every
-// assignee-taking command. The mutual-exclusion guard is the load-bearing
-// piece — silently preferring one side would let a buggy script set both
-// flags and assign the wrong entity.
-func TestPickAssigneeFromFlags(t *testing.T) {
-	membersResp := []map[string]any{
-		{"user_id": "aaaaaaaa-1111-1111-1111-111111111111", "name": "Alice"},
-	}
-	agentsResp := []map[string]any{
-		{"id": "5fb87ac7-23b5-4a7a-81fa-ed295a54545d", "name": "J"},
-	}
-	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		switch r.URL.Path {
-		case "/api/workspaces/ws-1/members":
-			json.NewEncoder(w).Encode(membersResp)
-		case "/api/agents":
-			json.NewEncoder(w).Encode(agentsResp)
-		case "/api/squads":
-			json.NewEncoder(w).Encode([]map[string]any{})
-		default:
-			http.NotFound(w, r)
-		}
-	}))
-	defer srv.Close()
-
-	client := cli.NewAPIClient(srv.URL, "ws-1", "test-token")
-	ctx := context.Background()
-
+	client := cli.NewAPIClient(srv.URL, "ws-1", "")
 	newCmd := func() *cobra.Command {
-		c := &cobra.Command{Use: "test"}
-		c.Flags().String("assignee", "", "")
-		c.Flags().String("assignee-id", "", "")
-		return c
+		cmd := &cobra.Command{Use: "test"}
+		cmd.Flags().String("assignee", "", "")
+		cmd.Flags().String("assignee-id", "", "")
+		return cmd
 	}
 
-	t.Run("neither flag set returns hasValue=false", func(t *testing.T) {
-		_, _, has, err := pickAssigneeFromFlags(ctx, client, newCmd(), "assignee", "assignee-id", issueAssigneeKinds)
-		if err != nil {
-			t.Fatalf("unexpected err: %v", err)
-		}
-		if has {
-			t.Errorf("expected hasValue=false")
-		}
-	})
-
-	t.Run("name flag uses fuzzy resolver", func(t *testing.T) {
-		c := newCmd()
-		_ = c.Flags().Set("assignee", "Alice")
-		typ, id, has, err := pickAssigneeFromFlags(ctx, client, c, "assignee", "assignee-id", issueAssigneeKinds)
-		if err != nil || !has || typ != "member" || id != "aaaaaaaa-1111-1111-1111-111111111111" {
-			t.Errorf("got (%q, %q, %v, %v), want Alice", typ, id, has, err)
-		}
-	})
-
-	t.Run("id flag uses strict resolver", func(t *testing.T) {
-		c := newCmd()
-		_ = c.Flags().Set("assignee-id", "5fb87ac7-23b5-4a7a-81fa-ed295a54545d")
-		typ, id, has, err := pickAssigneeFromFlags(ctx, client, c, "assignee", "assignee-id", issueAssigneeKinds)
-		if err != nil || !has || typ != "agent" || id != "5fb87ac7-23b5-4a7a-81fa-ed295a54545d" {
-			t.Errorf("got (%q, %q, %v, %v), want agent J", typ, id, has, err)
-		}
-	})
-
-	t.Run("both flags set is rejected", func(t *testing.T) {
-		c := newCmd()
-		_ = c.Flags().Set("assignee", "Alice")
-		_ = c.Flags().Set("assignee-id", "5fb87ac7-23b5-4a7a-81fa-ed295a54545d")
-		_, _, _, err := pickAssigneeFromFlags(ctx, client, c, "assignee", "assignee-id", issueAssigneeKinds)
-		if err == nil {
-			t.Fatal("expected mutually-exclusive error")
-		}
-		if !strings.Contains(err.Error(), "mutually exclusive") {
-			t.Errorf("expected mutually-exclusive error, got: %v", err)
-		}
-	})
-
-	// Explicit-empty regression: a script that interpolates an empty env var
-	// into `--assignee-id "$MAYBE_UUID"` must NOT silently route through the
-	// "no flag set" branch — that would defeat the whole point of the strict
-	// UUID flag (issue list returning everything, create leaving the issue
-	// unassigned, subscriber add subscribing the caller). Detection is via
-	// Flags().Changed, so an explicit empty string surfaces as a UUID error.
-	t.Run("explicit empty --assignee-id surfaces as UUID error, not silent skip", func(t *testing.T) {
-		c := newCmd()
-		_ = c.Flags().Set("assignee-id", "")
-		_, _, has, err := pickAssigneeFromFlags(ctx, client, c, "assignee", "assignee-id", issueAssigneeKinds)
-		if err == nil {
-			t.Fatal("expected UUID error for explicit empty assignee-id")
-		}
-		if !has {
-			t.Errorf("expected hasValue=true so caller treats this as a real attempt, not a no-op")
-		}
-		if !strings.Contains(err.Error(), "UUID") {
-			t.Errorf("expected UUID-shaped error, got: %v", err)
-		}
-	})
-
-	t.Run("explicit empty --assignee surfaces as not-found, not silent skip", func(t *testing.T) {
-		c := newCmd()
-		_ = c.Flags().Set("assignee", "")
-		_, _, has, err := pickAssigneeFromFlags(ctx, client, c, "assignee", "assignee-id", issueAssigneeKinds)
-		if err == nil {
-			t.Fatal("expected resolver error for explicit empty assignee")
-		}
-		if !has {
-			t.Errorf("expected hasValue=true so caller treats this as a real attempt, not a no-op")
-		}
-	})
-
-	t.Run("explicit empty on both flags is mutually exclusive (set wins over value)", func(t *testing.T) {
-		c := newCmd()
-		_ = c.Flags().Set("assignee", "")
-		_ = c.Flags().Set("assignee-id", "")
-		_, _, _, err := pickAssigneeFromFlags(ctx, client, c, "assignee", "assignee-id", issueAssigneeKinds)
-		if err == nil || !strings.Contains(err.Error(), "mutually exclusive") {
-			t.Errorf("expected mutually-exclusive error, got: %v", err)
-		}
-	})
-}
-
-// TestPickAssigneeFromFlagsMemberOrAgentKinds is the call-site regression
-// for the MUL-2165 follow-up. Subscriber add/remove and project lead pass
-// memberOrAgentKinds because their target schema rejects squads
-// (subscriber: server/internal/handler/handler.go:414;
-// project: server/migrations/034_projects.up.sql:10). Without this gating,
-// `multica issue subscriber add --user "<SquadName>"` or
-// `multica project create --lead "<SquadName>"` would resolve to
-// (squad, ...) and surface as a 500/403 server-side instead of a clean
-// CLI-side resolution error.
-func TestPickAssigneeFromFlagsMemberOrAgentKinds(t *testing.T) {
-	membersResp := []map[string]any{
-		{"user_id": "aaaaaaaa-1111-1111-1111-111111111111", "name": "Alice"},
+	if _, _, has, err := pickAssigneeFromFlags(context.Background(), client, newCmd(), "assignee", "assignee-id"); err != nil || has {
+		t.Fatalf("unset flags = has %v, err %v", has, err)
 	}
-	agentsResp := []map[string]any{
-		{"id": "5fb87ac7-23b5-4a7a-81fa-ed295a54545d", "name": "J"},
+	byName := newCmd()
+	_ = byName.Flags().Set("assignee", "CodeBot")
+	if typ, id, has, err := pickAssigneeFromFlags(context.Background(), client, byName, "assignee", "assignee-id"); err != nil || !has || typ != "agent" || id == "" {
+		t.Fatalf("name flag = (%q, %q, %v, %v)", typ, id, has, err)
 	}
-	squadsResp := []map[string]any{
-		{"id": "ccccccc1-2222-3333-4444-555555555555", "name": "Super Human"},
-	}
-
-	var squadsHits int
-	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		switch r.URL.Path {
-		case "/api/workspaces/ws-1/members":
-			json.NewEncoder(w).Encode(membersResp)
-		case "/api/agents":
-			json.NewEncoder(w).Encode(agentsResp)
-		case "/api/squads":
-			squadsHits++
-			json.NewEncoder(w).Encode(squadsResp)
-		default:
-			http.NotFound(w, r)
-		}
-	}))
-	defer srv.Close()
-
-	client := cli.NewAPIClient(srv.URL, "ws-1", "test-token")
-	ctx := context.Background()
-
-	newCmd := func(nameFlag, idFlag string) *cobra.Command {
-		c := &cobra.Command{Use: "test"}
-		c.Flags().String(nameFlag, "", "")
-		c.Flags().String(idFlag, "", "")
-		return c
-	}
-
-	t.Run("subscriber --user with a squad name is rejected without hitting /api/squads", func(t *testing.T) {
-		before := squadsHits
-		c := newCmd("user", "user-id")
-		_ = c.Flags().Set("user", "Super Human")
-		_, _, _, err := pickAssigneeFromFlags(ctx, client, c, "user", "user-id", memberOrAgentKinds)
-		if err == nil {
-			t.Fatal("expected resolution error for squad name under memberOrAgentKinds")
-		}
-		if !strings.Contains(err.Error(), "no member or agent") {
-			t.Errorf("expected member-or-agent error wording, got: %v", err)
-		}
-		if squadsHits != before {
-			t.Errorf("memberOrAgentKinds must NOT fetch /api/squads, but it was called %d time(s)", squadsHits-before)
-		}
-	})
-
-	t.Run("subscriber --user-id with a squad UUID is rejected", func(t *testing.T) {
-		c := newCmd("user", "user-id")
-		_ = c.Flags().Set("user-id", "ccccccc1-2222-3333-4444-555555555555")
-		_, _, _, err := pickAssigneeFromFlags(ctx, client, c, "user", "user-id", memberOrAgentKinds)
-		if err == nil {
-			t.Fatal("expected not-found error for squad UUID under memberOrAgentKinds")
-		}
-		if !strings.Contains(err.Error(), "no member or agent") {
-			t.Errorf("expected member-or-agent error wording, got: %v", err)
-		}
-	})
-
-	t.Run("project --lead with a member name still resolves cleanly", func(t *testing.T) {
-		c := newCmd("lead", "lead-id")
-		_ = c.Flags().Set("lead", "Alice")
-		typ, id, has, err := pickAssigneeFromFlags(ctx, client, c, "lead", "lead-id", memberOrAgentKinds)
-		if err != nil || !has || typ != "member" || id != "aaaaaaaa-1111-1111-1111-111111111111" {
-			t.Errorf("got (%q, %q, %v, %v), want member Alice", typ, id, has, err)
-		}
-	})
-
-	t.Run("project --lead with an agent name still resolves cleanly", func(t *testing.T) {
-		c := newCmd("lead", "lead-id")
-		_ = c.Flags().Set("lead", "J")
-		typ, id, has, err := pickAssigneeFromFlags(ctx, client, c, "lead", "lead-id", memberOrAgentKinds)
-		if err != nil || !has || typ != "agent" || id != "5fb87ac7-23b5-4a7a-81fa-ed295a54545d" {
-			t.Errorf("got (%q, %q, %v, %v), want agent J", typ, id, has, err)
-		}
-	})
-}
-
-func TestIssueSubscriberList(t *testing.T) {
-	subscribersResp := []map[string]any{
-		{
-			"issue_id":   "issue-1",
-			"user_type":  "member",
-			"user_id":    "user-1111",
-			"reason":     "creator",
-			"created_at": "2026-04-01T10:00:00Z",
-		},
-		{
-			"issue_id":   "issue-1",
-			"user_type":  "agent",
-			"user_id":    "agent-3333",
-			"reason":     "manual",
-			"created_at": "2026-04-01T11:00:00Z",
-		},
-	}
-
-	var gotPath string
-	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		gotPath = r.URL.Path
-		if r.Method != http.MethodGet {
-			t.Errorf("expected GET, got %s", r.Method)
-		}
-		json.NewEncoder(w).Encode(subscribersResp)
-	}))
-	defer srv.Close()
-
-	client := cli.NewAPIClient(srv.URL, "ws-1", "test-token")
-	ctx := context.Background()
-
-	var got []map[string]any
-	if err := client.GetJSON(ctx, "/api/issues/issue-1/subscribers", &got); err != nil {
-		t.Fatalf("GetJSON: %v", err)
-	}
-	if gotPath != "/api/issues/issue-1/subscribers" {
-		t.Errorf("unexpected path: %s", gotPath)
-	}
-	if len(got) != 2 {
-		t.Fatalf("expected 2 subscribers, got %d", len(got))
-	}
-	if got[0]["user_type"] != "member" || got[1]["user_type"] != "agent" {
-		t.Errorf("unexpected subscriber ordering: %+v", got)
-	}
-}
-
-func TestIssueSubscriberMutationBody(t *testing.T) {
-	tests := []struct {
-		name     string
-		action   string
-		user     string
-		members  []map[string]any
-		agents   []map[string]any
-		wantPath string
-		wantBody map[string]any
-	}{
-		{
-			name:     "subscribe caller (no user flag)",
-			action:   "subscribe",
-			user:     "",
-			wantPath: "/api/issues/issue-1/subscribe",
-			wantBody: map[string]any{},
-		},
-		{
-			name:     "unsubscribe caller",
-			action:   "unsubscribe",
-			user:     "",
-			wantPath: "/api/issues/issue-1/unsubscribe",
-			wantBody: map[string]any{},
-		},
-		{
-			name:     "subscribe a member by name",
-			action:   "subscribe",
-			user:     "alice",
-			members:  []map[string]any{{"user_id": "user-1111", "name": "Alice Smith"}},
-			wantPath: "/api/issues/issue-1/subscribe",
-			wantBody: map[string]any{"user_type": "member", "user_id": "user-1111"},
-		},
-		{
-			name:     "subscribe an agent by name",
-			action:   "subscribe",
-			user:     "codebot",
-			agents:   []map[string]any{{"id": "agent-3333", "name": "CodeBot"}},
-			wantPath: "/api/issues/issue-1/subscribe",
-			wantBody: map[string]any{"user_type": "agent", "user_id": "agent-3333"},
-		},
-	}
-
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			var gotPath string
-			var gotBody map[string]any
-			srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-				switch r.URL.Path {
-				case "/api/workspaces/ws-1/members":
-					json.NewEncoder(w).Encode(tt.members)
-					return
-				case "/api/agents":
-					json.NewEncoder(w).Encode(tt.agents)
-					return
-				case "/api/squads":
-					json.NewEncoder(w).Encode([]map[string]any{})
-					return
-				}
-				gotPath = r.URL.Path
-				if r.Method != http.MethodPost {
-					t.Errorf("expected POST, got %s", r.Method)
-				}
-				json.NewDecoder(r.Body).Decode(&gotBody)
-				json.NewEncoder(w).Encode(map[string]bool{"subscribed": tt.action == "subscribe"})
-			}))
-			defer srv.Close()
-
-			client := cli.NewAPIClient(srv.URL, "ws-1", "test-token")
-			ctx := context.Background()
-
-			body := map[string]any{}
-			if tt.user != "" {
-				uType, uID, err := resolveAssignee(ctx, client, tt.user, issueAssigneeKinds)
-				if err != nil {
-					t.Fatalf("resolveAssignee: %v", err)
-				}
-				body["user_type"] = uType
-				body["user_id"] = uID
-			}
-
-			var result map[string]any
-			path := "/api/issues/issue-1/" + tt.action
-			if err := client.PostJSON(ctx, path, body, &result); err != nil {
-				t.Fatalf("PostJSON: %v", err)
-			}
-
-			if gotPath != tt.wantPath {
-				t.Errorf("path = %q, want %q", gotPath, tt.wantPath)
-			}
-			for k, want := range tt.wantBody {
-				if gotBody[k] != want {
-					t.Errorf("body[%q] = %v, want %v", k, gotBody[k], want)
-				}
-			}
-			if len(tt.wantBody) == 0 && len(gotBody) != 0 {
-				t.Errorf("expected empty body, got %+v", gotBody)
-			}
-		})
+	both := newCmd()
+	_ = both.Flags().Set("assignee", "CodeBot")
+	_ = both.Flags().Set("assignee-id", "5fb87ac7-23b5-4a7a-81fa-ed295a54545d")
+	if _, _, _, err := pickAssigneeFromFlags(context.Background(), client, both, "assignee", "assignee-id"); err == nil || !strings.Contains(err.Error(), "mutually exclusive") {
+		t.Fatalf("expected mutually exclusive flags error, got %v", err)
 	}
 }
 
@@ -3101,13 +2086,12 @@ func TestRunIssueAssignRejectsNoStartWithUnassign(t *testing.T) {
 	}
 }
 
-func TestIssueReadCommandsUseInjectedTaskToken(t *testing.T) {
-	const fakeTaskToken = "mat_task_issue_sentinel"
+func TestIssueReadCommandsUseLocalServerWithoutAuthorization(t *testing.T) {
 	ownerHome := t.TempDir()
 	t.Setenv("HOME", ownerHome)
 	t.Setenv("MULTICA_AGENT_ID", "agent-test")
 	t.Setenv("MULTICA_TASK_ID", "task-test")
-	t.Setenv("MULTICA_TOKEN", fakeTaskToken)
+	t.Setenv("MULTICA_TOKEN", "")
 	t.Setenv("MULTICA_WORKSPACE_ID", "ws-task")
 	t.Setenv("MULTICA_TASK_CONFIG_ROOT", t.TempDir())
 
@@ -3121,8 +2105,8 @@ func TestIssueReadCommandsUseInjectedTaskToken(t *testing.T) {
 
 	var gotPaths []string
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if got := r.Header.Get("Authorization"); got != "Bearer "+fakeTaskToken {
-			t.Errorf("Authorization = %q, want injected fake task token", got)
+		if got := r.Header.Get("Authorization"); got != "" {
+			t.Errorf("Authorization = %q, want no account credential", got)
 		}
 		gotPaths = append(gotPaths, r.URL.RequestURI())
 		switch r.URL.Path {
@@ -3168,7 +2152,7 @@ func TestIssueReadCommandsUseInjectedTaskToken(t *testing.T) {
 	}
 }
 
-func TestIssueReadCommandsFailClosedWithoutTaskToken(t *testing.T) {
+func testIssueReadCommandsFailClosedWithoutTaskTokenRemoved(t *testing.T) {
 	ownerHome := t.TempDir()
 	t.Setenv("HOME", ownerHome)
 	t.Setenv("MULTICA_AGENT_ID", "agent-test")

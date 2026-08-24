@@ -29,10 +29,6 @@ extraResources:
     to: LICENSE
   - from: ../../NOTICE
     to: NOTICE
-protocols:
-  - name: Multica
-    schemes:
-      - multica
 asarUnpack:
   - resources/**
 mac:

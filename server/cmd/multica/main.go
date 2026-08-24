@@ -44,51 +44,23 @@ func init() {
 	rootCmd.PersistentFlags().String("profile", "", "Configuration profile name (e.g. dev) — isolates config, daemon state, and workspaces")
 	rootCmd.PersistentFlags().BoolVar(&debugFlag, "debug", false, "Print full error details on failure (env: MULTICA_DEBUG)")
 
-	// Core commands
+	// Local workbench commands
 	issueCmd.GroupID = groupCore
 	projectCmd.GroupID = groupCore
-	labelCmd.GroupID = groupCore
-	propertyCmd.GroupID = groupCore
-	agentCmd.GroupID = groupCore
-	autopilotCmd.GroupID = groupCore
-	workspaceCmd.GroupID = groupCore
-	repoCmd.GroupID = groupCore
-	skillCmd.GroupID = groupCore
-	squadCmd.GroupID = groupCore
-	chatCmd.GroupID = groupCore
 
 	// Runtime commands
 	daemonCmd.GroupID = groupRuntime
 	runtimeCmd.GroupID = groupRuntime
 
-	// Additional commands
-	authCmd.GroupID = groupAdditional
-	userCmd.GroupID = groupAdditional
-	loginCmd.GroupID = groupAdditional
-	setupCmd.GroupID = groupAdditional
-	attachmentCmd.GroupID = groupAdditional
+	// Additional local commands
 	configCmd.GroupID = groupAdditional
 	updateCmd.GroupID = groupAdditional
 	versionCmd.GroupID = groupAdditional
 
 	rootCmd.AddCommand(issueCmd)
 	rootCmd.AddCommand(projectCmd)
-	rootCmd.AddCommand(labelCmd)
-	rootCmd.AddCommand(propertyCmd)
-	rootCmd.AddCommand(agentCmd)
-	rootCmd.AddCommand(autopilotCmd)
-	rootCmd.AddCommand(workspaceCmd)
-	rootCmd.AddCommand(repoCmd)
-	rootCmd.AddCommand(skillCmd)
-	rootCmd.AddCommand(squadCmd)
-	rootCmd.AddCommand(chatCmd)
 	rootCmd.AddCommand(daemonCmd)
 	rootCmd.AddCommand(runtimeCmd)
-	rootCmd.AddCommand(authCmd)
-	rootCmd.AddCommand(userCmd)
-	rootCmd.AddCommand(loginCmd)
-	rootCmd.AddCommand(setupCmd)
-	rootCmd.AddCommand(attachmentCmd)
 	rootCmd.AddCommand(configCmd)
 	rootCmd.AddCommand(updateCmd)
 	rootCmd.AddCommand(versionCmd)

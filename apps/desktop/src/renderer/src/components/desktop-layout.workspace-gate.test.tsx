@@ -105,7 +105,6 @@ vi.mock("@multica/views/chat", () => ({
 }));
 
 vi.mock("./tab-bar", () => ({ TabBar: () => null }));
-vi.mock("./window-overlay", () => ({ WindowOverlay: () => null }));
 vi.mock("./tab-content", () => ({
   TabContent: () => <div data-testid="tab-content" />,
 }));
@@ -147,7 +146,7 @@ describe("DesktopShell workspace gating", () => {
     expect(queryByTestId("search-command")).not.toBeNull();
     expect(queryByTestId("global-shortcuts")).not.toBeNull();
     expect(queryByTestId("modal-registry")).not.toBeNull();
-    expect(queryByTestId("floating-chat")).not.toBeNull();
+    expect(queryByTestId("floating-chat")).toBeNull();
   });
 
   it("drops workspace-scoped chrome when the singleton still points at a deleted workspace", () => {

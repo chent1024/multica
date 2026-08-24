@@ -190,7 +190,8 @@ function AssigneePickerImpl({
         <span className="text-muted-foreground">{t(($) => $.pickers.assignee.trigger_unassigned)}</span>
       </PickerItem>
 
-      {/* Members */}
+      {/* Human members are absent in the local desktop workbench. Cloud mode
+          still receives them from the managed API. */}
       {filteredMembers.length > 0 && (
         <PickerSection label={t(($) => $.pickers.assignee.members_group)}>
           {filteredMembers.map((m) => (

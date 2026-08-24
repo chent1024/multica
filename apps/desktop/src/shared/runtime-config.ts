@@ -15,15 +15,15 @@ export type RuntimeConfigResult =
 
 export const DEFAULT_RUNTIME_CONFIG: RuntimeConfig = Object.freeze({
   schemaVersion: 1,
-  apiUrl: "https://api.multica.ai",
-  wsUrl: "wss://api.multica.ai/ws",
-  appUrl: "https://multica.ai",
+  apiUrl: "http://127.0.0.1:17824",
+  wsUrl: "ws://127.0.0.1:17824/ws",
+  appUrl: "http://localhost:3000",
 });
 
 const LOCAL_DEV_RUNTIME_CONFIG: RuntimeConfig = Object.freeze({
   schemaVersion: 1,
-  apiUrl: "http://localhost:8080",
-  wsUrl: "ws://localhost:8080/ws",
+  apiUrl: "http://127.0.0.1:17824",
+  wsUrl: "ws://127.0.0.1:17824/ws",
   appUrl: "http://localhost:3000",
 });
 
@@ -122,6 +122,15 @@ export function deriveDevAppUrl(apiUrl: string): string {
     return LOCAL_DEV_RUNTIME_CONFIG.appUrl;
   }
   return deriveAppUrl(apiUrl);
+}
+
+export function isLoopbackApiUrl(apiUrl: string): boolean {
+  const hostname = new URL(apiUrl).hostname;
+  return (
+    hostname === "localhost" ||
+    hostname === "127.0.0.1" ||
+    hostname === "[::1]"
+  );
 }
 
 function requiredString(value: unknown, field: string): string {

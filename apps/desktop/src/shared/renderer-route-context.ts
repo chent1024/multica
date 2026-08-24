@@ -1,6 +1,6 @@
 export const RENDERER_ROUTE_CONTEXT_CHANNEL = "renderer:route-context";
 
-export type RendererRouteSurface = "login" | "overlay" | "tab";
+export type RendererRouteSurface = "tab";
 
 // This context exists only to be attached to a freeze/crash report, and those
 // reports leave the machine. Every field here must therefore be safe to ship:
@@ -41,7 +41,7 @@ export function sanitizeRendererRouteContext(
 }
 
 function isRendererRouteSurface(value: unknown): value is RendererRouteSurface {
-  return value === "login" || value === "overlay" || value === "tab";
+  return value === "tab";
 }
 
 function sanitizeString(value: unknown): string | undefined {

@@ -13,22 +13,10 @@
   // reads as "unused" from inside its own workspace.
   "include": ["files", "dependencies", "unlisted"],
 
-  // Go, and a workspace with its own Expo toolchain, lint pipeline, and React
-  // version (see apps/mobile/CLAUDE.md). Neither is covered by this config.
-  "ignoreWorkspaces": ["apps/mobile"],
-
   "workspaces": {
     ".": {
       "entry": ["scripts/*.mjs"],
       "project": ["scripts/*.mjs"]
-    },
-
-    "apps/web": {
-      "entry": ["eslint.config.mjs"],
-      // Referenced only by the `@type {import('postcss-load-config').Config}`
-      // JSDoc annotation in postcss.config.mjs. Declaring it would add a
-      // runtime dependency to satisfy a type comment.
-      "ignoreDependencies": ["postcss-load-config"]
     },
 
     "apps/desktop": {
@@ -40,11 +28,9 @@
       "ignoreDependencies": ["@multica/tsconfig"]
     },
 
-    "apps/docs": {},
-
     // The three shared packages export raw .ts/.tsx compiled by their
     // consumers (CLAUDE.md "Project Shape"), so `entry` names only the config
-    // files knip would otherwise miss and the apps supply the real entry
+    // files knip would otherwise miss and Desktop supplies the real entry
     // points — a file is live when an app reaches it.
     //
     // That holds for views and core, whose `exports` name specific files

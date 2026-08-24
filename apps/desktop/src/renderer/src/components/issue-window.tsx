@@ -6,17 +6,15 @@ import {
   useRouteError,
 } from "react-router-dom";
 import { AlertTriangle, RotateCw, X } from "lucide-react";
-import { useAuthStore } from "@multica/core/auth";
 import { setCurrentWorkspace } from "@multica/core/platform";
 import { WorkspaceSlugProvider } from "@multica/core/paths";
 import { useWorkspaceList } from "@multica/core/workspace";
 import { Button } from "@multica/ui/components/ui/button";
 import { MulticaIcon } from "@multica/ui/components/common/multica-icon";
 import { ModalRegistry } from "@multica/views/modals/registry";
-import { WorkspacePresencePrefetch } from "@multica/views/layout";
 import { DragStrip } from "@multica/views/platform";
 import type { IssueWindowContext } from "../../../shared/issue-window";
-import { DesktopAuthRecoveryPage } from "../pages/auth-recovery";
+import { LocalWorkbenchRecoveryPage } from "../pages/local-workbench-recovery";
 import { IssueDetailPage } from "../pages/issue-detail-page";
 import { IssueWindowNavigationProvider } from "../platform/issue-window-navigation";
 
@@ -41,10 +39,9 @@ export function IssueWindow({ context }: { context: IssueWindowContext }) {
 
 function IssueWindowRoute() {
   const { workspaceSlug } = useParams<{ workspaceSlug: string }>();
-  const user = useAuthStore((state) => state.user);
   const { workspaces, ready, unavailable, isFetching, refetch } =
     useWorkspaceList({
-      enabled: !!user && !!workspaceSlug,
+      enabled: !!workspaceSlug,
     });
   const workspace = workspaces.find((item) => item.slug === workspaceSlug);
 
@@ -54,7 +51,7 @@ function IssueWindowRoute() {
 
   if (unavailable) {
     return (
-      <DesktopAuthRecoveryPage
+      <LocalWorkbenchRecoveryPage
         isRetrying={isFetching}
         onRetry={() => {
           void refetch();
@@ -80,7 +77,6 @@ function IssueWindowRoute() {
   return (
     <WorkspaceSlugProvider slug={workspaceSlug}>
       <IssueWindowNavigationProvider>
-        <WorkspacePresencePrefetch />
         <IssueWindowFrame>
           <IssueDetailPage onDelete={() => window.desktopAPI.closeWindow()} />
         </IssueWindowFrame>

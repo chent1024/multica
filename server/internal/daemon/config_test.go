@@ -1594,3 +1594,20 @@ func TestApplyOpenclawOverride_CLITimeout(t *testing.T) {
 		}
 	})
 }
+
+func TestIsLoopbackServerURL(t *testing.T) {
+	for _, raw := range []string{
+		"http://localhost:8080",
+		"ws://127.0.0.1:8080/ws",
+		"http://[::1]:8080",
+	} {
+		if !IsLoopbackServerURL(raw) {
+			t.Errorf("IsLoopbackServerURL(%q) = false", raw)
+		}
+	}
+	for _, raw := range []string{"https://api.example.com", "not a url", ""} {
+		if IsLoopbackServerURL(raw) {
+			t.Errorf("IsLoopbackServerURL(%q) = true", raw)
+		}
+	}
+}

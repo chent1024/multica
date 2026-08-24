@@ -6,8 +6,7 @@ const STORAGE_KEY = "multica-locale";
 //   - User choice: localStorage (set by Settings switcher).
 //   - System preference: locale main injected via additionalArguments
 //     (read from preload, exposed on window.desktopAPI.systemLocale).
-//   - Persist: localStorage. The Settings switcher additionally PATCHes
-//     /api/me when logged in so user.language follows the user across devices.
+//   - Persist: localStorage only.
 export function createDesktopLocaleAdapter(systemLocale: string): LocaleAdapter {
   return {
     getUserChoice() {
