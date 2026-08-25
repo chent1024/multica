@@ -281,6 +281,13 @@ export interface AgentTask {
   // autopilot-spawned. Check chat_session_id / autopilot_run_id to tell
   // which source produced it.
   issue_id: string;
+	/** Logical issue-session and stage attribution for this run. */
+	session_id?: string;
+	stage_id?: string;
+	stage_kind?: import("./api").IssueSessionStageKind;
+	prior_task_id?: string;
+	continuity_state?: "fresh" | "pending" | "resumed" | "gap";
+	continuity_reason?: string;
   // `waiting_local_directory` is the daemon-emitted hold state for the
   // local_directory flow: a task that has been dispatched but is parked
   // because another task currently owns the same on-disk path lock.

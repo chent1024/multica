@@ -70,6 +70,11 @@ afterEach(() => {
 });
 
 describe("ActiveTaskRow", () => {
+	it("labels the persisted session stage and continuity gap", () => {
+		renderWithI18n(<ActiveTaskRow task={makeTask({ stage_kind: "review", continuity_state: "gap" })} issueId="issue-1" />);
+		expect(screen.getByText("Review · Context gap")).toBeInTheDocument();
+	});
+
   it("renders running status as elapsed time only", () => {
     renderWithI18n(
       <ActiveTaskRow

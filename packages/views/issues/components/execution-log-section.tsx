@@ -367,6 +367,7 @@ export function ActiveTaskRow({
   return (
     <RowShell task={task}>
       <TriggerText text={trigger} />
+	  <SessionRunMeta task={task} />
       <TaskCommentCoverage task={task} />
       <RowStatus title={label}>
         {task.status === "running" ? (
@@ -501,6 +502,7 @@ function PastRow({ task, issueId }: { task: AgentTask; issueId: string }) {
   return (
     <RowShell task={task} title={rowTitle}>
       <TriggerText text={trigger} />
+	  <SessionRunMeta task={task} />
       <TaskCommentCoverage task={task} />
       <RowStatus title={statusTitle}>
         <TaskStatusIcon status={task.status} />
@@ -579,6 +581,19 @@ function RowShell({
 
 function TriggerText({ text }: { text: string }) {
   return <span className="min-w-0 flex-1 truncate text-caption text-muted-foreground">{text}</span>;
+}
+
+function SessionRunMeta({ task }: { task: AgentTask }) {
+	const { t } = useT("issues");
+	if (!task.stage_kind || !task.continuity_state) return null;
+	return (
+		<span
+			title={`${t(($) => $.issue_session.stages[task.stage_kind!])} · ${t(($) => $.issue_session.continuity[task.continuity_state!])}`}
+			className={`shrink-0 rounded-full border px-1.5 py-0.5 text-micro ${task.continuity_state === "gap" ? "border-destructive/40 text-destructive" : "text-muted-foreground"}`}
+		>
+			{t(($) => $.issue_session.stages[task.stage_kind!])} · {t(($) => $.issue_session.continuity[task.continuity_state!])}
+		</span>
+	);
 }
 
 function supportsCommentCoverage(status: AgentTask["status"]): boolean {

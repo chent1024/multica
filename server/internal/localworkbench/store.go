@@ -152,7 +152,7 @@ func migrateLocalSchema(ctx context.Context, db *sql.DB) error {
 	if err != nil {
 		return err
 	}
-	hasHandoffNote := false
+	columns := map[string]bool{}
 	for rows.Next() {
 		var cid, notNull, primaryKey int
 		var name, columnType string
@@ -161,9 +161,7 @@ func migrateLocalSchema(ctx context.Context, db *sql.DB) error {
 			_ = rows.Close()
 			return err
 		}
-		if name == "handoff_note" {
-			hasHandoffNote = true
-		}
+		columns[name] = true
 	}
 	if err := rows.Close(); err != nil {
 		return err
@@ -173,7 +171,7 @@ func migrateLocalSchema(ctx context.Context, db *sql.DB) error {
 		return err
 	}
 	defer func() { _ = tx.Rollback() }()
-	if !hasHandoffNote {
+	if !columns["handoff_note"] {
 		if _, err := tx.ExecContext(ctx, `ALTER TABLE task_runs ADD COLUMN handoff_note TEXT`); err != nil {
 			return err
 		}
@@ -221,6 +219,110 @@ func migrateLocalSchema(ctx context.Context, db *sql.DB) error {
 		return err
 	}
 	if _, err := tx.ExecContext(ctx, `INSERT OR IGNORE INTO schema_version(version, applied_at) VALUES (6, ?)`, now()); err != nil {
+		return err
+	}
+	for _, column := range []struct {
+		name string
+		sql  string
+	}{
+		{name: "session_id", sql: `ALTER TABLE task_runs ADD COLUMN session_id TEXT`},
+		{name: "stage_id", sql: `ALTER TABLE task_runs ADD COLUMN stage_id TEXT`},
+		{name: "work_dir", sql: `ALTER TABLE task_runs ADD COLUMN work_dir TEXT`},
+		{name: "prior_task_id", sql: `ALTER TABLE task_runs ADD COLUMN prior_task_id TEXT`},
+		{name: "continuity_state", sql: `ALTER TABLE task_runs ADD COLUMN continuity_state TEXT NOT NULL DEFAULT 'fresh'`},
+		{name: "continuity_reason", sql: `ALTER TABLE task_runs ADD COLUMN continuity_reason TEXT`},
+	} {
+		if !columns[column.name] {
+			if _, err := tx.ExecContext(ctx, column.sql); err != nil {
+				return err
+			}
+		}
+	}
+	if _, err := tx.ExecContext(ctx, `CREATE TABLE IF NOT EXISTS issue_sessions (
+		id TEXT PRIMARY KEY,
+		issue_id TEXT NOT NULL UNIQUE,
+		workspace_id TEXT NOT NULL,
+		active_stage_id TEXT NOT NULL,
+		continuity_state TEXT NOT NULL DEFAULT 'fresh',
+		continuity_reason TEXT,
+		created_at TEXT NOT NULL,
+		updated_at TEXT NOT NULL
+	)`); err != nil {
+		return err
+	}
+	if _, err := tx.ExecContext(ctx, `CREATE INDEX IF NOT EXISTS issue_sessions_workspace_idx ON issue_sessions(workspace_id, updated_at DESC)`); err != nil {
+		return err
+	}
+	if _, err := tx.ExecContext(ctx, `CREATE TABLE IF NOT EXISTS issue_session_stages (
+		id TEXT PRIMARY KEY,
+		session_id TEXT NOT NULL,
+		kind TEXT NOT NULL,
+		status TEXT NOT NULL,
+		position INTEGER NOT NULL,
+		migrated INTEGER NOT NULL DEFAULT 0,
+		started_at TEXT NOT NULL,
+		completed_at TEXT
+	)`); err != nil {
+		return err
+	}
+	if _, err := tx.ExecContext(ctx, `CREATE INDEX IF NOT EXISTS issue_session_stages_session_idx ON issue_session_stages(session_id, position)`); err != nil {
+		return err
+	}
+	if _, err := tx.ExecContext(ctx, `CREATE TABLE IF NOT EXISTS issue_handoffs (
+		id TEXT PRIMARY KEY,
+		child_issue_id TEXT NOT NULL UNIQUE,
+		parent_issue_id TEXT NOT NULL,
+		parent_session_id TEXT NOT NULL,
+		source_stage_id TEXT NOT NULL,
+		source_run_id TEXT,
+		objective TEXT NOT NULL,
+		confirmed_facts TEXT NOT NULL DEFAULT '[]',
+		decisions TEXT NOT NULL DEFAULT '[]',
+		constraints TEXT NOT NULL DEFAULT '[]',
+		acceptance_criteria TEXT NOT NULL DEFAULT '[]',
+		references_json TEXT NOT NULL DEFAULT '[]',
+		open_questions TEXT NOT NULL DEFAULT '[]',
+		created_at TEXT NOT NULL
+	)`); err != nil {
+		return err
+	}
+	if _, err := tx.ExecContext(ctx, `CREATE INDEX IF NOT EXISTS issue_handoffs_parent_idx ON issue_handoffs(parent_issue_id, created_at)`); err != nil {
+		return err
+	}
+	issueRows, err := tx.QueryContext(ctx, `SELECT i.id, i.workspace_id, EXISTS(SELECT 1 FROM task_runs tr WHERE tr.issue_id=i.id) FROM issues i WHERE NOT EXISTS(SELECT 1 FROM issue_sessions s WHERE s.issue_id=i.id) ORDER BY i.created_at, i.id`)
+	if err != nil {
+		return err
+	}
+	type issueBackfill struct {
+		id, workspaceID string
+		hasRuns         bool
+	}
+	backfill := []issueBackfill{}
+	for issueRows.Next() {
+		var item issueBackfill
+		if err := issueRows.Scan(&item.id, &item.workspaceID, &item.hasRuns); err != nil {
+			_ = issueRows.Close()
+			return err
+		}
+		backfill = append(backfill, item)
+	}
+	if err := issueRows.Close(); err != nil {
+		return err
+	}
+	for _, item := range backfill {
+		kind := initialSessionStage
+		if item.hasRuns {
+			kind = migratedRunStage
+		}
+		sessionID, stageID, err := createIssueSessionTx(ctx, tx, item.workspaceID, item.id, kind, item.hasRuns)
+		if err != nil {
+			return err
+		}
+		if _, err := tx.ExecContext(ctx, `UPDATE task_runs SET session_id=?, stage_id=?, continuity_state='fresh' WHERE issue_id=? AND session_id IS NULL`, sessionID, stageID, item.id); err != nil {
+			return err
+		}
+	}
+	if _, err := tx.ExecContext(ctx, `INSERT OR IGNORE INTO schema_version(version, applied_at) VALUES (7, ?)`, now()); err != nil {
 		return err
 	}
 	return tx.Commit()
@@ -490,21 +592,30 @@ func scanIssue(row rowScanner) (Issue, error) {
 }
 
 type CreateIssueInput struct {
-	Title         string         `json:"title"`
-	Description   string         `json:"description"`
-	Status        string         `json:"status"`
-	Priority      string         `json:"priority"`
-	AssigneeType  *string        `json:"assignee_type"`
-	AssigneeID    *string        `json:"assignee_id"`
-	ProjectID     *string        `json:"project_id"`
-	ParentIssueID *string        `json:"parent_issue_id"`
-	StartDate     *string        `json:"start_date"`
-	DueDate       *string        `json:"due_date"`
-	Metadata      map[string]any `json:"metadata"`
-	AttachmentIDs []string       `json:"attachment_ids"`
+	Title         string             `json:"title"`
+	Description   string             `json:"description"`
+	Status        string             `json:"status"`
+	Priority      string             `json:"priority"`
+	AssigneeType  *string            `json:"assignee_type"`
+	AssigneeID    *string            `json:"assignee_id"`
+	ProjectID     *string            `json:"project_id"`
+	ParentIssueID *string            `json:"parent_issue_id"`
+	StartDate     *string            `json:"start_date"`
+	DueDate       *string            `json:"due_date"`
+	Metadata      map[string]any     `json:"metadata"`
+	AttachmentIDs []string           `json:"attachment_ids"`
+	Handoff       *IssueHandoffInput `json:"handoff,omitempty"`
 }
 
 func (s *Store) CreateIssue(ctx context.Context, workspaceID string, input CreateIssueInput) (Issue, error) {
+	if input.Handoff != nil {
+		if input.ParentIssueID == nil || strings.TrimSpace(*input.ParentIssueID) == "" {
+			return Issue{}, fmt.Errorf("%w: parent issue is required", ErrInvalidIssueHandoff)
+		}
+		if err := validateHandoff(*input.Handoff); err != nil {
+			return Issue{}, err
+		}
+	}
 	if input.ProjectID != nil {
 		if _, err := s.GetProject(ctx, workspaceID, *input.ProjectID); err != nil {
 			return Issue{}, err
@@ -543,6 +654,14 @@ func (s *Store) CreateIssue(ctx context.Context, workspaceID string, input Creat
 		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 'system', ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`, id, workspaceID, number, input.Title, nullable(input.Description), input.Status, input.Priority, input.AssigneeType, input.AssigneeID, LocalActorID, input.ParentIssueID, input.ProjectID, position, input.StartDate, input.DueDate, string(metadata), stamp, stamp, stamp)
 	if err != nil {
 		return Issue{}, err
+	}
+	if _, _, err := createIssueSessionTx(ctx, tx, workspaceID, id, initialSessionStage, false); err != nil {
+		return Issue{}, err
+	}
+	if input.Handoff != nil {
+		if err := createIssueHandoffTx(ctx, tx, workspaceID, id, *input.ParentIssueID, *input.Handoff); err != nil {
+			return Issue{}, err
+		}
 	}
 	_, err = tx.ExecContext(ctx, `INSERT INTO activities(id, issue_id, actor_type, actor_id, action, details, created_at) VALUES (?, ?, 'system', ?, 'created', '{}', ?)`, uuid.NewString(), id, LocalActorID, stamp)
 	if err != nil {
@@ -643,6 +762,15 @@ func (s *Store) DeleteIssue(ctx context.Context, workspaceID, id string) error {
 		return err
 	}
 	defer func() { _ = tx.Rollback() }()
+	if _, err := tx.ExecContext(ctx, `DELETE FROM issue_handoffs WHERE child_issue_id=? OR parent_issue_id=?`, issue.ID, issue.ID); err != nil {
+		return err
+	}
+	if _, err := tx.ExecContext(ctx, `DELETE FROM issue_session_stages WHERE session_id IN (SELECT id FROM issue_sessions WHERE issue_id=?)`, issue.ID); err != nil {
+		return err
+	}
+	if _, err := tx.ExecContext(ctx, `DELETE FROM issue_sessions WHERE issue_id=?`, issue.ID); err != nil {
+		return err
+	}
 	for _, query := range []string{"DELETE FROM attachments WHERE issue_id=?", "DELETE FROM comments WHERE issue_id=?", "DELETE FROM activities WHERE issue_id=?", "DELETE FROM task_messages WHERE issue_id=?", "DELETE FROM task_runs WHERE issue_id=?", "DELETE FROM issues WHERE id=?"} {
 		if _, err := tx.ExecContext(ctx, query, issue.ID); err != nil {
 			return err

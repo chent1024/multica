@@ -94,6 +94,14 @@ import {
 import { IssuePickerModal } from "./issue-picker-modal";
 import { useT } from "../i18n";
 
+function handoffLines(value: string): string[] {
+	return value.split("\n").map((item) => item.trim()).filter(Boolean);
+}
+
+function emptyHandoffDetails() {
+	return { confirmed_facts: "", decisions: "", constraints: "", acceptance_criteria: "", references: "", open_questions: "" };
+}
+
 // ---------------------------------------------------------------------------
 // ManualCreatePanel — manual-mode body of the create-issue dialog. Renders
 // DialogContent + everything inside; the surrounding `<Dialog>` is owned by
@@ -275,6 +283,8 @@ export function ManualCreatePanel({
   const [parentIssueId, setParentIssueId] = useState<string | undefined>(
     (data?.parent_issue_id as string) || undefined,
   );
+  const [handoffObjective, setHandoffObjective] = useState("");
+	const [handoffDetails, setHandoffDetails] = useState(emptyHandoffDetails);
   // Stage only applies to a sub-issue; kept local (not in the persisted draft)
   // since it's a per-creation choice tied to the chosen parent.
   const [stage, setStage] = useState<number | null>(
@@ -434,6 +444,8 @@ export function ManualCreatePanel({
     setCustomPropertyPickerId(null);
     setProjectId(undefined);
     setParentIssueId(undefined);
+	setHandoffObjective("");
+	setHandoffDetails(emptyHandoffDetails());
     setStage(null);
     setChildIssues([]);
     // Keep the just-used assignee for the next issue in the batch; reset
@@ -510,6 +522,15 @@ export function ManualCreatePanel({
         // compatibility fallback below.
         label_ids: labelIds.length > 0 ? labelIds : undefined,
         parent_issue_id: parentIssueId,
+		handoff: parentIssueId && handoffObjective.trim() ? {
+			objective: handoffObjective.trim(),
+			confirmed_facts: handoffLines(handoffDetails.confirmed_facts),
+			decisions: handoffLines(handoffDetails.decisions),
+			constraints: handoffLines(handoffDetails.constraints),
+			acceptance_criteria: handoffLines(handoffDetails.acceptance_criteria),
+			references: handoffLines(handoffDetails.references),
+			open_questions: handoffLines(handoffDetails.open_questions),
+		} : undefined,
         // Stage is only meaningful for a sub-issue (relative to its siblings).
         stage: parentIssueId && stage != null ? stage : undefined,
         project_id: projectId,
@@ -913,6 +934,38 @@ export function ManualCreatePanel({
               />
               {descDragOver && <FileDropOverlay />}
             </div>
+			{parentIssueId && (
+				<div className="shrink-0 px-5 pb-2">
+					<label className="mb-1 block text-caption font-medium text-muted-foreground" htmlFor="issue-handoff-objective">
+						{t(($) => $.create_issue.handoff_label)}
+					</label>
+					<textarea
+						id="issue-handoff-objective"
+						value={handoffObjective}
+						onChange={(event) => setHandoffObjective(event.target.value)}
+						placeholder={t(($) => $.create_issue.handoff_placeholder)}
+						className="min-h-16 w-full resize-y rounded-md border bg-transparent px-3 py-2 text-body outline-none focus-visible:ring-2 focus-visible:ring-ring"
+						maxLength={4000}
+					/>
+					<details className="mt-2">
+						<summary className="cursor-pointer text-caption text-muted-foreground">{t(($) => $.create_issue.handoff_details)}</summary>
+						<div className="mt-2 grid gap-2 sm:grid-cols-2">
+							{(Object.keys(handoffDetails) as Array<keyof typeof handoffDetails>).map((key) => (
+								<label key={key} className="text-caption text-muted-foreground">
+									{t(($) => $.create_issue.handoff_sections[key])}
+									<textarea
+										value={handoffDetails[key]}
+										onChange={(event) => setHandoffDetails((current) => ({ ...current, [key]: event.target.value }))}
+										placeholder={t(($) => $.create_issue.handoff_lines_hint)}
+										className="mt-1 min-h-14 w-full resize-y rounded-md border bg-transparent px-2 py-1.5 text-caption text-foreground outline-none focus-visible:ring-2 focus-visible:ring-ring"
+										maxLength={20000}
+									/>
+								</label>
+							))}
+						</div>
+					</details>
+				</div>
+			)}
 
 
             {/* Pre-trigger preview — a passive caption above the toolbar; reveals

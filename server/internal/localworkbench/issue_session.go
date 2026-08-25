@@ -1,0 +1,284 @@
+package localworkbench
+
+import (
+	"context"
+	"database/sql"
+	"encoding/json"
+	"errors"
+	"fmt"
+	"strings"
+
+	"github.com/google/uuid"
+)
+
+const (
+	initialSessionStage = "analysis"
+	migratedRunStage    = "implementation"
+	maxHandoffItems     = 20
+	maxHandoffItemRunes = 1000
+	maxHandoffObjective = 4000
+)
+
+var sessionStageKinds = map[string]struct{}{
+	"analysis": {}, "implementation": {}, "review": {}, "test": {},
+	"commit": {}, "push": {}, "release": {},
+}
+
+var ErrInvalidIssueHandoff = errors.New("invalid issue handoff")
+
+func isSessionStageKind(kind string) bool {
+	_, ok := sessionStageKinds[kind]
+	return ok
+}
+
+type IssueSessionStage struct {
+	ID          string  `json:"id"`
+	SessionID   string  `json:"session_id"`
+	Kind        string  `json:"kind"`
+	Status      string  `json:"status"`
+	Position    int64   `json:"position"`
+	Migrated    bool    `json:"migrated"`
+	StartedAt   string  `json:"started_at"`
+	CompletedAt *string `json:"completed_at"`
+}
+
+type IssueHandoffInput struct {
+	Objective          string   `json:"objective"`
+	ConfirmedFacts     []string `json:"confirmed_facts"`
+	Decisions          []string `json:"decisions"`
+	Constraints        []string `json:"constraints"`
+	AcceptanceCriteria []string `json:"acceptance_criteria"`
+	References         []string `json:"references"`
+	OpenQuestions      []string `json:"open_questions"`
+	SourceRunID        string   `json:"source_run_id,omitempty"`
+}
+
+type IssueHandoff struct {
+	ID                 string   `json:"id"`
+	ChildIssueID       string   `json:"child_issue_id"`
+	ParentIssueID      string   `json:"parent_issue_id"`
+	ParentSessionID    string   `json:"parent_session_id"`
+	SourceStageID      string   `json:"source_stage_id"`
+	SourceRunID        *string  `json:"source_run_id"`
+	Objective          string   `json:"objective"`
+	ConfirmedFacts     []string `json:"confirmed_facts"`
+	Decisions          []string `json:"decisions"`
+	Constraints        []string `json:"constraints"`
+	AcceptanceCriteria []string `json:"acceptance_criteria"`
+	References         []string `json:"references"`
+	OpenQuestions      []string `json:"open_questions"`
+	CreatedAt          string   `json:"created_at"`
+}
+
+type IssueSession struct {
+	ID               string              `json:"id"`
+	IssueID          string              `json:"issue_id"`
+	WorkspaceID      string              `json:"workspace_id"`
+	ActiveStageID    string              `json:"active_stage_id"`
+	ContinuityState  string              `json:"continuity_state"`
+	ContinuityReason *string             `json:"continuity_reason"`
+	CreatedAt        string              `json:"created_at"`
+	UpdatedAt        string              `json:"updated_at"`
+	Stages           []IssueSessionStage `json:"stages"`
+	Handoff          *IssueHandoff       `json:"handoff"`
+}
+
+func createIssueSessionTx(ctx context.Context, tx *sql.Tx, workspaceID, issueID, kind string, migrated bool) (string, string, error) {
+	if _, ok := sessionStageKinds[kind]; !ok {
+		return "", "", fmt.Errorf("invalid session stage kind: %s", kind)
+	}
+	stamp := now()
+	sessionID, stageID := uuid.NewString(), uuid.NewString()
+	if _, err := tx.ExecContext(ctx, `INSERT INTO issue_sessions(id, issue_id, workspace_id, active_stage_id, continuity_state, created_at, updated_at) VALUES (?, ?, ?, ?, 'fresh', ?, ?)`, sessionID, issueID, workspaceID, stageID, stamp, stamp); err != nil {
+		return "", "", fmt.Errorf("creating issue session: %w", err)
+	}
+	if _, err := tx.ExecContext(ctx, `INSERT INTO issue_session_stages(id, session_id, kind, status, position, migrated, started_at) VALUES (?, ?, ?, 'active', 0, ?, ?)`, stageID, sessionID, kind, migrated, stamp); err != nil {
+		return "", "", fmt.Errorf("creating initial issue session stage: %w", err)
+	}
+	return sessionID, stageID, nil
+}
+
+func validateHandoff(input IssueHandoffInput) error {
+	if strings.TrimSpace(input.Objective) == "" {
+		return fmt.Errorf("%w: objective is required", ErrInvalidIssueHandoff)
+	}
+	if len([]rune(input.Objective)) > maxHandoffObjective {
+		return fmt.Errorf("%w: objective is too long", ErrInvalidIssueHandoff)
+	}
+	sections := [][]string{input.ConfirmedFacts, input.Decisions, input.Constraints, input.AcceptanceCriteria, input.References, input.OpenQuestions}
+	for _, items := range sections {
+		if len(items) > maxHandoffItems {
+			return fmt.Errorf("%w: section has too many items", ErrInvalidIssueHandoff)
+		}
+		for _, item := range items {
+			if strings.TrimSpace(item) == "" || len([]rune(item)) > maxHandoffItemRunes {
+				return fmt.Errorf("%w: items must be non-empty and bounded", ErrInvalidIssueHandoff)
+			}
+		}
+	}
+	return nil
+}
+
+func createIssueHandoffTx(ctx context.Context, tx *sql.Tx, workspaceID, childIssueID, parentIssueID string, input IssueHandoffInput) error {
+	if err := validateHandoff(input); err != nil {
+		return err
+	}
+	var parentSessionID, sourceStageID string
+	if err := tx.QueryRowContext(ctx, `SELECT id, active_stage_id FROM issue_sessions WHERE workspace_id=? AND issue_id=?`, workspaceID, parentIssueID).Scan(&parentSessionID, &sourceStageID); err != nil {
+		return fmt.Errorf("reading parent issue session: %w", err)
+	}
+	if input.SourceRunID != "" {
+		var runStageID sql.NullString
+		if err := tx.QueryRowContext(ctx, `SELECT stage_id FROM task_runs WHERE id=? AND issue_id=? AND session_id=?`, input.SourceRunID, parentIssueID, parentSessionID).Scan(&runStageID); err != nil {
+			if errors.Is(err, sql.ErrNoRows) {
+				return fmt.Errorf("%w: source run does not belong to parent session", ErrInvalidIssueHandoff)
+			}
+			return fmt.Errorf("checking handoff source run: %w", err)
+		}
+		if !runStageID.Valid || strings.TrimSpace(runStageID.String) == "" {
+			return fmt.Errorf("%w: source run has no session stage", ErrInvalidIssueHandoff)
+		}
+		sourceStageID = runStageID.String
+	}
+	encode := func(items []string) (string, error) {
+		if items == nil {
+			items = []string{}
+		}
+		raw, err := json.Marshal(items)
+		return string(raw), err
+	}
+	facts, err := encode(input.ConfirmedFacts)
+	if err != nil {
+		return err
+	}
+	decisions, err := encode(input.Decisions)
+	if err != nil {
+		return err
+	}
+	constraints, err := encode(input.Constraints)
+	if err != nil {
+		return err
+	}
+	criteria, err := encode(input.AcceptanceCriteria)
+	if err != nil {
+		return err
+	}
+	references, err := encode(input.References)
+	if err != nil {
+		return err
+	}
+	questions, err := encode(input.OpenQuestions)
+	if err != nil {
+		return err
+	}
+	_, err = tx.ExecContext(ctx, `INSERT INTO issue_handoffs(id, child_issue_id, parent_issue_id, parent_session_id, source_stage_id, source_run_id, objective, confirmed_facts, decisions, constraints, acceptance_criteria, references_json, open_questions, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`, uuid.NewString(), childIssueID, parentIssueID, parentSessionID, sourceStageID, nullable(input.SourceRunID), strings.TrimSpace(input.Objective), facts, decisions, constraints, criteria, references, questions, now())
+	if err != nil {
+		return fmt.Errorf("creating issue handoff: %w", err)
+	}
+	return nil
+}
+
+func (s *Store) GetIssueSession(ctx context.Context, workspaceID, issueID string) (IssueSession, error) {
+	var session IssueSession
+	var continuityReason sql.NullString
+	err := s.db.QueryRowContext(ctx, `SELECT id, issue_id, workspace_id, active_stage_id, continuity_state, continuity_reason, created_at, updated_at FROM issue_sessions WHERE workspace_id=? AND issue_id=?`, workspaceID, issueID).Scan(&session.ID, &session.IssueID, &session.WorkspaceID, &session.ActiveStageID, &session.ContinuityState, &continuityReason, &session.CreatedAt, &session.UpdatedAt)
+	if err != nil {
+		return IssueSession{}, err
+	}
+	session.ContinuityReason = stringPtr(continuityReason)
+	rows, err := s.db.QueryContext(ctx, `SELECT id, session_id, kind, status, position, migrated, started_at, completed_at FROM issue_session_stages WHERE session_id=? ORDER BY position`, session.ID)
+	if err != nil {
+		return IssueSession{}, err
+	}
+	defer rows.Close()
+	session.Stages = []IssueSessionStage{}
+	for rows.Next() {
+		var stage IssueSessionStage
+		var migrated int
+		var completedAt sql.NullString
+		if err := rows.Scan(&stage.ID, &stage.SessionID, &stage.Kind, &stage.Status, &stage.Position, &migrated, &stage.StartedAt, &completedAt); err != nil {
+			return IssueSession{}, err
+		}
+		stage.Migrated = migrated != 0
+		stage.CompletedAt = stringPtr(completedAt)
+		session.Stages = append(session.Stages, stage)
+	}
+	if err := rows.Err(); err != nil {
+		return IssueSession{}, err
+	}
+	handoff, err := s.getIssueHandoff(ctx, issueID)
+	if err != nil && !errors.Is(err, sql.ErrNoRows) {
+		return IssueSession{}, err
+	}
+	if err == nil {
+		session.Handoff = &handoff
+	}
+	return session, nil
+}
+
+func (s *Store) ActivateIssueSessionStage(ctx context.Context, workspaceID, issueID, kind string) (IssueSession, error) {
+	if _, ok := sessionStageKinds[kind]; !ok {
+		return IssueSession{}, fmt.Errorf("invalid session stage kind: %s", kind)
+	}
+	tx, err := s.db.BeginTx(ctx, nil)
+	if err != nil {
+		return IssueSession{}, err
+	}
+	defer func() { _ = tx.Rollback() }()
+	var sessionID, activeStageID, activeKind string
+	if err := tx.QueryRowContext(ctx, `SELECT s.id, s.active_stage_id, st.kind FROM issue_sessions s JOIN issue_session_stages st ON st.id=s.active_stage_id WHERE s.workspace_id=? AND s.issue_id=?`, workspaceID, issueID).Scan(&sessionID, &activeStageID, &activeKind); err != nil {
+		return IssueSession{}, err
+	}
+	if activeKind != kind {
+		stamp := now()
+		if _, err := tx.ExecContext(ctx, `UPDATE issue_session_stages SET status='completed', completed_at=? WHERE id=? AND session_id=? AND status='active'`, stamp, activeStageID, sessionID); err != nil {
+			return IssueSession{}, err
+		}
+		var position int64
+		if err := tx.QueryRowContext(ctx, `SELECT COALESCE(MAX(position), -1)+1 FROM issue_session_stages WHERE session_id=?`, sessionID).Scan(&position); err != nil {
+			return IssueSession{}, err
+		}
+		stageID := uuid.NewString()
+		if _, err := tx.ExecContext(ctx, `INSERT INTO issue_session_stages(id, session_id, kind, status, position, migrated, started_at) VALUES (?, ?, ?, 'active', ?, 0, ?)`, stageID, sessionID, kind, position, stamp); err != nil {
+			return IssueSession{}, err
+		}
+		if _, err := tx.ExecContext(ctx, `UPDATE issue_sessions SET active_stage_id=?, updated_at=? WHERE id=?`, stageID, stamp, sessionID); err != nil {
+			return IssueSession{}, err
+		}
+	}
+	if err := tx.Commit(); err != nil {
+		return IssueSession{}, err
+	}
+	return s.GetIssueSession(ctx, workspaceID, issueID)
+}
+
+func (s *Store) getIssueHandoff(ctx context.Context, childIssueID string) (IssueHandoff, error) {
+	var handoff IssueHandoff
+	var sourceRunID sql.NullString
+	var facts, decisions, constraints, criteria, references, questions string
+	err := s.db.QueryRowContext(ctx, `SELECT id, child_issue_id, parent_issue_id, parent_session_id, source_stage_id, source_run_id, objective, confirmed_facts, decisions, constraints, acceptance_criteria, references_json, open_questions, created_at FROM issue_handoffs WHERE child_issue_id=?`, childIssueID).Scan(&handoff.ID, &handoff.ChildIssueID, &handoff.ParentIssueID, &handoff.ParentSessionID, &handoff.SourceStageID, &sourceRunID, &handoff.Objective, &facts, &decisions, &constraints, &criteria, &references, &questions, &handoff.CreatedAt)
+	if err != nil {
+		return IssueHandoff{}, err
+	}
+	handoff.SourceRunID = stringPtr(sourceRunID)
+	decode := func(raw string, target *[]string) error { return json.Unmarshal([]byte(raw), target) }
+	if err := decode(facts, &handoff.ConfirmedFacts); err != nil {
+		return IssueHandoff{}, err
+	}
+	if err := decode(decisions, &handoff.Decisions); err != nil {
+		return IssueHandoff{}, err
+	}
+	if err := decode(constraints, &handoff.Constraints); err != nil {
+		return IssueHandoff{}, err
+	}
+	if err := decode(criteria, &handoff.AcceptanceCriteria); err != nil {
+		return IssueHandoff{}, err
+	}
+	if err := decode(references, &handoff.References); err != nil {
+		return IssueHandoff{}, err
+	}
+	if err := decode(questions, &handoff.OpenQuestions); err != nil {
+		return IssueHandoff{}, err
+	}
+	return handoff, nil
+}

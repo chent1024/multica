@@ -134,6 +134,8 @@ func (s *Server) Router() http.Handler {
 		api.Post("/issues/batch-update", s.batchUpdateIssues)
 		api.Post("/issues/batch-delete", s.batchDeleteIssues)
 		api.Get("/issues/{id}", s.getIssue)
+		api.Get("/issues/{id}/session", s.getIssueSession)
+		api.Post("/issues/{id}/session/stages", s.activateIssueSessionStage)
 		api.Put("/issues/{id}", s.updateIssue)
 		api.Post("/issues/{id}/move", s.moveIssue)
 		api.Delete("/issues/{id}", s.deleteIssue)
@@ -998,6 +1000,10 @@ func (s *Server) createIssue(w http.ResponseWriter, r *http.Request) {
 	}
 	item, err := s.store.CreateIssue(r.Context(), ws.ID, input)
 	if err != nil {
+		if errors.Is(err, ErrInvalidIssueHandoff) {
+			writeError(w, http.StatusBadRequest, err)
+			return
+		}
 		s.fail(w, err)
 		return
 	}
@@ -1007,6 +1013,41 @@ func (s *Server) createIssue(w http.ResponseWriter, r *http.Request) {
 	}
 	s.hub.broadcast("issue:created", map[string]any{"issue": item})
 	writeJSON(w, 201, item)
+}
+
+func (s *Server) getIssueSession(w http.ResponseWriter, r *http.Request) {
+	ws, err := s.workspaceFor(r)
+	if err != nil {
+		s.respondStoreError(w, err)
+		return
+	}
+	session, err := s.store.GetIssueSession(r.Context(), ws.ID, chi.URLParam(r, "id"))
+	if err != nil {
+		s.respondStoreError(w, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, session)
+}
+
+func (s *Server) activateIssueSessionStage(w http.ResponseWriter, r *http.Request) {
+	ws, err := s.workspaceFor(r)
+	if err != nil {
+		s.respondStoreError(w, err)
+		return
+	}
+	var input struct {
+		Kind string `json:"kind"`
+	}
+	if err := decodeBody(r, &input); err != nil || !isSessionStageKind(input.Kind) {
+		writeError(w, http.StatusBadRequest, errors.New("invalid issue session stage kind"))
+		return
+	}
+	session, err := s.store.ActivateIssueSessionStage(r.Context(), ws.ID, chi.URLParam(r, "id"), input.Kind)
+	if err != nil {
+		s.respondStoreError(w, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, session)
 }
 
 func (s *Server) quickCreateIssue(w http.ResponseWriter, r *http.Request) {
@@ -1400,7 +1441,7 @@ func (s *Server) listTaskRuns(w http.ResponseWriter, r *http.Request) {
 		s.respondStoreError(w, err)
 		return
 	}
-	rows, err := s.store.db.QueryContext(r.Context(), `SELECT id, issue_id, status, thread_id, runtime, handoff_note, summary, error, started_at, completed_at, created_at FROM task_runs WHERE issue_id=? ORDER BY created_at DESC`, chi.URLParam(r, "id"))
+	rows, err := s.store.db.QueryContext(r.Context(), `SELECT tr.id, tr.issue_id, tr.status, tr.thread_id, tr.runtime, tr.handoff_note, tr.summary, tr.error, tr.started_at, tr.completed_at, tr.created_at, tr.session_id, tr.stage_id, tr.prior_task_id, tr.continuity_state, tr.continuity_reason, st.kind FROM task_runs tr LEFT JOIN issue_session_stages st ON st.id=tr.stage_id WHERE tr.issue_id=? ORDER BY tr.created_at DESC`, chi.URLParam(r, "id"))
 	if err != nil {
 		s.fail(w, err)
 		return
@@ -1409,12 +1450,13 @@ func (s *Server) listTaskRuns(w http.ResponseWriter, r *http.Request) {
 	items := []any{}
 	for rows.Next() {
 		var id, issueID, status, createdAt string
-		var threadID, runtimeName, handoffNote, summary, errorText, startedAt, completedAt sql.NullString
-		if err := rows.Scan(&id, &issueID, &status, &threadID, &runtimeName, &handoffNote, &summary, &errorText, &startedAt, &completedAt, &createdAt); err != nil {
+		var threadID, runtimeName, handoffNote, summary, errorText, startedAt, completedAt, sessionID, stageID, priorTaskID, continuityReason, stageKind sql.NullString
+		var continuityState string
+		if err := rows.Scan(&id, &issueID, &status, &threadID, &runtimeName, &handoffNote, &summary, &errorText, &startedAt, &completedAt, &createdAt, &sessionID, &stageID, &priorTaskID, &continuityState, &continuityReason, &stageKind); err != nil {
 			s.fail(w, err)
 			return
 		}
-		items = append(items, map[string]any{"id": id, "agent_id": LocalAgentID, "runtime_id": nullableString(runtimeName), "issue_id": issueID, "status": status, "priority": 0, "handoff_note": nullableString(handoffNote), "dispatched_at": nil, "started_at": stringPtr(startedAt), "completed_at": stringPtr(completedAt), "result": map[string]any{"thread_id": nullableString(threadID), "summary": nullableString(summary)}, "error": stringPtr(errorText), "created_at": createdAt})
+		items = append(items, map[string]any{"id": id, "agent_id": LocalAgentID, "runtime_id": nullableString(runtimeName), "issue_id": issueID, "status": status, "priority": 0, "handoff_note": nullableString(handoffNote), "dispatched_at": nil, "started_at": stringPtr(startedAt), "completed_at": stringPtr(completedAt), "result": map[string]any{"thread_id": nullableString(threadID), "summary": nullableString(summary)}, "error": stringPtr(errorText), "created_at": createdAt, "session_id": nullableString(sessionID), "stage_id": nullableString(stageID), "stage_kind": nullableString(stageKind), "prior_task_id": nullableString(priorTaskID), "continuity_state": continuityState, "continuity_reason": nullableString(continuityReason)})
 	}
 	writeJSON(w, 200, items)
 }
@@ -1430,8 +1472,8 @@ func (s *Server) activeTask(w http.ResponseWriter, r *http.Request) {
 		s.respondStoreError(w, err)
 		return
 	}
-	var id, status, runtimeID, createdAt string
-	err = s.store.db.QueryRowContext(r.Context(), `SELECT id, status, COALESCE(runtime,''), created_at FROM task_runs WHERE issue_id=? AND status IN ('queued','dispatched','waiting_local_directory','running') ORDER BY created_at DESC LIMIT 1`, issueID).Scan(&id, &status, &runtimeID, &createdAt)
+	var id, status, runtimeID, createdAt, sessionID, stageID, stageKind, continuityState string
+	err = s.store.db.QueryRowContext(r.Context(), `SELECT tr.id, tr.status, COALESCE(tr.runtime,''), tr.created_at, COALESCE(tr.session_id,''), COALESCE(tr.stage_id,''), COALESCE(st.kind,''), tr.continuity_state FROM task_runs tr LEFT JOIN issue_session_stages st ON st.id=tr.stage_id WHERE tr.issue_id=? AND tr.status IN ('queued','dispatched','waiting_local_directory','running') ORDER BY tr.created_at DESC LIMIT 1`, issueID).Scan(&id, &status, &runtimeID, &createdAt, &sessionID, &stageID, &stageKind, &continuityState)
 	if errors.Is(err, sql.ErrNoRows) {
 		writeJSON(w, http.StatusOK, map[string]any{"tasks": []any{}})
 		return
@@ -1440,7 +1482,7 @@ func (s *Server) activeTask(w http.ResponseWriter, r *http.Request) {
 		s.fail(w, err)
 		return
 	}
-	writeJSON(w, http.StatusOK, map[string]any{"tasks": []any{map[string]any{"id": id, "agent_id": LocalAgentID, "runtime_id": runtimeID, "issue_id": issueID, "status": status, "priority": 0, "created_at": createdAt}}})
+	writeJSON(w, http.StatusOK, map[string]any{"tasks": []any{map[string]any{"id": id, "agent_id": LocalAgentID, "runtime_id": runtimeID, "issue_id": issueID, "status": status, "priority": 0, "created_at": createdAt, "session_id": sessionID, "stage_id": stageID, "stage_kind": stageKind, "continuity_state": continuityState}}})
 }
 
 func (s *Server) cancelTask(w http.ResponseWriter, r *http.Request) {

@@ -1,4 +1,18 @@
 {
+	"issue_session": {
+		"section": "Issue 会话",
+		"stages_label": "会话阶段",
+		"history": "阶段历史",
+		"handoff": "父任务交接",
+		"parent_link": "打开父任务",
+		"loading": "正在加载 Issue 会话…",
+		"load_failed": "无法加载 Issue 会话。",
+		"stage_failed": "无法切换阶段。",
+		"stage_hint": "选择阶段只记录工作流状态，不会自动提交、推送或发布。",
+		"handoff_sections": { "confirmed_facts": "已确认事实", "decisions": "决策", "constraints": "约束", "acceptance_criteria": "验收标准", "references": "参考", "open_questions": "待确认问题" },
+		"continuity": { "fresh": "新会话", "pending": "待续接", "resumed": "已续接", "gap": "上下文中断" },
+		"stages": { "analysis": "分析", "implementation": "实施", "review": "审查", "test": "测试", "commit": "提交", "push": "推送", "release": "发布" }
+	},
   "status_catalog_error": {
     "title": "状态列表加载失败",
     "hint": "没有它就无法应用状态筛选，因此暂时不显示议题。",

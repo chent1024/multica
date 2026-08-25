@@ -1016,6 +1016,11 @@ func renderIssueContext(provider string, ctx TaskContextForEnv) string {
 
 	b.WriteString("# Task Assignment\n\n")
 	fmt.Fprintf(&b, "**Issue ID:** %s\n\n", ctx.IssueID)
+	if ctx.IssueSessionID != "" {
+		fmt.Fprintf(&b, "**Issue Session:** `%s`\n", ctx.IssueSessionID)
+		fmt.Fprintf(&b, "**Session Stage:** `%s` (`%s`)\n", ctx.IssueStageKind, ctx.IssueStageID)
+		fmt.Fprintf(&b, "**Continuity:** `%s`\n\n", ctx.ContinuityState)
+	}
 
 	if ctx.TriggerCommentID != "" {
 		b.WriteString("**Trigger:** Comment Reply\n")
@@ -1030,6 +1035,29 @@ func renderIssueContext(provider string, ctx TaskContextForEnv) string {
 		b.WriteString("## Handoff Note\n\n")
 		b.WriteString("The person who assigned this issue left this instruction for the run. Treat it as scope guidance and follow it before doing anything broader:\n\n")
 		fmt.Fprintf(&b, "> %s\n\n", ctx.HandoffNote)
+	}
+	if handoff := ctx.IssueHandoff; handoff != nil {
+		b.WriteString("## Child Issue Handoff\n\n")
+		fmt.Fprintf(&b, "**Parent issue:** `%s`\n", handoff.ParentIssueID)
+		fmt.Fprintf(&b, "**Objective:** %s\n\n", handoff.Objective)
+		sections := []struct {
+			title string
+			items []string
+		}{
+			{"Confirmed facts", handoff.ConfirmedFacts}, {"Decisions", handoff.Decisions},
+			{"Constraints", handoff.Constraints}, {"Acceptance criteria", handoff.AcceptanceCriteria},
+			{"References", handoff.References}, {"Open questions", handoff.OpenQuestions},
+		}
+		for _, section := range sections {
+			if len(section.items) == 0 {
+				continue
+			}
+			fmt.Fprintf(&b, "### %s\n\n", section.title)
+			for _, item := range section.items {
+				fmt.Fprintf(&b, "- %s\n", item)
+			}
+			b.WriteString("\n")
+		}
 	}
 
 	b.WriteString("## Quick Start\n\n")

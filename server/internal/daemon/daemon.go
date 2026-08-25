@@ -6487,6 +6487,11 @@ func (d *Daemon) runTask(ctx context.Context, task Task, provider string, slot i
 	// via `multica repo checkout <url>`.
 	taskCtx := execenv.TaskContextForEnv{
 		IssueID:             task.IssueID,
+		IssueSessionID:      task.IssueSessionID,
+		IssueStageID:        task.IssueSessionStageID,
+		IssueStageKind:      task.IssueSessionStageKind,
+		ContinuityState:     task.ContinuityState,
+		IssueHandoff:        convertIssueHandoffForEnv(task.IssueHandoff),
 		TriggerCommentID:    task.TriggerCommentID,
 		TriggerThreadID:     task.TriggerThreadID,
 		CommentReplyTargets: commentReplyThreads(task),
@@ -7754,6 +7759,22 @@ func (d *Daemon) runTask(ctx context.Context, task Task, provider string, slot i
 			Usage:         usageEntries,
 			FailureReason: failureReason,
 		}, nil
+	}
+}
+
+func convertIssueHandoffForEnv(input *IssueHandoffData) *execenv.IssueHandoffForEnv {
+	if input == nil {
+		return nil
+	}
+	sourceRunID := ""
+	if input.SourceRunID != nil {
+		sourceRunID = *input.SourceRunID
+	}
+	return &execenv.IssueHandoffForEnv{
+		ParentIssueID: input.ParentIssueID, ParentSessionID: input.ParentSessionID,
+		SourceStageID: input.SourceStageID, SourceRunID: sourceRunID, Objective: input.Objective,
+		ConfirmedFacts: input.ConfirmedFacts, Decisions: input.Decisions, Constraints: input.Constraints,
+		AcceptanceCriteria: input.AcceptanceCriteria, References: input.References, OpenQuestions: input.OpenQuestions,
 	}
 }
 

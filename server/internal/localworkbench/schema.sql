@@ -136,6 +136,12 @@ CREATE TABLE IF NOT EXISTS task_runs (
     thread_id TEXT,
     runtime TEXT,
     handoff_note TEXT,
+    session_id TEXT,
+    stage_id TEXT,
+    work_dir TEXT,
+    prior_task_id TEXT,
+    continuity_state TEXT NOT NULL DEFAULT 'fresh',
+    continuity_reason TEXT,
     summary TEXT,
     error TEXT,
     started_at TEXT,
@@ -144,6 +150,48 @@ CREATE TABLE IF NOT EXISTS task_runs (
     updated_at TEXT NOT NULL
 );
 CREATE INDEX IF NOT EXISTS task_runs_issue_idx ON task_runs(issue_id, created_at DESC);
+
+CREATE TABLE IF NOT EXISTS issue_sessions (
+    id TEXT PRIMARY KEY,
+    issue_id TEXT NOT NULL UNIQUE,
+    workspace_id TEXT NOT NULL,
+    active_stage_id TEXT NOT NULL,
+    continuity_state TEXT NOT NULL DEFAULT 'fresh',
+    continuity_reason TEXT,
+    created_at TEXT NOT NULL,
+    updated_at TEXT NOT NULL
+);
+CREATE INDEX IF NOT EXISTS issue_sessions_workspace_idx ON issue_sessions(workspace_id, updated_at DESC);
+
+CREATE TABLE IF NOT EXISTS issue_session_stages (
+    id TEXT PRIMARY KEY,
+    session_id TEXT NOT NULL,
+    kind TEXT NOT NULL,
+    status TEXT NOT NULL,
+    position INTEGER NOT NULL,
+    migrated INTEGER NOT NULL DEFAULT 0,
+    started_at TEXT NOT NULL,
+    completed_at TEXT
+);
+CREATE INDEX IF NOT EXISTS issue_session_stages_session_idx ON issue_session_stages(session_id, position);
+
+CREATE TABLE IF NOT EXISTS issue_handoffs (
+    id TEXT PRIMARY KEY,
+    child_issue_id TEXT NOT NULL UNIQUE,
+    parent_issue_id TEXT NOT NULL,
+    parent_session_id TEXT NOT NULL,
+    source_stage_id TEXT NOT NULL,
+    source_run_id TEXT,
+    objective TEXT NOT NULL,
+    confirmed_facts TEXT NOT NULL DEFAULT '[]',
+    decisions TEXT NOT NULL DEFAULT '[]',
+    constraints TEXT NOT NULL DEFAULT '[]',
+    acceptance_criteria TEXT NOT NULL DEFAULT '[]',
+    references_json TEXT NOT NULL DEFAULT '[]',
+    open_questions TEXT NOT NULL DEFAULT '[]',
+    created_at TEXT NOT NULL
+);
+CREATE INDEX IF NOT EXISTS issue_handoffs_parent_idx ON issue_handoffs(parent_issue_id, created_at);
 
 CREATE TABLE IF NOT EXISTS task_messages (
     task_id TEXT NOT NULL,
@@ -207,3 +255,6 @@ VALUES (5, strftime('%Y-%m-%dT%H:%M:%fZ', 'now'));
 
 INSERT OR IGNORE INTO schema_version(version, applied_at)
 VALUES (6, strftime('%Y-%m-%dT%H:%M:%fZ', 'now'));
+
+INSERT OR IGNORE INTO schema_version(version, applied_at)
+VALUES (7, strftime('%Y-%m-%dT%H:%M:%fZ', 'now'));

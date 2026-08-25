@@ -20,6 +20,57 @@ export interface CreateIssueRequest {
   /** Issue-scoped label IDs to attach in the same transaction as the create.
    *  Unknown or non-issue ids are rejected by the server with 400. */
   label_ids?: string[];
+	/** Immutable context snapshot copied from the parent session. */
+	handoff?: IssueHandoffInput;
+}
+
+export type IssueSessionStageKind =
+  | "analysis" | "implementation" | "review" | "test"
+  | "commit" | "push" | "release";
+
+export interface IssueHandoffInput {
+  objective: string;
+  confirmed_facts: string[];
+  decisions: string[];
+  constraints: string[];
+  acceptance_criteria: string[];
+  references: string[];
+  open_questions: string[];
+  source_run_id?: string;
+}
+
+export interface IssueHandoff extends Omit<IssueHandoffInput, "source_run_id"> {
+  id: string;
+  child_issue_id: string;
+  parent_issue_id: string;
+  parent_session_id: string;
+  source_stage_id: string;
+  source_run_id: string | null;
+  created_at: string;
+}
+
+export interface IssueSessionStage {
+  id: string;
+  session_id: string;
+  kind: IssueSessionStageKind;
+  status: "active" | "completed";
+  position: number;
+  migrated: boolean;
+  started_at: string;
+  completed_at: string | null;
+}
+
+export interface IssueSession {
+  id: string;
+  issue_id: string;
+  workspace_id: string;
+  active_stage_id: string;
+  continuity_state: "fresh" | "pending" | "resumed" | "gap";
+  continuity_reason: string | null;
+  created_at: string;
+  updated_at: string;
+  stages: IssueSessionStage[];
+  handoff: IssueHandoff | null;
 }
 
 export interface UpdateIssueRequest {

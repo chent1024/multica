@@ -78,15 +78,34 @@ type IssueStatusData struct {
 	Description string `json:"description,omitempty"`
 }
 
+type IssueHandoffData struct {
+	ParentIssueID      string   `json:"parent_issue_id"`
+	ParentSessionID    string   `json:"parent_session_id"`
+	SourceStageID      string   `json:"source_stage_id"`
+	SourceRunID        *string  `json:"source_run_id,omitempty"`
+	Objective          string   `json:"objective"`
+	ConfirmedFacts     []string `json:"confirmed_facts"`
+	Decisions          []string `json:"decisions"`
+	Constraints        []string `json:"constraints"`
+	AcceptanceCriteria []string `json:"acceptance_criteria"`
+	References         []string `json:"references"`
+	OpenQuestions      []string `json:"open_questions"`
+}
+
 // Task represents a claimed task from the server.
 // Agent data (name, skills) is populated by the claim endpoint.
 type Task struct {
-	ID                   string                 `json:"id"`
-	AgentID              string                 `json:"agent_id"`
-	RuntimeID            string                 `json:"runtime_id"`
-	IssueID              string                 `json:"issue_id"`
-	WorkspaceID          string                 `json:"workspace_id"`
-	RemoteMCPConnections []remotemcp.Connection `json:"remote_mcp_connections,omitempty"`
+	ID                    string                 `json:"id"`
+	AgentID               string                 `json:"agent_id"`
+	RuntimeID             string                 `json:"runtime_id"`
+	IssueID               string                 `json:"issue_id"`
+	IssueSessionID        string                 `json:"issue_session_id,omitempty"`
+	IssueSessionStageID   string                 `json:"issue_session_stage_id,omitempty"`
+	IssueSessionStageKind string                 `json:"issue_session_stage_kind,omitempty"`
+	ContinuityState       string                 `json:"continuity_state,omitempty"`
+	IssueHandoff          *IssueHandoffData      `json:"issue_handoff,omitempty"`
+	WorkspaceID           string                 `json:"workspace_id"`
+	RemoteMCPConnections  []remotemcp.Connection `json:"remote_mcp_connections,omitempty"`
 	// RemoteMCPDaemonToken stays inside the daemon and authenticates the local
 	// broker's credential-resolution calls. It must never enter agent env/config.
 	RemoteMCPDaemonToken string `json:"remote_mcp_daemon_token,omitempty"`

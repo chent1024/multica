@@ -640,7 +640,24 @@ func TestSQLiteWorkbenchUpgradesTaskRunHandoffNote(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if _, err := store.db.ExecContext(t.Context(), `ALTER TABLE task_runs DROP COLUMN handoff_note`); err != nil {
+	for _, column := range []string{"handoff_note", "session_id", "stage_id", "work_dir", "prior_task_id", "continuity_state", "continuity_reason"} {
+		if _, err := store.db.ExecContext(t.Context(), `ALTER TABLE task_runs DROP COLUMN `+column); err != nil {
+			t.Fatal(err)
+		}
+	}
+	workspaces, err := store.ListWorkspaces(t.Context())
+	if err != nil {
+		t.Fatal(err)
+	}
+	legacyIssue, err := store.CreateIssue(t.Context(), workspaces[0].ID, CreateIssueInput{Title: "Legacy issue"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := store.db.ExecContext(t.Context(), `DELETE FROM issue_session_stages WHERE session_id IN (SELECT id FROM issue_sessions WHERE issue_id=?); DELETE FROM issue_sessions WHERE issue_id=?`, legacyIssue.ID, legacyIssue.ID); err != nil {
+		t.Fatal(err)
+	}
+	stamp := now()
+	if _, err := store.db.ExecContext(t.Context(), `INSERT INTO task_runs(id, issue_id, status, created_at, updated_at) VALUES ('legacy-run', ?, 'completed', ?, ?)`, legacyIssue.ID, stamp, stamp); err != nil {
 		t.Fatal(err)
 	}
 	if err := store.Close(); err != nil {
@@ -673,8 +690,23 @@ func TestSQLiteWorkbenchUpgradesTaskRunHandoffNote(t *testing.T) {
 	if err := reopened.db.QueryRowContext(t.Context(), `SELECT MAX(version) FROM schema_version`).Scan(&version); err != nil {
 		t.Fatal(err)
 	}
-	if version != 6 {
-		t.Fatalf("schema version = %d, want 6", version)
+	if version != 7 {
+		t.Fatalf("schema version = %d, want 7", version)
+	}
+	var sessionID, stageID, stageKind string
+	var migrated int
+	if err := reopened.db.QueryRowContext(t.Context(), `SELECT s.id, s.active_stage_id, st.kind, st.migrated FROM issue_sessions s JOIN issue_session_stages st ON st.id=s.active_stage_id WHERE s.issue_id=?`, legacyIssue.ID).Scan(&sessionID, &stageID, &stageKind, &migrated); err != nil {
+		t.Fatal(err)
+	}
+	if stageKind != "implementation" || migrated != 1 {
+		t.Fatalf("backfilled stage kind=%q migrated=%d", stageKind, migrated)
+	}
+	var runSessionID, runStageID string
+	if err := reopened.db.QueryRowContext(t.Context(), `SELECT session_id, stage_id FROM task_runs WHERE id='legacy-run'`).Scan(&runSessionID, &runStageID); err != nil {
+		t.Fatal(err)
+	}
+	if runSessionID != sessionID || runStageID != stageID {
+		t.Fatalf("legacy run binding session=%q stage=%q", runSessionID, runStageID)
 	}
 	var taskMessagesTable string
 	if err := reopened.db.QueryRowContext(t.Context(), `SELECT name FROM sqlite_master WHERE type='table' AND name='task_messages'`).Scan(&taskMessagesTable); err != nil {

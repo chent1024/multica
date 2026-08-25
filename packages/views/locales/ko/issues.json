@@ -1,4 +1,18 @@
 {
+	"issue_session": {
+		"section": "Issue 세션",
+		"stages_label": "세션 단계",
+		"history": "단계 기록",
+		"handoff": "상위 작업 인계",
+		"parent_link": "상위 작업 열기",
+		"loading": "Issue 세션 로딩 중…",
+		"load_failed": "Issue 세션을 불러올 수 없습니다.",
+		"stage_failed": "단계를 변경할 수 없습니다.",
+		"stage_hint": "단계 선택은 워크플로 상태만 기록하며 커밋, 푸시 또는 릴리스를 실행하지 않습니다.",
+		"handoff_sections": { "confirmed_facts": "확인된 사실", "decisions": "결정", "constraints": "제약", "acceptance_criteria": "수락 기준", "references": "참조", "open_questions": "열린 질문" },
+		"continuity": { "fresh": "새 세션", "pending": "대기", "resumed": "재개됨", "gap": "컨텍스트 끊김" },
+		"stages": { "analysis": "분석", "implementation": "구현", "review": "검토", "test": "테스트", "commit": "커밋", "push": "푸시", "release": "릴리스" }
+	},
   "status_catalog_error": {
     "title": "상태 목록을 불러오지 못했습니다",
     "hint": "이것 없이는 상태 필터를 적용할 수 없어 이슈를 표시하지 않습니다.",

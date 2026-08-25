@@ -30,6 +30,8 @@ import type {
   AgentEnvResponse,
   UpdateAgentEnvRequest,
   AgentTask,
+	IssueSession,
+	IssueSessionStageKind,
   AgentActivityBucket,
   AgentRunCount,
   WorkspaceWorkingAgent,
@@ -234,6 +236,7 @@ import { getCurrentSlug } from "../platform/workspace-storage";
 import { parseWithFallback } from "./schema";
 import {
   AgentTaskListSchema,
+	IssueSessionSchema,
   AttachmentResponseSchema,
   CancelTaskResponseSchema,
   ChatDraftRestoresResponseSchema,
@@ -1023,6 +1026,18 @@ export class ApiClient {
     }
     return issue;
   }
+
+	async getIssueSession(issueId: string): Promise<IssueSession> {
+		const raw = await this.fetch<unknown>(`/api/issues/${encodeURIComponent(issueId)}/session`);
+		return IssueSessionSchema.parse(raw) as IssueSession;
+	}
+
+	async activateIssueSessionStage(issueId: string, kind: IssueSessionStageKind): Promise<IssueSession> {
+		const raw = await this.fetch<unknown>(`/api/issues/${encodeURIComponent(issueId)}/session/stages`, {
+			method: "POST", body: JSON.stringify({ kind }),
+		});
+		return IssueSessionSchema.parse(raw) as IssueSession;
+	}
 
   async createIssue(data: CreateIssueRequest): Promise<Issue> {
     // Parse through a schema (not a raw cast): the create modal keys its

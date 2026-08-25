@@ -1,4 +1,18 @@
 {
+	"issue_session": {
+		"section": "Issue セッション",
+		"stages_label": "セッションの段階",
+		"history": "段階の履歴",
+		"handoff": "親タスクからの引き継ぎ",
+		"parent_link": "親タスクを開く",
+		"loading": "Issue セッションを読み込み中…",
+		"load_failed": "Issue セッションを読み込めませんでした。",
+		"stage_failed": "段階を変更できませんでした。",
+		"stage_hint": "段階の選択はワークフロー状態のみを記録し、コミット、プッシュ、リリースは実行しません。",
+		"handoff_sections": { "confirmed_facts": "確認済みの事実", "decisions": "決定事項", "constraints": "制約", "acceptance_criteria": "受け入れ条件", "references": "参照", "open_questions": "未解決の質問" },
+		"continuity": { "fresh": "新規", "pending": "待機中", "resumed": "再開済み", "gap": "コンテキスト切断" },
+		"stages": { "analysis": "分析", "implementation": "実装", "review": "レビュー", "test": "テスト", "commit": "コミット", "push": "プッシュ", "release": "リリース" }
+	},
   "status_catalog_error": {
     "title": "ステータス一覧を読み込めませんでした",
     "hint": "これがないとステータスの絞り込みを適用できないため、イシューは表示されません。",

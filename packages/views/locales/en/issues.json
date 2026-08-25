@@ -1,4 +1,18 @@
 {
+	"issue_session": {
+		"section": "Issue session",
+		"stages_label": "Session stages",
+		"history": "History",
+		"handoff": "Handoff from parent",
+		"parent_link": "Open parent",
+		"loading": "Loading issue session…",
+		"load_failed": "Could not load issue session.",
+		"stage_failed": "Could not change stage.",
+		"stage_hint": "Stage selection records workflow state only; it does not commit, push, or release.",
+		"handoff_sections": { "confirmed_facts": "Confirmed facts", "decisions": "Decisions", "constraints": "Constraints", "acceptance_criteria": "Acceptance criteria", "references": "References", "open_questions": "Open questions" },
+		"continuity": { "fresh": "Fresh", "pending": "Pending", "resumed": "Resumed", "gap": "Context gap" },
+		"stages": { "analysis": "Analysis", "implementation": "Build", "review": "Review", "test": "Test", "commit": "Commit", "push": "Push", "release": "Release" }
+	},
   "status_catalog_error": {
     "title": "Couldn't load the status list",
     "hint": "Issues are hidden until it loads, because a status filter can't be applied without it.",

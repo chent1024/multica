@@ -38,6 +38,7 @@
     "./issues/canonical-id": "./issues/canonical-id.ts",
     "./issues/queries": "./issues/queries.ts",
     "./issues/mutations": "./issues/mutations.ts",
+	"./issues/session": "./issues/session.ts",
     "./issues/timeline-sort": "./issues/timeline-sort.ts",
     "./issues/comment-trigger-outcomes": "./issues/comment-trigger-outcomes.ts",
     "./issues/date": "./issues/date.ts",

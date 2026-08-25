@@ -127,6 +127,11 @@ type PrepareParams struct {
 // TaskContextForEnv is the subset of task context used for writing context files.
 type TaskContextForEnv struct {
 	IssueID          string
+	IssueSessionID   string
+	IssueStageID     string
+	IssueStageKind   string
+	ContinuityState  string
+	IssueHandoff     *IssueHandoffForEnv
 	TriggerCommentID string // comment that triggered this task (empty for on_assign)
 	TriggerThreadID  string // root comment ID for the triggering thread; falls back to TriggerCommentID when empty
 	// CommentReplyTargets is set for a comment run that coalesced comments
@@ -235,6 +240,20 @@ type TaskContextForEnv struct {
 	InitiatorID    string
 	InitiatorName  string
 	InitiatorEmail string
+}
+
+type IssueHandoffForEnv struct {
+	ParentIssueID      string
+	ParentSessionID    string
+	SourceStageID      string
+	SourceRunID        string
+	Objective          string
+	ConfirmedFacts     []string
+	Decisions          []string
+	Constraints        []string
+	AcceptanceCriteria []string
+	References         []string
+	OpenQuestions      []string
 }
 
 // SkillContextForEnv represents a skill to be written into the execution environment.

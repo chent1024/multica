@@ -1610,6 +1610,12 @@ export const AgentTaskSchema = z.object({
   agent_id: z.string().default(""),
   runtime_id: z.string().default(""),
   issue_id: z.string().default(""),
+	session_id: z.string().optional(),
+	stage_id: z.string().optional(),
+	stage_kind: z.enum(["analysis", "implementation", "review", "test", "commit", "push", "release"]).optional(),
+	prior_task_id: z.string().optional(),
+	continuity_state: z.enum(["fresh", "pending", "resumed", "gap"]).optional(),
+	continuity_reason: z.string().optional(),
   status: z.string().default("cancelled"),
   priority: z.number().default(0),
   dispatched_at: z.string().nullable().default(null),
@@ -1645,6 +1651,25 @@ export const AgentTaskSchema = z.object({
   // the UI already renders as an em dash.
   usage: z.array(TaskUsageSchema).optional().catch(undefined),
 }).loose();
+
+const IssueHandoffSchema = z.object({
+	id: z.string(), child_issue_id: z.string(), parent_issue_id: z.string(),
+	parent_session_id: z.string(), source_stage_id: z.string(), source_run_id: z.string().nullable().optional(),
+	objective: z.string(), confirmed_facts: z.array(z.string()), decisions: z.array(z.string()),
+	constraints: z.array(z.string()), acceptance_criteria: z.array(z.string()), references: z.array(z.string()),
+	open_questions: z.array(z.string()), created_at: z.string(),
+});
+
+export const IssueSessionSchema = z.object({
+	id: z.string(), issue_id: z.string(), workspace_id: z.string(), active_stage_id: z.string(),
+	continuity_state: z.enum(["fresh", "pending", "resumed", "gap"]), continuity_reason: z.string().nullable(),
+	created_at: z.string(), updated_at: z.string(),
+	stages: z.array(z.object({
+		id: z.string(), session_id: z.string(), kind: z.enum(["analysis", "implementation", "review", "test", "commit", "push", "release"]),
+		status: z.enum(["active", "completed"]), position: z.number(), migrated: z.boolean(), started_at: z.string(), completed_at: z.string().nullable(),
+	})),
+	handoff: IssueHandoffSchema.nullable(),
+});
 
 export const AgentTaskListSchema = z.array(AgentTaskSchema);
 

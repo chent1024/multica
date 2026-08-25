@@ -685,6 +685,7 @@ describe("CreateIssueModal", () => {
         due_date: undefined,
         attachment_ids: undefined,
         parent_issue_id: undefined,
+		handoff: undefined,
         project_id: undefined,
       });
     });
@@ -855,6 +856,7 @@ describe("CreateIssueModal", () => {
         due_date: undefined,
         attachment_ids: undefined,
         parent_issue_id: undefined,
+		handoff: undefined,
         project_id: undefined,
       });
     });
@@ -1266,6 +1268,29 @@ describe("CreateIssueModal", () => {
     });
     expect(mockSetAgent).toHaveBeenCalledWith({ prompt: "Refactor auth" });
   });
+
+	it("submits a bounded handoff only for a child issue", async () => {
+		const user = userEvent.setup();
+		renderModal(
+			<ManualCreatePanel
+				onClose={vi.fn()}
+				onSwitchMode={vi.fn()}
+				data={{ parent_issue_id: "parent-uuid-1", parent_issue_identifier: "MUL-2534" }}
+				isExpanded={false}
+				setIsExpanded={vi.fn()}
+			/>,
+		);
+		await user.type(screen.getByPlaceholderText("Issue title"), "Implement child slice");
+		await user.type(screen.getByPlaceholderText(/What should this child issue achieve/), "Keep the API contract fixed");
+		await user.click(screen.getByRole("button", { name: "Create Issue" }));
+		await waitFor(() => expect(mockCreateIssue).toHaveBeenCalledWith(expect.objectContaining({
+			parent_issue_id: "parent-uuid-1",
+			handoff: {
+				objective: "Keep the API contract fixed", confirmed_facts: [], decisions: [], constraints: [],
+				acceptance_criteria: [], references: [], open_questions: [],
+			},
+		})));
+	});
 
   // Start date is a low-frequency field — by default it lives behind the
   // ⋯ overflow menu and is not rendered inline. Clicking the overflow

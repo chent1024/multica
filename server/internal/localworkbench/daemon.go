@@ -5,6 +5,7 @@ import (
 	"database/sql"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"net/http"
 	"strings"
 
@@ -90,16 +91,47 @@ func (s *Store) enqueueAssignedIssue(ctx context.Context, workspaceID, issueID, 
 	if err != nil {
 		return err
 	}
+	tx, err := s.db.BeginTx(ctx, nil)
+	if err != nil {
+		return err
+	}
+	defer func() { _ = tx.Rollback() }()
+	var sessionID, stageID string
+	if err := tx.QueryRowContext(ctx, `SELECT id, active_stage_id FROM issue_sessions WHERE workspace_id=? AND issue_id=?`, workspaceID, issueID).Scan(&sessionID, &stageID); err != nil {
+		return fmt.Errorf("reading issue session for queued run: %w", err)
+	}
 	var active int
-	if err := s.db.QueryRowContext(ctx, `SELECT COUNT(*) FROM task_runs WHERE issue_id=? AND status IN ('queued','dispatched','waiting_local_directory','running')`, issueID).Scan(&active); err != nil {
+	if err := tx.QueryRowContext(ctx, `SELECT COUNT(*) FROM task_runs WHERE issue_id=? AND status IN ('queued','dispatched','waiting_local_directory','running')`, issueID).Scan(&active); err != nil {
 		return err
 	}
 	if active > 0 {
-		return nil
+		return tx.Commit()
+	}
+	var historyCount int
+	if err := tx.QueryRowContext(ctx, `SELECT COUNT(*) FROM task_runs WHERE issue_id=?`, issueID).Scan(&historyCount); err != nil {
+		return err
+	}
+	var priorTaskID, priorThreadID, priorWorkDir sql.NullString
+	err = tx.QueryRowContext(ctx, `SELECT id, thread_id, work_dir FROM task_runs WHERE issue_id=? AND NULLIF(TRIM(thread_id),'') IS NOT NULL AND NULLIF(TRIM(work_dir),'') IS NOT NULL ORDER BY created_at DESC LIMIT 1`, issueID).Scan(&priorTaskID, &priorThreadID, &priorWorkDir)
+	if err != nil && !errors.Is(err, sql.ErrNoRows) {
+		return err
+	}
+	continuityState, continuityReason := "fresh", ""
+	if priorTaskID.Valid {
+		continuityState = "pending"
+	} else if historyCount > 0 {
+		continuityState = "gap"
+		continuityReason = "missing_resume_pointer"
 	}
 	stamp := now()
-	_, err = s.db.ExecContext(ctx, `INSERT INTO task_runs(id, issue_id, status, runtime, handoff_note, created_at, updated_at) VALUES (?, ?, 'queued', ?, ?, ?, ?)`, uuid.NewString(), issueID, runtime.ID, nullable(handoffNote), stamp, stamp)
-	return err
+	_, err = tx.ExecContext(ctx, `INSERT INTO task_runs(id, issue_id, status, runtime, handoff_note, session_id, stage_id, prior_task_id, continuity_state, continuity_reason, created_at, updated_at) VALUES (?, ?, 'queued', ?, ?, ?, ?, ?, ?, ?, ?, ?)`, uuid.NewString(), issueID, runtime.ID, nullable(handoffNote), sessionID, stageID, nullable(priorTaskID.String), continuityState, nullable(continuityReason), stamp, stamp)
+	if err != nil {
+		return err
+	}
+	if _, err := tx.ExecContext(ctx, `UPDATE issue_sessions SET continuity_state=?, continuity_reason=?, updated_at=? WHERE id=?`, continuityState, nullable(continuityReason), stamp, sessionID); err != nil {
+		return err
+	}
+	return tx.Commit()
 }
 
 func (s *Server) listRuntimes(w http.ResponseWriter, r *http.Request) {
@@ -346,9 +378,9 @@ func (s *Server) claimTask(ctx context.Context, daemonID, runtimeID string) (map
 	}
 	defer func() { _ = tx.Rollback() }()
 	stamp := now()
-	var taskID, issueID string
-	var handoffNote sql.NullString
-	err = tx.QueryRowContext(ctx, `UPDATE task_runs SET status='dispatched', updated_at=? WHERE id=(SELECT tr.id FROM task_runs tr JOIN issues i ON i.id=tr.issue_id WHERE tr.status='queued' AND tr.runtime=? AND i.workspace_id=? ORDER BY tr.created_at LIMIT 1) RETURNING id, issue_id, handoff_note`, stamp, runtimeID, workspaceID).Scan(&taskID, &issueID, &handoffNote)
+	var taskID, issueID, sessionID, stageID, continuityState string
+	var handoffNote, priorTaskID sql.NullString
+	err = tx.QueryRowContext(ctx, `UPDATE task_runs SET status='dispatched', updated_at=? WHERE id=(SELECT tr.id FROM task_runs tr JOIN issues i ON i.id=tr.issue_id WHERE tr.status='queued' AND tr.runtime=? AND i.workspace_id=? ORDER BY tr.created_at LIMIT 1) RETURNING id, issue_id, handoff_note, session_id, stage_id, prior_task_id, continuity_state`, stamp, runtimeID, workspaceID).Scan(&taskID, &issueID, &handoffNote, &sessionID, &stageID, &priorTaskID, &continuityState)
 	if errors.Is(err, sql.ErrNoRows) {
 		return nil, tx.Commit()
 	}
@@ -362,6 +394,10 @@ func (s *Server) claimTask(ctx context.Context, daemonID, runtimeID string) (map
 	if err != nil {
 		return nil, err
 	}
+	var stageKind string
+	if err := s.store.db.QueryRowContext(ctx, `SELECT kind FROM issue_session_stages WHERE id=? AND session_id=?`, stageID, sessionID).Scan(&stageKind); err != nil {
+		return nil, err
+	}
 	ws, err := s.store.GetWorkspace(ctx, workspaceID)
 	if err != nil {
 		return nil, err
@@ -369,10 +405,26 @@ func (s *Server) claimTask(ctx context.Context, daemonID, runtimeID string) (map
 	task := map[string]any{
 		"id": taskID, "agent_id": LocalAgentID, "runtime_id": runtimeID, "issue_id": issue.ID, "workspace_id": workspaceID,
 		"thread_name": issue.Identifier + " " + issue.Title, "workspace_context": stringValue(ws.Context),
-		"agent": map[string]any{"id": LocalAgentID, "name": "Codex", "instructions": "Work on the assigned local task and report the result."},
+		"agent":            map[string]any{"id": LocalAgentID, "name": "Codex", "instructions": "Work on the assigned local task and report the result."},
+		"issue_session_id": sessionID, "issue_session_stage_id": stageID, "issue_session_stage_kind": stageKind, "continuity_state": continuityState,
 	}
 	if handoffNote.Valid && strings.TrimSpace(handoffNote.String) != "" {
 		task["handoff_note"] = handoffNote.String
+	}
+	if priorTaskID.Valid && strings.TrimSpace(priorTaskID.String) != "" {
+		var priorSessionID, priorWorkDir sql.NullString
+		if err := s.store.db.QueryRowContext(ctx, `SELECT thread_id, work_dir FROM task_runs WHERE id=? AND issue_id=?`, priorTaskID.String, issueID).Scan(&priorSessionID, &priorWorkDir); err != nil {
+			return nil, fmt.Errorf("reading prior issue session run: %w", err)
+		}
+		if priorSessionID.Valid && priorWorkDir.Valid && strings.TrimSpace(priorSessionID.String) != "" && strings.TrimSpace(priorWorkDir.String) != "" {
+			task["prior_session_id"] = priorSessionID.String
+			task["prior_work_dir"] = priorWorkDir.String
+		}
+	}
+	if inherited, err := s.store.getIssueHandoff(ctx, issueID); err == nil {
+		task["issue_handoff"] = inherited
+	} else if !errors.Is(err, sql.ErrNoRows) {
+		return nil, fmt.Errorf("reading inherited issue handoff: %w", err)
 	}
 	if issue.ProjectID != nil {
 		project, err := s.store.GetProject(ctx, workspaceID, *issue.ProjectID)
@@ -410,6 +462,46 @@ func stringValue(value *string) string {
 	return *value
 }
 
+func pinTaskSessionTx(ctx context.Context, tx *sql.Tx, workspaceID, taskID, sessionID, workDir string, terminal bool) error {
+	var issueSessionID string
+	var priorTaskID sql.NullString
+	var taskStatus string
+	if err := tx.QueryRowContext(ctx, `SELECT tr.session_id, tr.prior_task_id, tr.status FROM task_runs tr JOIN issues i ON i.id=tr.issue_id WHERE tr.id=? AND i.workspace_id=?`, taskID, workspaceID).Scan(&issueSessionID, &priorTaskID, &taskStatus); err != nil {
+		return err
+	}
+	if taskStatus == "completed" || taskStatus == "failed" || taskStatus == "cancelled" {
+		return nil
+	}
+	if strings.TrimSpace(sessionID) == "" && strings.TrimSpace(workDir) == "" && !terminal {
+		return nil
+	}
+	state, reason := "fresh", ""
+	if priorTaskID.Valid {
+		var priorThreadID, priorWorkDir sql.NullString
+		if err := tx.QueryRowContext(ctx, `SELECT thread_id, work_dir FROM task_runs WHERE id=?`, priorTaskID.String).Scan(&priorThreadID, &priorWorkDir); err != nil {
+			return err
+		}
+		if strings.TrimSpace(sessionID) == "" && strings.TrimSpace(workDir) == "" {
+			state, reason = "gap", "provider_session_unreported"
+		} else if priorThreadID.Valid && priorWorkDir.Valid && strings.TrimSpace(priorThreadID.String) != "" && strings.TrimSpace(priorWorkDir.String) != "" && sessionID == priorThreadID.String && workDir == priorWorkDir.String {
+			state = "resumed"
+		} else {
+			state, reason = "gap", "provider_thread_replaced"
+			if !priorThreadID.Valid || !priorWorkDir.Valid || strings.TrimSpace(priorThreadID.String) == "" || strings.TrimSpace(priorWorkDir.String) == "" {
+				reason = "missing_resume_pointer"
+			} else if sessionID == priorThreadID.String && workDir != priorWorkDir.String {
+				reason = "work_dir_replaced"
+			}
+		}
+	}
+	stamp := now()
+	if _, err := tx.ExecContext(ctx, `UPDATE task_runs SET thread_id=COALESCE(NULLIF(?,''),thread_id), work_dir=COALESCE(NULLIF(?,''),work_dir), continuity_state=?, continuity_reason=?, updated_at=? WHERE id=?`, sessionID, workDir, state, nullable(reason), stamp, taskID); err != nil {
+		return err
+	}
+	_, err := tx.ExecContext(ctx, `UPDATE issue_sessions SET continuity_state=?, continuity_reason=?, updated_at=? WHERE id=?`, state, nullable(reason), stamp, issueSessionID)
+	return err
+}
+
 func (s *Server) daemonTaskState(w http.ResponseWriter, r *http.Request) {
 	ws, err := s.workspaceFor(r)
 	if err != nil {
@@ -435,9 +527,6 @@ func (s *Server) daemonTaskState(w http.ResponseWriter, r *http.Request) {
 	if status == "completed" || status == "failed" {
 		set, args = append(set, "completed_at=?"), append(args, stamp)
 	}
-	if value, ok := body["session_id"].(string); ok && value != "" {
-		set, args = append(set, "thread_id=?"), append(args, value)
-	}
 	if value, ok := body["output"].(string); ok {
 		set, args = append(set, "summary=?"), append(args, value)
 	}
@@ -452,6 +541,13 @@ func (s *Server) daemonTaskState(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	defer func() { _ = tx.Rollback() }()
+	sessionID, _ := body["session_id"].(string)
+	workDir, _ := body["work_dir"].(string)
+	terminal := status == "completed" || status == "failed"
+	if err := pinTaskSessionTx(r.Context(), tx, ws.ID, chi.URLParam(r, "taskID"), sessionID, workDir, terminal); err != nil && !errors.Is(err, sql.ErrNoRows) {
+		s.fail(w, err)
+		return
+	}
 	result, err := tx.ExecContext(r.Context(), `UPDATE task_runs SET `+strings.Join(set, ", ")+` WHERE id=? AND status NOT IN ('completed','failed','cancelled') AND issue_id IN (SELECT id FROM issues WHERE workspace_id=?)`, args...)
 	if err != nil {
 		s.fail(w, err)
@@ -712,18 +808,27 @@ func (s *Server) daemonTaskSession(w http.ResponseWriter, r *http.Request) {
 	}
 	var input struct {
 		SessionID string `json:"session_id"`
+		WorkDir   string `json:"work_dir"`
 	}
 	if err := decodeBody(r, &input); err != nil {
 		writeError(w, http.StatusBadRequest, err)
 		return
 	}
-	result, err := s.store.db.ExecContext(r.Context(), `UPDATE task_runs SET thread_id=?, updated_at=? WHERE id=? AND issue_id IN (SELECT id FROM issues WHERE workspace_id=?)`, nullable(input.SessionID), now(), chi.URLParam(r, "taskID"), ws.ID)
+	tx, err := s.store.db.BeginTx(r.Context(), nil)
 	if err != nil {
 		s.fail(w, err)
 		return
 	}
-	if count, _ := result.RowsAffected(); count == 0 {
+	defer func() { _ = tx.Rollback() }()
+	if err := pinTaskSessionTx(r.Context(), tx, ws.ID, chi.URLParam(r, "taskID"), input.SessionID, input.WorkDir, false); errors.Is(err, sql.ErrNoRows) {
 		writeError(w, http.StatusNotFound, errors.New("task not found"))
+		return
+	} else if err != nil {
+		s.fail(w, err)
+		return
+	}
+	if err := tx.Commit(); err != nil {
+		s.fail(w, err)
 		return
 	}
 	writeJSON(w, http.StatusOK, map[string]any{})
