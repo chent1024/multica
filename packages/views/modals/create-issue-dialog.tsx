@@ -34,10 +34,12 @@ export function CreateIssueDialog({
   onClose,
   initialMode,
   data,
+  localMode = false,
 }: {
   onClose: () => void;
   initialMode: CreateMode;
   data?: Record<string, unknown> | null;
+  localMode?: boolean;
 }) {
   const setLastMode = useCreateModeStore((s) => s.setLastMode);
   const [mode, setMode] = useState<CreateMode>(initialMode);
@@ -99,6 +101,7 @@ export function CreateIssueDialog({
             data={panelData}
             isExpanded={isExpanded}
             setIsExpanded={setIsExpanded}
+            localMode={localMode}
           />
         )}
       </DialogContent>

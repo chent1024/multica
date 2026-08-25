@@ -650,6 +650,7 @@ export function RuntimeList({
   now,
   runtimeHref,
   machineTitle,
+  localOnly = false,
 }: {
   runtimes: AgentRuntime[];
   now: number;
@@ -661,6 +662,7 @@ export function RuntimeList({
    * while a per-runtime alias still shows (MUL-5248).
    */
   machineTitle?: string;
+  localOnly?: boolean;
 }) {
   const { t } = useT("runtimes");
   const wsId = useWorkspaceId();
@@ -671,7 +673,10 @@ export function RuntimeList({
   const { data: agents = [] } = useQuery(agentListOptions(wsId));
   const { data: members = [] } = useQuery(memberListOptions(wsId));
   const { data: snapshot = [] } = useQuery(agentTaskSnapshotOptions(wsId));
-  const { data: profiles = [] } = useQuery(runtimeProfileListOptions(wsId));
+  const { data: profiles = [] } = useQuery({
+    ...runtimeProfileListOptions(wsId),
+    enabled: !localOnly,
+  });
 
   const currentMember = user
     ? members.find((m) => m.user_id === user.id)

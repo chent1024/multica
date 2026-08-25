@@ -31,6 +31,7 @@ describe("DesktopRuntimesPage", () => {
       localDaemonId: "daemon-local",
       localMachineName: "Jiayuan's MacBook",
       hasLocalMachine: true,
+      localOnly: true,
       bootstrapping: false,
     });
   });

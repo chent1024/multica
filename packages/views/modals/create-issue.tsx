@@ -59,6 +59,7 @@ import { maxSiblingStage } from "../issues/components/pickers/stage-picker";
 import { ProjectPicker } from "../projects/components/project-picker";
 import { useIssueTriggerPreview } from "../issues/hooks/use-issue-trigger-preview";
 import { useActorName } from "@multica/core/workspace/hooks";
+import { agentListOptions } from "@multica/core/workspace/queries";
 import { useCurrentWorkspace, useWorkspacePaths } from "@multica/core/paths";
 import { useWorkspaceId } from "@multica/core/hooks";
 import { useIssueStatuses } from "@multica/core/issue-statuses/hooks";
@@ -197,6 +198,7 @@ export function ManualCreatePanel({
   data,
   isExpanded,
   setIsExpanded,
+  localMode = false,
 }: {
   onClose: () => void;
   /** Called with the carry payload to seed the agent panel after switch. */
@@ -207,6 +209,7 @@ export function ManualCreatePanel({
    *  re-mount the Portal on mode swap and replay the open animation). */
   isExpanded: boolean;
   setIsExpanded: (v: boolean) => void;
+  localMode?: boolean;
 }) {
   const { t } = useT("modals");
   const { t: tEditor } = useT("editor");
@@ -251,6 +254,11 @@ export function ManualCreatePanel({
     }
     return draft.manual.assigneeId;
   });
+  const assigneeTouchedRef = useRef(
+    !!draft.manual.assigneeType ||
+      !!draft.manual.assigneeId ||
+      !!(data && ("assignee_type" in data || "assignee_id" in data)),
+  );
   const [startDate, setStartDate] = useState<string | null>(draft.manual.startDate);
   const [dueDate, setDueDate] = useState<string | null>(
     (data?.due_date as string | undefined) ?? draft.shared.dueDate,
@@ -298,6 +306,10 @@ export function ManualCreatePanel({
   // Fetch parent issue details for the chip (status/identifier/title).
   // List cache usually has it already, so this resolves synchronously.
   const wsId = useWorkspaceId();
+  const { data: agents = [], isSuccess: agentsLoaded } = useQuery({
+    ...agentListOptions(wsId),
+    enabled: localMode,
+  });
   const { categoryOf: draftStatusCategory } = useIssueStatuses(wsId);
   const { data: workspaceProperties = [] } = useQuery(propertyListOptions(wsId));
   const { data: parentIssue } = useQuery({
@@ -358,9 +370,29 @@ export function ManualCreatePanel({
   const updateStatus = (v: IssueStatus) => { setStatus(v); setManual({ status: v }); };
   const updatePriority = (v: IssuePriority) => { setPriority(v); setShared({ priority: v }); };
   const updateAssignee = (type?: IssueAssigneeType, id?: string) => {
+    assigneeTouchedRef.current = true;
     setAssigneeType(type); setAssigneeId(id);
     setManual({ assigneeType: type, assigneeId: id });
   };
+
+  useEffect(() => {
+    if (
+      !localMode ||
+      !agentsLoaded ||
+      assigneeTouchedRef.current ||
+      assigneeId
+    ) {
+      return;
+    }
+    const availableAgents = agents.filter((agent) => !agent.archived_at);
+    const onlyAgent =
+      availableAgents.length === 1 ? availableAgents[0] : undefined;
+    if (!onlyAgent) return;
+    assigneeTouchedRef.current = true;
+    setAssigneeType("agent");
+    setAssigneeId(onlyAgent.id);
+    setManual({ assigneeType: "agent", assigneeId: onlyAgent.id });
+  }, [agents, agentsLoaded, assigneeId, localMode, setManual]);
   const updateProject = (id?: string) => { setProjectId(id); setShared({ projectId: id }); };
   const updateStartDate = (v: string | null) => { setStartDate(v); setManual({ startDate: v }); };
   const updateDueDate = (v: string | null) => { setDueDate(v); setShared({ dueDate: v }); };
@@ -1339,6 +1371,7 @@ import { Dialog as DialogRoot } from "@multica/ui/components/ui/dialog";
 export function CreateIssueModal(props: {
   onClose: () => void;
   data?: Record<string, unknown> | null;
+  localMode?: boolean;
 }) {
   const [isExpanded, setIsExpanded] = useState(false);
   return (

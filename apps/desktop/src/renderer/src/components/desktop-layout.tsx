@@ -256,7 +256,7 @@ export function DesktopShell() {
             </div>
           </SidebarProvider>
         </div>
-        {slug && <ModalRegistry />}
+        {slug && <ModalRegistry localMode />}
         {slug && <SearchCommand localMode />}
       </WorkspaceSlugProvider>
     </DesktopNavigationProvider>

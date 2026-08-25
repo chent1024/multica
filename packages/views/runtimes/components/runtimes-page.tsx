@@ -69,6 +69,8 @@ export interface RuntimesPageProps {
   bootstrapping?: boolean;
   /** Web SaaS-only Cloud Runtime entrypoint. */
   cloudRuntimeEnabled?: boolean;
+  /** Desktop local workbench: hide remote/cloud and account-scoped setup. */
+  localOnly?: boolean;
 }
 
 function useNowTick(intervalMs = 30_000): number {
@@ -86,6 +88,7 @@ export function RuntimesPage({
   hasLocalMachine,
   bootstrapping,
   cloudRuntimeEnabled = false,
+  localOnly = false,
 }: RuntimesPageProps = {}) {
   const isAuthLoading = useAuthStore((state) => state.isLoading);
   const currentUserId = useAuthStore((state) => state.user?.id);
@@ -98,7 +101,7 @@ export function RuntimesPage({
     runtimeListOptions(wsId),
   );
   const { data: runtimeProfiles = [], isLoading: profilesLoading } = useQuery(
-    runtimeProfileListOptions(wsId),
+    { ...runtimeProfileListOptions(wsId), enabled: !localOnly },
   );
   const { data: agents = [], isLoading: agentsLoading } = useQuery(
     agentListOptions(wsId),
@@ -108,7 +111,7 @@ export function RuntimesPage({
   // not say whether *this* member's conversation was ever opened and kicked
   // off. See memberNeedsMikaSetup.
   const { data: chatSessions = [], isLoading: chatSessionsLoading } = useQuery(
-    chatSessionsOptions(wsId),
+    { ...chatSessionsOptions(wsId), enabled: !localOnly },
   );
 
   const handleDaemonEvent = useCallback(() => {
@@ -167,20 +170,21 @@ export function RuntimesPage({
     <div className="flex min-h-0 flex-1 flex-col">
       <PageHeaderBar
         totalCount={machines.length}
-        onConnectRemote={() => setShowConnectDialog(true)}
+        onConnectRemote={localOnly ? undefined : () => setShowConnectDialog(true)}
         cloudRuntimeEnabled={cloudRuntimeEnabled}
         onOpenCloudRuntime={() => setShowCloudRuntimeDialog(true)}
       />
 
       {showEmpty ? (
         <div className="flex flex-1 items-center justify-center p-6">
-          <EmptyState onConnectRemote={() => setShowConnectDialog(true)} />
+          <EmptyState onConnectRemote={localOnly ? undefined : () => setShowConnectDialog(true)} />
         </div>
       ) : (
         <div className="min-h-0 flex-1 overflow-y-auto">
           <div className="mx-auto flex w-full max-w-[1440px] flex-col p-4 sm:p-6">
             {!agentsLoading &&
               !chatSessionsLoading &&
+              !localOnly &&
               memberNeedsMikaSetup(agents, chatSessions) &&
               runtimes.length > 0 && (
               <MikaSetupCard
@@ -207,7 +211,7 @@ export function RuntimesPage({
         </div>
       )}
 
-      {showConnectDialog && (
+      {!localOnly && showConnectDialog && (
         <ConnectRemoteDialog onClose={() => setShowConnectDialog(false)} />
       )}
       {cloudRuntimeEnabled && showCloudRuntimeDialog && (
@@ -379,7 +383,7 @@ function PageHeaderBar({
   onOpenCloudRuntime,
 }: {
   totalCount: number;
-  onConnectRemote: () => void;
+  onConnectRemote?: () => void;
   cloudRuntimeEnabled: boolean;
   onOpenCloudRuntime: () => void;
 }) {
@@ -403,11 +407,13 @@ function PageHeaderBar({
               onClick={onOpenCloudRuntime}
             />
           )}
-          <CollectionPageHeaderAction
-            icon={Plus}
-            label={t(($) => $.page.connect_remote)}
-            onClick={onConnectRemote}
-          />
+          {onConnectRemote && (
+            <CollectionPageHeaderAction
+              icon={Plus}
+              label={t(($) => $.page.connect_remote)}
+              onClick={onConnectRemote}
+            />
+          )}
         </>
       }
     />
@@ -552,19 +558,19 @@ function ProviderIconStack({ providers }: { providers: string[] }) {
   );
 }
 
-function EmptyState({ onConnectRemote }: { onConnectRemote: () => void }) {
+function EmptyState({ onConnectRemote }: { onConnectRemote?: () => void }) {
   const { t } = useT("runtimes");
   return (
     <CollectionPageState
       icon={Server}
       title={t(($) => $.page.empty.title)}
       description={t(($) => $.page.empty.hint)}
-      actions={
+      actions={onConnectRemote ? (
         <Button type="button" size="sm" onClick={onConnectRemote}>
           <Plus aria-hidden="true" className="size-3" />
           {t(($) => $.page.connect_remote)}
         </Button>
-      }
+      ) : undefined}
     />
   );
 }

@@ -14,9 +14,11 @@ import { useT } from "../../i18n";
 export function RuntimeSettingsPage({
   machineId,
   runtimeId,
+  localOnly = false,
 }: {
   machineId: string;
   runtimeId: string;
+  localOnly?: boolean;
 }) {
   const { t } = useT("runtimes");
   const wsId = useWorkspaceId();
@@ -70,6 +72,7 @@ export function RuntimeSettingsPage({
           ? paths.runtimeDetail(decodedMachineId)
           : paths.runtimes()
       }
+      localOnly={localOnly}
     />
   );
 }

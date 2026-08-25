@@ -99,24 +99,24 @@ type Issue struct {
 }
 
 type Comment struct {
-	ID             string  `json:"id"`
-	IssueID        string  `json:"issue_id"`
-	AuthorType     string  `json:"author_type"`
-	AuthorID       string  `json:"author_id"`
-	Content        string  `json:"content"`
-	Type           string  `json:"type"`
-	ParentID       *string `json:"parent_id"`
-	Reactions      []any   `json:"reactions"`
-	Attachments    []any   `json:"attachments"`
-	CreatedAt      string  `json:"created_at"`
-	UpdatedAt      string  `json:"updated_at"`
-	Revision       int64   `json:"revision"`
-	IssueRevision  int64   `json:"issue_revision"`
-	ResolvedAt     *string `json:"resolved_at"`
-	ResolvedByType *string `json:"resolved_by_type"`
-	ResolvedByID   *string `json:"resolved_by_id"`
-	SourceTaskID   *string `json:"source_task_id"`
-	QuickActionID  *string `json:"quick_action_id"`
+	ID             string       `json:"id"`
+	IssueID        string       `json:"issue_id"`
+	AuthorType     string       `json:"author_type"`
+	AuthorID       string       `json:"author_id"`
+	Content        string       `json:"content"`
+	Type           string       `json:"type"`
+	ParentID       *string      `json:"parent_id"`
+	Reactions      []any        `json:"reactions"`
+	Attachments    []Attachment `json:"attachments"`
+	CreatedAt      string       `json:"created_at"`
+	UpdatedAt      string       `json:"updated_at"`
+	Revision       int64        `json:"revision"`
+	IssueRevision  int64        `json:"issue_revision"`
+	ResolvedAt     *string      `json:"resolved_at"`
+	ResolvedByType *string      `json:"resolved_by_type"`
+	ResolvedByID   *string      `json:"resolved_by_id"`
+	SourceTaskID   *string      `json:"source_task_id"`
+	QuickActionID  *string      `json:"quick_action_id"`
 }
 
 func Open(ctx context.Context, path string) (*Store, error) {
@@ -199,6 +199,28 @@ func migrateLocalSchema(ctx context.Context, db *sql.DB) error {
 		return err
 	}
 	if _, err := tx.ExecContext(ctx, `INSERT OR IGNORE INTO schema_version(version, applied_at) VALUES (5, ?)`, now()); err != nil {
+		return err
+	}
+	if _, err := tx.ExecContext(ctx, `CREATE TABLE IF NOT EXISTS attachments (
+		id TEXT PRIMARY KEY,
+		workspace_id TEXT NOT NULL,
+		issue_id TEXT,
+		comment_id TEXT,
+		filename TEXT NOT NULL,
+		content_type TEXT NOT NULL,
+		size_bytes INTEGER NOT NULL,
+		data BLOB NOT NULL,
+		created_at TEXT NOT NULL
+	)`); err != nil {
+		return err
+	}
+	if _, err := tx.ExecContext(ctx, `CREATE INDEX IF NOT EXISTS attachments_issue_idx ON attachments(workspace_id, issue_id, created_at)`); err != nil {
+		return err
+	}
+	if _, err := tx.ExecContext(ctx, `CREATE INDEX IF NOT EXISTS attachments_comment_idx ON attachments(comment_id, created_at)`); err != nil {
+		return err
+	}
+	if _, err := tx.ExecContext(ctx, `INSERT OR IGNORE INTO schema_version(version, applied_at) VALUES (6, ?)`, now()); err != nil {
 		return err
 	}
 	return tx.Commit()
@@ -479,6 +501,7 @@ type CreateIssueInput struct {
 	StartDate     *string        `json:"start_date"`
 	DueDate       *string        `json:"due_date"`
 	Metadata      map[string]any `json:"metadata"`
+	AttachmentIDs []string       `json:"attachment_ids"`
 }
 
 func (s *Store) CreateIssue(ctx context.Context, workspaceID string, input CreateIssueInput) (Issue, error) {
@@ -525,6 +548,9 @@ func (s *Store) CreateIssue(ctx context.Context, workspaceID string, input Creat
 	if err != nil {
 		return Issue{}, err
 	}
+	if err := bindAttachmentsTx(ctx, tx, workspaceID, id, "", input.AttachmentIDs); err != nil {
+		return Issue{}, err
+	}
 	if err := tx.Commit(); err != nil {
 		return Issue{}, err
 	}
@@ -565,10 +591,46 @@ func (s *Store) UpdateIssue(ctx context.Context, workspaceID, id string, updates
 		args = append(args, value)
 	}
 	args = append(args, current.ID)
-	if _, err := s.db.ExecContext(ctx, "UPDATE issues SET "+strings.Join(set, ", ")+" WHERE id=?", args...); err != nil {
+	tx, err := s.db.BeginTx(ctx, nil)
+	if err != nil {
+		return Issue{}, err
+	}
+	defer func() { _ = tx.Rollback() }()
+	if _, err := tx.ExecContext(ctx, "UPDATE issues SET "+strings.Join(set, ", ")+" WHERE id=?", args...); err != nil {
+		return Issue{}, err
+	}
+	if rawIDs, ok := updates["attachment_ids"]; ok {
+		ids, err := attachmentIDs(rawIDs)
+		if err != nil {
+			return Issue{}, err
+		}
+		if err := bindAttachmentsTx(ctx, tx, workspaceID, current.ID, "", ids); err != nil {
+			return Issue{}, err
+		}
+	}
+	if err := tx.Commit(); err != nil {
 		return Issue{}, err
 	}
 	return s.GetIssue(ctx, workspaceID, current.ID)
+}
+
+func attachmentIDs(value any) ([]string, error) {
+	values, ok := value.([]any)
+	if !ok {
+		if strings, ok := value.([]string); ok {
+			return strings, nil
+		}
+		return nil, errors.New("attachment_ids must be an array")
+	}
+	ids := make([]string, 0, len(values))
+	for _, value := range values {
+		id, ok := value.(string)
+		if !ok || strings.TrimSpace(id) == "" {
+			return nil, errors.New("attachment_ids must contain non-empty strings")
+		}
+		ids = append(ids, id)
+	}
+	return ids, nil
 }
 
 func (s *Store) DeleteIssue(ctx context.Context, workspaceID, id string) error {
@@ -581,7 +643,7 @@ func (s *Store) DeleteIssue(ctx context.Context, workspaceID, id string) error {
 		return err
 	}
 	defer func() { _ = tx.Rollback() }()
-	for _, query := range []string{"DELETE FROM comments WHERE issue_id=?", "DELETE FROM activities WHERE issue_id=?", "DELETE FROM task_messages WHERE issue_id=?", "DELETE FROM task_runs WHERE issue_id=?", "DELETE FROM issues WHERE id=?"} {
+	for _, query := range []string{"DELETE FROM attachments WHERE issue_id=?", "DELETE FROM comments WHERE issue_id=?", "DELETE FROM activities WHERE issue_id=?", "DELETE FROM task_messages WHERE issue_id=?", "DELETE FROM task_runs WHERE issue_id=?", "DELETE FROM issues WHERE id=?"} {
 		if _, err := tx.ExecContext(ctx, query, issue.ID); err != nil {
 			return err
 		}
@@ -589,12 +651,11 @@ func (s *Store) DeleteIssue(ctx context.Context, workspaceID, id string) error {
 	return tx.Commit()
 }
 
-func (s *Store) ListComments(ctx context.Context, issueID string) ([]Comment, error) {
+func (s *Store) ListComments(ctx context.Context, workspaceID, issueID string) ([]Comment, error) {
 	rows, err := s.db.QueryContext(ctx, `SELECT id, issue_id, author_type, author_id, content, type, parent_id, created_at, updated_at, revision, issue_revision, resolved_at, resolved_by_type, resolved_by_id, source_task_id, quick_action_id FROM comments WHERE issue_id=? ORDER BY created_at`, issueID)
 	if err != nil {
 		return nil, err
 	}
-	defer rows.Close()
 	result := []Comment{}
 	for rows.Next() {
 		c, err := scanComment(rows)
@@ -603,7 +664,13 @@ func (s *Store) ListComments(ctx context.Context, issueID string) ([]Comment, er
 		}
 		result = append(result, c)
 	}
-	return result, rows.Err()
+	if err := rows.Close(); err != nil {
+		return nil, err
+	}
+	if err := s.hydrateCommentAttachments(ctx, workspaceID, result); err != nil {
+		return nil, err
+	}
+	return result, nil
 }
 
 func scanComment(row rowScanner) (Comment, error) {
@@ -611,15 +678,19 @@ func scanComment(row rowScanner) (Comment, error) {
 	var parent, resolvedAt, resolvedType, resolvedID, sourceTask, quickAction sql.NullString
 	err := row.Scan(&c.ID, &c.IssueID, &c.AuthorType, &c.AuthorID, &c.Content, &c.Type, &parent, &c.CreatedAt, &c.UpdatedAt, &c.Revision, &c.IssueRevision, &resolvedAt, &resolvedType, &resolvedID, &sourceTask, &quickAction)
 	c.ParentID, c.ResolvedAt, c.ResolvedByType, c.ResolvedByID = stringPtr(parent), stringPtr(resolvedAt), stringPtr(resolvedType), stringPtr(resolvedID)
-	c.SourceTaskID, c.QuickActionID, c.Reactions, c.Attachments = stringPtr(sourceTask), stringPtr(quickAction), []any{}, []any{}
+	c.SourceTaskID, c.QuickActionID, c.Reactions, c.Attachments = stringPtr(sourceTask), stringPtr(quickAction), []any{}, []Attachment{}
 	return c, err
 }
 
 func (s *Store) CreateComment(ctx context.Context, issueID, content, kind, parentID string) (Comment, error) {
-	return s.createComment(ctx, issueID, content, kind, parentID, "system", LocalActorID)
+	return s.createComment(ctx, "", issueID, content, kind, parentID, "system", LocalActorID, nil)
 }
 
-func (s *Store) createComment(ctx context.Context, issueID, content, kind, parentID, authorType, authorID string) (Comment, error) {
+func (s *Store) CreateCommentWithAttachments(ctx context.Context, workspaceID, issueID, content, kind, parentID string, attachmentIDs []string) (Comment, error) {
+	return s.createComment(ctx, workspaceID, issueID, content, kind, parentID, "system", LocalActorID, attachmentIDs)
+}
+
+func (s *Store) createComment(ctx context.Context, workspaceID, issueID, content, kind, parentID, authorType, authorID string, attachmentIDs []string) (Comment, error) {
 	if kind == "" {
 		kind = "comment"
 	}
@@ -637,19 +708,95 @@ func (s *Store) createComment(ctx context.Context, issueID, content, kind, paren
 	if err != nil {
 		return Comment{}, err
 	}
+	if len(attachmentIDs) > 0 {
+		if workspaceID == "" {
+			return Comment{}, errors.New("workspace is required to bind attachments")
+		}
+		if err := bindAttachmentsTx(ctx, tx, workspaceID, issueID, id, attachmentIDs); err != nil {
+			return Comment{}, err
+		}
+	}
 	if err := tx.Commit(); err != nil {
 		return Comment{}, err
 	}
-	return scanComment(s.db.QueryRowContext(ctx, `SELECT id, issue_id, author_type, author_id, content, type, parent_id, created_at, updated_at, revision, issue_revision, resolved_at, resolved_by_type, resolved_by_id, source_task_id, quick_action_id FROM comments WHERE id=?`, id))
+	comment, err := scanComment(s.db.QueryRowContext(ctx, `SELECT id, issue_id, author_type, author_id, content, type, parent_id, created_at, updated_at, revision, issue_revision, resolved_at, resolved_by_type, resolved_by_id, source_task_id, quick_action_id FROM comments WHERE id=?`, id))
+	if err != nil {
+		return Comment{}, err
+	}
+	if workspaceID != "" {
+		attachments, err := s.listAttachments(ctx, workspaceID, "", id)
+		if err != nil {
+			return Comment{}, err
+		}
+		for index := range attachments {
+			attachments[index] = attachmentWithURLs(attachments[index])
+		}
+		comment.Attachments = attachments
+	}
+	return comment, nil
 }
 
-func (s *Store) Timeline(ctx context.Context, issueID string) ([]map[string]any, error) {
+func (s *Store) hydrateCommentAttachments(ctx context.Context, workspaceID string, comments []Comment) error {
+	for index := range comments {
+		attachments, err := s.listAttachments(ctx, workspaceID, "", comments[index].ID)
+		if err != nil {
+			return err
+		}
+		for attachmentIndex := range attachments {
+			attachments[attachmentIndex] = attachmentWithURLs(attachments[attachmentIndex])
+		}
+		comments[index].Attachments = attachments
+	}
+	return nil
+}
+
+func (s *Store) setCommentResolved(ctx context.Context, workspaceID, commentID string, resolved bool) (Comment, error) {
+	tx, err := s.db.BeginTx(ctx, nil)
+	if err != nil {
+		return Comment{}, err
+	}
+	defer func() { _ = tx.Rollback() }()
+	stamp := now()
+	var issueID string
+	if err := tx.QueryRowContext(ctx, `SELECT c.issue_id FROM comments c JOIN issues i ON i.id=c.issue_id WHERE c.id=? AND i.workspace_id=?`, commentID, workspaceID).Scan(&issueID); err != nil {
+		return Comment{}, err
+	}
+	var revision int64
+	if err := tx.QueryRowContext(ctx, `UPDATE issues SET revision=revision+1, updated_at=?, last_activity_at=? WHERE id=? RETURNING revision`, stamp, stamp, issueID).Scan(&revision); err != nil {
+		return Comment{}, err
+	}
+	if resolved {
+		_, err = tx.ExecContext(ctx, `UPDATE comments SET resolved_at=?, resolved_by_type='system', resolved_by_id=?, revision=revision+1, issue_revision=?, updated_at=? WHERE id=?`, stamp, LocalActorID, revision, stamp, commentID)
+	} else {
+		_, err = tx.ExecContext(ctx, `UPDATE comments SET resolved_at=NULL, resolved_by_type=NULL, resolved_by_id=NULL, revision=revision+1, issue_revision=?, updated_at=? WHERE id=?`, revision, stamp, commentID)
+	}
+	if err != nil {
+		return Comment{}, err
+	}
+	if err := tx.Commit(); err != nil {
+		return Comment{}, err
+	}
+	comment, err := scanComment(s.db.QueryRowContext(ctx, `SELECT id, issue_id, author_type, author_id, content, type, parent_id, created_at, updated_at, revision, issue_revision, resolved_at, resolved_by_type, resolved_by_id, source_task_id, quick_action_id FROM comments WHERE id=?`, commentID))
+	if err != nil {
+		return Comment{}, err
+	}
+	attachments, err := s.listAttachments(ctx, workspaceID, "", commentID)
+	if err != nil {
+		return Comment{}, err
+	}
+	for index := range attachments {
+		attachments[index] = attachmentWithURLs(attachments[index])
+	}
+	comment.Attachments = attachments
+	return comment, nil
+}
+
+func (s *Store) Timeline(ctx context.Context, workspaceID, issueID string) ([]map[string]any, error) {
 	rows, err := s.db.QueryContext(ctx, `SELECT 'activity', id, actor_type, actor_id, created_at, action, details, NULL, NULL, NULL, NULL FROM activities WHERE issue_id=?
 		UNION ALL SELECT 'comment', id, author_type, author_id, created_at, NULL, '{}', content, parent_id, updated_at, type FROM comments WHERE issue_id=? ORDER BY created_at`, issueID, issueID)
 	if err != nil {
 		return nil, err
 	}
-	defer rows.Close()
 	result := []map[string]any{}
 	for rows.Next() {
 		var kind, id, actorType, actorID, createdAt, details string
@@ -668,11 +815,36 @@ func (s *Store) Timeline(ctx context.Context, issueID string) ([]map[string]any,
 			entry["updated_at"] = updatedAt.String
 			entry["comment_type"] = commentType.String
 			entry["reactions"] = []any{}
-			entry["attachments"] = []any{}
+			entry["attachments"] = []Attachment{}
 		}
 		result = append(result, entry)
 	}
-	return result, rows.Err()
+	if err := rows.Close(); err != nil {
+		return nil, err
+	}
+	comments, err := s.ListComments(ctx, workspaceID, issueID)
+	if err != nil {
+		return nil, err
+	}
+	commentsByID := make(map[string]Comment, len(comments))
+	for _, comment := range comments {
+		commentsByID[comment.ID] = comment
+	}
+	for _, entry := range result {
+		comment, ok := commentsByID[fmt.Sprint(entry["id"])]
+		if !ok {
+			continue
+		}
+		entry["revision"] = comment.Revision
+		entry["issue_revision"] = comment.IssueRevision
+		entry["resolved_at"] = comment.ResolvedAt
+		entry["resolved_by_type"] = comment.ResolvedByType
+		entry["resolved_by_id"] = comment.ResolvedByID
+		entry["source_task_id"] = comment.SourceTaskID
+		entry["quick_action_id"] = comment.QuickActionID
+		entry["attachments"] = comment.Attachments
+	}
+	return result, nil
 }
 
 func (s *Store) ListStatuses(ctx context.Context, workspaceID string) ([]map[string]any, error) {

@@ -84,11 +84,13 @@ export function RuntimeDetail({
   machineHref,
   machineLabel,
   afterDeleteHref,
+  localOnly = false,
 }: {
   runtime: AgentRuntime;
   machineHref?: string;
   machineLabel?: string;
   afterDeleteHref?: string;
+  localOnly?: boolean;
 }) {
   const { t } = useT("runtimes");
   const timeAgo = useTimeAgo();
@@ -100,7 +102,10 @@ export function RuntimeDetail({
   const navigation = useNavigation();
   const { data: members = [] } = useQuery(memberListOptions(wsId));
   const { data: agents = [] } = useQuery(agentListOptions(wsId));
-  const { data: profiles = [] } = useQuery(runtimeProfileListOptions(wsId));
+  const { data: profiles = [] } = useQuery({
+    ...runtimeProfileListOptions(wsId),
+    enabled: !localOnly,
+  });
   const { byAgent: presenceMap } = useWorkspacePresenceMap(wsId);
   const now = useNowTick();
 

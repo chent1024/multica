@@ -10,7 +10,7 @@ import { AddChildIssueModal } from "./add-child-issue";
 import { DeleteIssueConfirmModal } from "./delete-issue-confirm";
 import { RunConfirmModal } from "./run-confirm";
 
-export function ModalRegistry() {
+export function ModalRegistry({ localMode = false }: { localMode?: boolean }) {
   const modal = useModalStore((s) => s.modal);
   const data = useModalStore((s) => s.data);
   const close = useModalStore((s) => s.close);
@@ -19,9 +19,23 @@ export function ModalRegistry() {
     // Both modal types open the same shell so the in-modal mode switch is
     // instant — only the inner panel swaps, the Dialog Root stays mounted.
     case "create-issue":
-      return <CreateIssueDialog onClose={close} initialMode="manual" data={data} />;
+      return (
+        <CreateIssueDialog
+          onClose={close}
+          initialMode="manual"
+          data={data}
+          localMode={localMode}
+        />
+      );
     case "quick-create-issue":
-      return <CreateIssueDialog onClose={close} initialMode="agent" data={data} />;
+      return (
+        <CreateIssueDialog
+          onClose={close}
+          initialMode="agent"
+          data={data}
+          localMode={localMode}
+        />
+      );
     case "create-project":
       return <CreateProjectModal onClose={close} />;
     case "create-squad":

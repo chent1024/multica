@@ -5,6 +5,7 @@ import (
 	"context"
 	"encoding/json"
 	"io"
+	"mime/multipart"
 	"net/http"
 	"net/http/httptest"
 	"path/filepath"
@@ -13,6 +14,134 @@ import (
 
 	"github.com/gorilla/websocket"
 )
+
+func TestLocalAttachmentUploadAndCommentBinding(t *testing.T) {
+	databasePath := filepath.Join(t.TempDir(), "multica.db")
+	app, err := New(t.Context(), databasePath, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer app.Close()
+	server := httptest.NewServer(app.Router())
+	defer server.Close()
+
+	var workspaces []Workspace
+	requestJSON(t, server.URL, http.MethodGet, "/api/workspaces", nil, http.StatusOK, &workspaces)
+	var issue Issue
+	requestJSON(t, server.URL, http.MethodPost, "/api/issues", map[string]any{"title": "Paste screenshot"}, http.StatusCreated, &issue)
+
+	png := []byte("\x89PNG\r\n\x1a\nlocal screenshot")
+	var form bytes.Buffer
+	writer := multipart.NewWriter(&form)
+	part, err := writer.CreateFormFile("file", "image.png")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := part.Write(png); err != nil {
+		t.Fatal(err)
+	}
+	if err := writer.WriteField("issue_id", issue.ID); err != nil {
+		t.Fatal(err)
+	}
+	if err := writer.Close(); err != nil {
+		t.Fatal(err)
+	}
+	request, err := http.NewRequestWithContext(t.Context(), http.MethodPost, server.URL+"/api/upload-file", &form)
+	if err != nil {
+		t.Fatal(err)
+	}
+	request.Header.Set("Content-Type", writer.FormDataContentType())
+	request.Header.Set("X-Workspace-Slug", "local")
+	response, err := http.DefaultClient.Do(request)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer response.Body.Close()
+	if response.StatusCode != http.StatusCreated {
+		raw, _ := io.ReadAll(response.Body)
+		t.Fatalf("upload status = %d: %s", response.StatusCode, raw)
+	}
+	var attachment Attachment
+	if err := json.NewDecoder(response.Body).Decode(&attachment); err != nil {
+		t.Fatal(err)
+	}
+	if attachment.Filename != "image.png" || attachment.ContentType != "image/png" || attachment.IssueID == nil || *attachment.IssueID != issue.ID {
+		t.Fatalf("attachment = %#v", attachment)
+	}
+	if attachment.MarkdownURL != "/api/attachments/"+attachment.ID+"/download" {
+		t.Fatalf("markdown URL = %q", attachment.MarkdownURL)
+	}
+
+	download, err := http.Get(server.URL + attachment.DownloadURL)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer download.Body.Close()
+	downloaded, err := io.ReadAll(download.Body)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if download.StatusCode != http.StatusOK || download.Header.Get("Content-Type") != "image/png" || !bytes.Equal(downloaded, png) {
+		t.Fatalf("download status=%d content-type=%q body=%q", download.StatusCode, download.Header.Get("Content-Type"), downloaded)
+	}
+
+	var comment Comment
+	requestJSON(t, server.URL, http.MethodPost, "/api/issues/"+issue.ID+"/comments", map[string]any{
+		"content": "Screenshot attached", "attachment_ids": []string{attachment.ID},
+	}, http.StatusCreated, &comment)
+	if len(comment.Attachments) != 1 || comment.Attachments[0].ID != attachment.ID {
+		t.Fatalf("comment attachments = %#v", comment.Attachments)
+	}
+	requestJSON(t, server.URL, http.MethodPost, "/api/comments/"+comment.ID+"/resolve", map[string]any{}, http.StatusOK, &comment)
+	if comment.ResolvedAt == nil || comment.ResolvedByID == nil || *comment.ResolvedByID != LocalActorID {
+		t.Fatalf("resolved comment = %#v", comment)
+	}
+	var resolvedTimeline []map[string]any
+	requestJSON(t, server.URL, http.MethodGet, "/api/issues/"+issue.ID+"/timeline", nil, http.StatusOK, &resolvedTimeline)
+	if len(resolvedTimeline) != 2 || resolvedTimeline[1]["resolved_at"] == nil || resolvedTimeline[1]["resolved_by_id"] != LocalActorID {
+		t.Fatalf("resolved timeline = %#v", resolvedTimeline)
+	}
+	requestJSON(t, server.URL, http.MethodDelete, "/api/comments/"+comment.ID+"/resolve", nil, http.StatusOK, &comment)
+	if comment.ResolvedAt != nil || comment.ResolvedByID != nil {
+		t.Fatalf("unresolved comment = %#v", comment)
+	}
+	var comments []Comment
+	requestJSON(t, server.URL, http.MethodGet, "/api/issues/"+issue.ID+"/comments", nil, http.StatusOK, &comments)
+	if len(comments) != 1 || len(comments[0].Attachments) != 1 || comments[0].Attachments[0].ID != attachment.ID {
+		t.Fatalf("listed comments = %#v", comments)
+	}
+	var timeline []map[string]any
+	requestJSON(t, server.URL, http.MethodGet, "/api/issues/"+issue.ID+"/timeline", nil, http.StatusOK, &timeline)
+	if len(timeline) != 2 {
+		t.Fatalf("timeline = %#v", timeline)
+	}
+	attachments, ok := timeline[1]["attachments"].([]any)
+	if !ok || len(attachments) != 1 {
+		t.Fatalf("timeline attachments = %#v", timeline[1]["attachments"])
+	}
+	var issueAttachments []Attachment
+	requestJSON(t, server.URL, http.MethodGet, "/api/issues/"+issue.ID+"/attachments", nil, http.StatusOK, &issueAttachments)
+	if len(issueAttachments) != 1 || issueAttachments[0].ID != attachment.ID {
+		t.Fatalf("issue attachments = %#v", issueAttachments)
+	}
+	unbound, err := app.store.createAttachment(t.Context(), workspaces[0].ID, "", "description.png", "image/png", png)
+	if err != nil {
+		t.Fatal(err)
+	}
+	requestJSON(t, server.URL, http.MethodPut, "/api/issues/"+issue.ID, map[string]any{
+		"description":    "![description](/api/attachments/" + unbound.ID + "/download)",
+		"attachment_ids": []string{unbound.ID},
+	}, http.StatusOK, &issue)
+	requestJSON(t, server.URL, http.MethodGet, "/api/issues/"+issue.ID+"/attachments", nil, http.StatusOK, &issueAttachments)
+	if len(issueAttachments) != 2 {
+		t.Fatalf("description attachment was not bound: %#v", issueAttachments)
+	}
+
+	requestJSON[map[string]any](t, server.URL, http.MethodPost, "/api/upload-file", map[string]any{"file": "not multipart"}, http.StatusUnsupportedMediaType, nil)
+	if len(workspaces) != 1 {
+		t.Fatalf("workspaces = %#v", workspaces)
+	}
+}
 
 func TestSQLiteWorkbenchPersistsCoreLifecycle(t *testing.T) {
 	databasePath := filepath.Join(t.TempDir(), "multica.db")
@@ -407,6 +536,18 @@ func TestSQLiteWorkbenchRunsAssignedIssueThroughDaemonProtocol(t *testing.T) {
 	if runs[0]["handoff_note"] != "Verify the local execution chain" {
 		t.Fatalf("task run handoff note = %#v", runs[0]["handoff_note"])
 	}
+	var rerun map[string]any
+	requestJSON(t, server.URL, http.MethodPost, "/api/issues/"+issue.ID+"/rerun", map[string]any{"task_id": taskID}, http.StatusCreated, &rerun)
+	if rerun["status"] != "queued" || rerun["issue_id"] != issue.ID {
+		t.Fatalf("rerun = %#v", rerun)
+	}
+	requestJSON(t, server.URL, http.MethodPost, "/api/issues/"+issue.ID+"/tasks/"+rerun["id"].(string)+"/cancel", map[string]any{}, http.StatusOK, &rerun)
+	if rerun["status"] != "cancelled" {
+		t.Fatalf("cancelled rerun = %#v", rerun)
+	}
+	var usage []map[string]any
+	requestJSON(t, server.URL, http.MethodGet, "/api/runtimes/"+registration.Runtimes[0].ID+"/usage?days=180", nil, http.StatusOK, &usage)
+	requestJSON(t, server.URL, http.MethodGet, "/api/runtimes/"+registration.Runtimes[0].ID+"/usage/by-agent?days=30", nil, http.StatusOK, &usage)
 	var transcript []map[string]any
 	requestJSON(t, server.URL, http.MethodGet, "/api/tasks/"+taskID+"/messages", nil, http.StatusOK, &transcript)
 	if len(transcript) != 2 || transcript[0]["seq"] != float64(1) || transcript[1]["seq"] != float64(2) {
@@ -532,11 +673,15 @@ func TestSQLiteWorkbenchUpgradesTaskRunHandoffNote(t *testing.T) {
 	if err := reopened.db.QueryRowContext(t.Context(), `SELECT MAX(version) FROM schema_version`).Scan(&version); err != nil {
 		t.Fatal(err)
 	}
-	if version != 5 {
-		t.Fatalf("schema version = %d, want 5", version)
+	if version != 6 {
+		t.Fatalf("schema version = %d, want 6", version)
 	}
 	var taskMessagesTable string
 	if err := reopened.db.QueryRowContext(t.Context(), `SELECT name FROM sqlite_master WHERE type='table' AND name='task_messages'`).Scan(&taskMessagesTable); err != nil {
+		t.Fatal(err)
+	}
+	var attachmentsTable string
+	if err := reopened.db.QueryRowContext(t.Context(), `SELECT name FROM sqlite_master WHERE type='table' AND name='attachments'`).Scan(&attachmentsTable); err != nil {
 		t.Fatal(err)
 	}
 }

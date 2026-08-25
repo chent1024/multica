@@ -2,7 +2,11 @@
 
 import { describe, it, expect, vi, beforeEach } from "vitest";
 import type { ComponentProps, ReactNode } from "react";
-import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
+import {
+  QueryClient,
+  QueryClientProvider,
+  useQuery,
+} from "@tanstack/react-query";
 import { render, screen, fireEvent, waitFor } from "@testing-library/react";
 import type { AgentRuntime, RuntimeProfile } from "@multica/core/types";
 import { I18nProvider } from "@multica/core/i18n/react";
@@ -179,7 +183,7 @@ function renderDetail(
   runtime: AgentRuntime,
   props: Pick<
     ComponentProps<typeof RuntimeDetail>,
-    "machineHref" | "machineLabel"
+    "machineHref" | "machineLabel" | "localOnly"
   > = {},
 ) {
   const qc = new QueryClient({ defaultOptions: { queries: { retry: false } } });
@@ -223,6 +227,17 @@ describe("RuntimeDetail visibility section", () => {
     expect(
       screen.queryByRole("button", { name: "Update" }),
     ).not.toBeInTheDocument();
+  });
+
+  it("does not request account-scoped runtime profiles in local-only mode", () => {
+    renderDetail(makeRuntime({}), { localOnly: true });
+
+    expect(vi.mocked(useQuery)).toHaveBeenCalledWith(
+      expect.objectContaining({
+        queryKey: ["runtime-profiles", "ws-1"],
+        enabled: false,
+      }),
+    );
   });
 
   it("uses the provider name when the runtime alias is the machine name", () => {

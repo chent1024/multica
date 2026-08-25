@@ -28,6 +28,7 @@ export function RuntimeDetailPage() {
       localMachineName={context.localMachineName}
       localMachineActions={<DaemonRuntimeActions />}
       hasLocalMachine
+      localOnly
       bootstrapping={context.bootstrapping}
     />
   );
@@ -45,5 +46,5 @@ export function RuntimeSettingsPage() {
   useDocumentTitle(runtime ? runtimeDisplayLabel(runtime) : "Runtime");
 
   if (!id || !runtimeId) return null;
-  return <SharedRuntimeSettingsPage machineId={id} runtimeId={runtimeId} />;
+  return <SharedRuntimeSettingsPage machineId={id} runtimeId={runtimeId} localOnly />;
 }

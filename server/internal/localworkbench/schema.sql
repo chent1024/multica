@@ -159,6 +159,20 @@ CREATE TABLE IF NOT EXISTS task_messages (
 );
 CREATE INDEX IF NOT EXISTS task_messages_issue_idx ON task_messages(issue_id, task_id, seq);
 
+CREATE TABLE IF NOT EXISTS attachments (
+    id TEXT PRIMARY KEY,
+    workspace_id TEXT NOT NULL,
+    issue_id TEXT,
+    comment_id TEXT,
+    filename TEXT NOT NULL,
+    content_type TEXT NOT NULL,
+    size_bytes INTEGER NOT NULL,
+    data BLOB NOT NULL,
+    created_at TEXT NOT NULL
+);
+CREATE INDEX IF NOT EXISTS attachments_issue_idx ON attachments(workspace_id, issue_id, created_at);
+CREATE INDEX IF NOT EXISTS attachments_comment_idx ON attachments(comment_id, created_at);
+
 CREATE TABLE IF NOT EXISTS runtimes (
     id TEXT PRIMARY KEY,
     workspace_id TEXT NOT NULL,
@@ -190,3 +204,6 @@ VALUES (4, strftime('%Y-%m-%dT%H:%M:%fZ', 'now'));
 
 INSERT OR IGNORE INTO schema_version(version, applied_at)
 VALUES (5, strftime('%Y-%m-%dT%H:%M:%fZ', 'now'));
+
+INSERT OR IGNORE INTO schema_version(version, applied_at)
+VALUES (6, strftime('%Y-%m-%dT%H:%M:%fZ', 'now'));

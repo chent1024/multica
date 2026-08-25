@@ -33,6 +33,7 @@ const mockPush = vi.hoisted(() => vi.fn());
 const mockCreateIssue = vi.hoisted(() => vi.fn());
 const mockAttachLabel = vi.hoisted(() => vi.fn());
 const mockListProperties = vi.hoisted(() => vi.fn());
+const mockListAgents = vi.hoisted(() => vi.fn());
 const mockSetIssueProperty = vi.hoisted(() => vi.fn());
 const mockSetShared = vi.hoisted(() => vi.fn());
 const mockSetManual = vi.hoisted(() => vi.fn());
@@ -163,6 +164,13 @@ vi.mock("@multica/core/paths", () => ({
 
 vi.mock("@multica/core/hooks", () => ({
   useWorkspaceId: () => "ws-test",
+}));
+
+vi.mock("@multica/core/workspace/queries", () => ({
+  agentListOptions: (wsId: string) => ({
+    queryKey: ["workspaces", wsId, "agents"],
+    queryFn: mockListAgents,
+  }),
 }));
 
 vi.mock("@multica/core/issues/queries", () => ({
@@ -579,6 +587,7 @@ describe("CreateIssueModal", () => {
     vi.clearAllMocks();
     mockQuickCreateStore.keepOpen = false;
     mockCreateSettingsStore.manualCreateFields = DEFAULT_MANUAL_FIELDS;
+    mockListAgents.mockResolvedValue([]);
     mockSetKeepOpen.mockImplementation((v: boolean) => {
       mockQuickCreateStore.keepOpen = v;
     });
@@ -698,6 +707,64 @@ describe("CreateIssueModal", () => {
 
     expect(mockPush).toHaveBeenCalledWith("/ws-test/issues/issue-123");
     expect(mockToastDismiss).toHaveBeenCalledWith("toast-1");
+  });
+
+  it("defaults to the only available agent in local mode", async () => {
+    const user = userEvent.setup();
+    mockListAgents.mockResolvedValue([
+      {
+        id: "agent-codex",
+        name: "Codex",
+        archived_at: null,
+      },
+    ]);
+
+    renderModal(<CreateIssueModal onClose={vi.fn()} localMode />);
+
+    await waitFor(() => {
+      expect(mockSetManual).toHaveBeenCalledWith({
+        assigneeType: "agent",
+        assigneeId: "agent-codex",
+      });
+    });
+
+    fireEvent.change(screen.getByPlaceholderText("Issue title"), {
+      target: { value: "Use local Codex" },
+    });
+    await user.click(screen.getByRole("button", { name: "Create Issue" }));
+
+    await waitFor(() => {
+      expect(mockCreateIssue).toHaveBeenCalledWith(
+        expect.objectContaining({
+          assignee_type: "agent",
+          assignee_id: "agent-codex",
+        }),
+      );
+    });
+  });
+
+  it("preserves an explicitly unassigned local create", async () => {
+    mockListAgents.mockResolvedValue([
+      {
+        id: "agent-codex",
+        name: "Codex",
+        archived_at: null,
+      },
+    ]);
+
+    renderModal(
+      <CreateIssueModal
+        onClose={vi.fn()}
+        localMode
+        data={{ assignee_type: null, assignee_id: null }}
+      />,
+    );
+
+    await waitFor(() => expect(mockListAgents).toHaveBeenCalled());
+    expect(mockSetManual).not.toHaveBeenCalledWith({
+      assigneeType: "agent",
+      assigneeId: "agent-codex",
+    });
   });
 
   it("forwards selected labels in the create payload so they attach in the same transaction", async () => {

@@ -80,7 +80,7 @@ function IssueWindowRoute() {
         <IssueWindowFrame>
           <IssueDetailPage onDelete={() => window.desktopAPI.closeWindow()} />
         </IssueWindowFrame>
-        <ModalRegistry />
+        <ModalRegistry localMode />
       </IssueWindowNavigationProvider>
     </WorkspaceSlugProvider>
   );

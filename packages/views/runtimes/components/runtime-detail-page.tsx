@@ -37,6 +37,7 @@ export interface RuntimeDetailPageProps {
   localMachineActions?: React.ReactNode;
   hasLocalMachine?: boolean;
   bootstrapping?: boolean;
+  localOnly?: boolean;
 }
 
 function useNowTick(intervalMs = 30_000): number {
@@ -84,6 +85,7 @@ export function RuntimeDetailPage({
   localMachineActions,
   hasLocalMachine,
   bootstrapping,
+  localOnly = false,
 }: RuntimeDetailPageProps) {
   const { t } = useT("runtimes");
   const wsId = useWorkspaceId();
@@ -97,7 +99,7 @@ export function RuntimeDetailPage({
   const { data: tasks = [] } = useQuery(agentTaskSnapshotOptions(wsId));
   const { data: members = [] } = useQuery(memberListOptions(wsId));
   const { data: runtimeProfiles = [] } = useQuery(
-    runtimeProfileListOptions(wsId),
+    { ...runtimeProfileListOptions(wsId), enabled: !localOnly },
   );
   const now = useNowTick();
   const machineLocator = decodeRouteParam(runtimeId);
@@ -318,6 +320,7 @@ export function RuntimeDetailPage({
               <RuntimeList
                 runtimes={machineRuntimes}
                 now={now}
+                localOnly={localOnly}
                 machineTitle={machine.title}
                 runtimeHref={(childRuntimeId) =>
                   paths.runtimeSettings(machine.id, childRuntimeId)

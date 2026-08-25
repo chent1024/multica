@@ -69,6 +69,11 @@ func (s *Server) Router() http.Handler {
 	r.Get("/ws", s.websocket)
 	r.Route("/api", func(api chi.Router) {
 		api.Get("/config", s.config)
+		api.Post("/upload-file", s.uploadFile)
+		api.Get("/attachments/{id}", s.getAttachment)
+		api.Get("/attachments/{id}/content", s.attachmentContent)
+		api.Get("/attachments/{id}/download", s.downloadAttachment)
+		api.Delete("/attachments/{id}", s.deleteAttachment)
 		api.Get("/workspaces", s.listWorkspaces)
 		api.Get("/workspaces/{id}", s.getWorkspace)
 		api.Patch("/workspaces/{id}", s.updateWorkspace)
@@ -136,11 +141,15 @@ func (s *Server) Router() http.Handler {
 		api.Get("/issues/{id}/comments", s.listComments)
 		api.Post("/issues/{id}/comments", s.createComment)
 		api.Post("/issues/{id}/comments/trigger-preview", emptyObject("agents", []any{}))
-		api.Get("/issues/{id}/attachments", emptyArray())
+		api.Post("/comments/{id}/resolve", s.resolveComment)
+		api.Delete("/comments/{id}/resolve", s.unresolveComment)
+		api.Get("/issues/{id}/attachments", s.listIssueAttachments)
 		api.Get("/issues/{id}/labels", emptyObject("labels", []any{}))
 		api.Get("/issues/{id}/timeline", s.timeline)
 		api.Get("/issues/{id}/active-task", s.activeTask)
 		api.Get("/issues/{id}/task-runs", s.listTaskRuns)
+		api.Post("/issues/{id}/tasks/{taskID}/cancel", s.cancelTask)
+		api.Post("/issues/{id}/rerun", s.rerunIssue)
 		api.Get("/issues/{id}/usage", emptyObject("total_tokens", 0, "total_cost_usd", 0))
 
 		api.Get("/issue-statuses", s.listIssueStatuses)
@@ -149,6 +158,8 @@ func (s *Server) Router() http.Handler {
 		api.Get("/agents/{id}", s.getAgent)
 		api.Get("/tasks/{taskID}/messages", s.listTaskMessages)
 		api.Get("/runtimes", s.listRuntimes)
+		api.Get("/runtimes/{id}/usage", emptyArray())
+		api.Get("/runtimes/{id}/usage/by-agent", emptyArray())
 		api.Get("/agent-task-snapshot", emptyArray())
 		api.Get("/working-agents", emptyArray())
 		api.Get("/assignee-frequency", emptyArray())
@@ -207,7 +218,12 @@ func localRequestBoundary(next http.Handler) http.Handler {
 		}
 		if r.Method == http.MethodPost || r.Method == http.MethodPut || r.Method == http.MethodPatch {
 			contentType := strings.ToLower(strings.TrimSpace(strings.Split(r.Header.Get("Content-Type"), ";")[0]))
-			if contentType != "application/json" {
+			if r.Method == http.MethodPost && r.URL.Path == "/api/upload-file" {
+				if contentType != "multipart/form-data" {
+					writeError(w, http.StatusUnsupportedMediaType, errors.New("multipart/form-data is required"))
+					return
+				}
+			} else if contentType != "application/json" {
 				writeError(w, http.StatusUnsupportedMediaType, errors.New("application/json is required"))
 				return
 			}
@@ -1034,6 +1050,7 @@ func (s *Server) quickCreateIssue(w http.ResponseWriter, r *http.Request) {
 		Title: title, Description: prompt, Status: "todo", Priority: input.Priority,
 		AssigneeType: &agentType, AssigneeID: &agentID,
 		ProjectID: input.ProjectID, ParentIssueID: input.ParentID, DueDate: input.DueDate,
+		AttachmentIDs: input.AttachmentIDs,
 	})
 	if err != nil {
 		s.respondStoreError(w, err)
@@ -1278,7 +1295,7 @@ func (s *Server) listComments(w http.ResponseWriter, r *http.Request) {
 		s.respondStoreError(w, err)
 		return
 	}
-	items, err := s.store.ListComments(r.Context(), chi.URLParam(r, "id"))
+	items, err := s.store.ListComments(r.Context(), ws.ID, chi.URLParam(r, "id"))
 	if err != nil {
 		s.fail(w, err)
 		return
@@ -1296,15 +1313,16 @@ func (s *Server) createComment(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	var input struct {
-		Content  string `json:"content"`
-		Type     string `json:"type"`
-		ParentID string `json:"parent_id"`
+		Content       string   `json:"content"`
+		Type          string   `json:"type"`
+		ParentID      string   `json:"parent_id"`
+		AttachmentIDs []string `json:"attachment_ids"`
 	}
 	if err := decodeBody(r, &input); err != nil || strings.TrimSpace(input.Content) == "" {
 		writeError(w, 400, errors.New("content is required"))
 		return
 	}
-	item, err := s.store.CreateComment(r.Context(), chi.URLParam(r, "id"), input.Content, input.Type, input.ParentID)
+	item, err := s.store.CreateCommentWithAttachments(r.Context(), ws.ID, chi.URLParam(r, "id"), input.Content, input.Type, input.ParentID, input.AttachmentIDs)
 	if err != nil {
 		s.respondStoreError(w, err)
 		return
@@ -1312,6 +1330,34 @@ func (s *Server) createComment(w http.ResponseWriter, r *http.Request) {
 	s.hub.broadcast("comment:created", map[string]any{"comment": item})
 	writeJSON(w, 201, item)
 }
+
+func (s *Server) resolveComment(w http.ResponseWriter, r *http.Request) {
+	s.setCommentResolution(w, r, true)
+}
+
+func (s *Server) unresolveComment(w http.ResponseWriter, r *http.Request) {
+	s.setCommentResolution(w, r, false)
+}
+
+func (s *Server) setCommentResolution(w http.ResponseWriter, r *http.Request, resolved bool) {
+	ws, err := s.workspaceFor(r)
+	if err != nil {
+		s.respondStoreError(w, err)
+		return
+	}
+	item, err := s.store.setCommentResolved(r.Context(), ws.ID, chi.URLParam(r, "id"), resolved)
+	if err != nil {
+		s.respondStoreError(w, err)
+		return
+	}
+	event := "comment:unresolved"
+	if resolved {
+		event = "comment:resolved"
+	}
+	s.hub.broadcast(event, map[string]any{"comment": item})
+	writeJSON(w, http.StatusOK, item)
+}
+
 func (s *Server) timeline(w http.ResponseWriter, r *http.Request) {
 	ws, err := s.workspaceFor(r)
 	if err != nil {
@@ -1322,7 +1368,7 @@ func (s *Server) timeline(w http.ResponseWriter, r *http.Request) {
 		s.respondStoreError(w, err)
 		return
 	}
-	items, err := s.store.Timeline(r.Context(), chi.URLParam(r, "id"))
+	items, err := s.store.Timeline(r.Context(), ws.ID, chi.URLParam(r, "id"))
 	if err != nil {
 		s.fail(w, err)
 		return
@@ -1396,6 +1442,108 @@ func (s *Server) activeTask(w http.ResponseWriter, r *http.Request) {
 	}
 	writeJSON(w, http.StatusOK, map[string]any{"tasks": []any{map[string]any{"id": id, "agent_id": LocalAgentID, "runtime_id": runtimeID, "issue_id": issueID, "status": status, "priority": 0, "created_at": createdAt}}})
 }
+
+func (s *Server) cancelTask(w http.ResponseWriter, r *http.Request) {
+	ws, err := s.workspaceFor(r)
+	if err != nil {
+		s.respondStoreError(w, err)
+		return
+	}
+	issueID, taskID := chi.URLParam(r, "id"), chi.URLParam(r, "taskID")
+	stamp := now()
+	result, err := s.store.db.ExecContext(r.Context(), `UPDATE task_runs SET status='cancelled', completed_at=?, updated_at=? WHERE id=? AND issue_id=? AND status IN ('queued','dispatched','waiting_local_directory','running') AND issue_id IN (SELECT id FROM issues WHERE workspace_id=?)`, stamp, stamp, taskID, issueID, ws.ID)
+	if err != nil {
+		s.fail(w, err)
+		return
+	}
+	changed, err := result.RowsAffected()
+	if err != nil {
+		s.fail(w, err)
+		return
+	}
+	if changed == 0 {
+		writeError(w, http.StatusConflict, errors.New("task is not active"))
+		return
+	}
+	item, err := s.taskRun(r.Context(), ws.ID, issueID, taskID)
+	if err != nil {
+		s.respondStoreError(w, err)
+		return
+	}
+	s.hub.broadcast("task:cancelled", map[string]any{"task": item})
+	writeJSON(w, http.StatusOK, item)
+}
+
+func (s *Server) rerunIssue(w http.ResponseWriter, r *http.Request) {
+	ws, err := s.workspaceFor(r)
+	if err != nil {
+		s.respondStoreError(w, err)
+		return
+	}
+	issueID := chi.URLParam(r, "id")
+	if _, err := s.store.GetIssue(r.Context(), ws.ID, issueID); err != nil {
+		s.respondStoreError(w, err)
+		return
+	}
+	var input struct {
+		TaskID string `json:"task_id"`
+	}
+	if err := decodeBody(r, &input); err != nil {
+		writeError(w, http.StatusBadRequest, err)
+		return
+	}
+	if input.TaskID != "" {
+		var exists int
+		if err := s.store.db.QueryRowContext(r.Context(), `SELECT COUNT(*) FROM task_runs tr JOIN issues i ON i.id=tr.issue_id WHERE tr.id=? AND tr.issue_id=? AND i.workspace_id=?`, input.TaskID, issueID, ws.ID).Scan(&exists); err != nil {
+			s.fail(w, err)
+			return
+		}
+		if exists == 0 {
+			writeError(w, http.StatusNotFound, errors.New("task not found"))
+			return
+		}
+	}
+	var active int
+	if err := s.store.db.QueryRowContext(r.Context(), `SELECT COUNT(*) FROM task_runs WHERE issue_id=? AND status IN ('queued','dispatched','waiting_local_directory','running')`, issueID).Scan(&active); err != nil {
+		s.fail(w, err)
+		return
+	}
+	if active > 0 {
+		writeError(w, http.StatusConflict, errors.New("issue already has an active task"))
+		return
+	}
+	if err := s.store.enqueueAssignedIssue(r.Context(), ws.ID, issueID, ""); err != nil {
+		s.respondStoreError(w, err)
+		return
+	}
+	var taskID string
+	if err := s.store.db.QueryRowContext(r.Context(), `SELECT id FROM task_runs WHERE issue_id=? AND status='queued' ORDER BY created_at DESC LIMIT 1`, issueID).Scan(&taskID); err != nil {
+		if errors.Is(err, sql.ErrNoRows) {
+			writeError(w, http.StatusConflict, errors.New("issue is not ready to run"))
+			return
+		}
+		s.fail(w, err)
+		return
+	}
+	item, err := s.taskRun(r.Context(), ws.ID, issueID, taskID)
+	if err != nil {
+		s.respondStoreError(w, err)
+		return
+	}
+	s.hub.broadcast("task:created", map[string]any{"task": item})
+	writeJSON(w, http.StatusCreated, item)
+}
+
+func (s *Server) taskRun(ctx context.Context, workspaceID, issueID, taskID string) (map[string]any, error) {
+	var id, status, createdAt string
+	var runtimeID, handoffNote, threadID, summary, errorText, startedAt, completedAt sql.NullString
+	err := s.store.db.QueryRowContext(ctx, `SELECT tr.id, tr.status, tr.runtime, tr.handoff_note, tr.thread_id, tr.summary, tr.error, tr.started_at, tr.completed_at, tr.created_at FROM task_runs tr JOIN issues i ON i.id=tr.issue_id WHERE tr.id=? AND tr.issue_id=? AND i.workspace_id=?`, taskID, issueID, workspaceID).Scan(&id, &status, &runtimeID, &handoffNote, &threadID, &summary, &errorText, &startedAt, &completedAt, &createdAt)
+	if err != nil {
+		return nil, err
+	}
+	return map[string]any{"id": id, "agent_id": LocalAgentID, "runtime_id": nullableString(runtimeID), "issue_id": issueID, "status": status, "priority": 0, "handoff_note": nullableString(handoffNote), "started_at": stringPtr(startedAt), "completed_at": stringPtr(completedAt), "result": map[string]any{"thread_id": nullableString(threadID), "summary": nullableString(summary)}, "error": stringPtr(errorText), "created_at": createdAt}, nil
+}
+
 func nullableString(v sql.NullString) string {
 	if v.Valid {
 		return v.String

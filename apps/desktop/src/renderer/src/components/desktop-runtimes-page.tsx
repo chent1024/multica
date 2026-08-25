@@ -27,6 +27,7 @@ export function DesktopRuntimesPage() {
       // controls live on the machine detail page so this collection stays
       // consistent with every other machine row.
       hasLocalMachine
+      localOnly
       bootstrapping={context.bootstrapping}
     />
   );
