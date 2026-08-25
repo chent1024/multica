@@ -1,17 +1,37 @@
 {
 	"issue_session": {
 		"section": "Issue 会话",
+		"current_work": "当前工作",
 		"stages_label": "会话阶段",
 		"history": "阶段历史",
 		"handoff": "父任务交接",
+		"inherited_context": "继承上下文",
 		"parent_link": "打开父任务",
 		"loading": "正在加载 Issue 会话…",
 		"load_failed": "无法加载 Issue 会话。",
+		"retry": "重试",
 		"stage_failed": "无法切换阶段。",
-		"stage_hint": "选择阶段只记录工作流状态，不会自动提交、推送或发布。",
+		"stage_hint": "这里只记录进度。执行需求、提交、推送和发布都需要另行授权并启动任务。",
+		"expected_evidence": "应留在当前任务中的证据",
+		"continue_to": "继续到{{stage}}",
+		"change_stage": "切换阶段",
+		"release_complete_hint": "如有后续工作，可选择任一阶段继续。",
+		"journey_details": "工作历程详情",
+		"continuity_label": "执行上下文",
+		"gap_title": "执行上下文未完整续接",
+		"gap_recovery": "继续前先核对当前任务中的最新结果，再把缺失的决策补充到时间线。",
 		"handoff_sections": { "confirmed_facts": "已确认事实", "decisions": "决策", "constraints": "约束", "acceptance_criteria": "验收标准", "references": "参考", "open_questions": "待确认问题" },
 		"continuity": { "fresh": "新会话", "pending": "待续接", "resumed": "已续接", "gap": "上下文中断" },
-		"stages": { "analysis": "分析", "implementation": "实施", "review": "审查", "test": "测试", "commit": "提交", "push": "推送", "release": "发布" }
+		"stages": { "analysis": "分析", "implementation": "实施", "review": "审查", "test": "测试", "commit": "提交", "push": "推送", "release": "发布" },
+		"stage_guidance": {
+			"analysis": { "goal": "明确问题与验收边界", "description": "确认要改变什么、必须保持什么，以及如何观察成功。", "evidence": { "primary": "已确认的范围、约束和决策", "secondary": "验收标准与待确认问题" } },
+			"implementation": { "goal": "完成最小且完整的实现", "description": "覆盖所有受影响层，同时不引入面向未来的多余机制。", "evidence": { "primary": "实际改码任务与受影响文件", "secondary": "实施结果与已知限制" } },
+			"review": { "goal": "检查范围与正确性", "description": "检查遗漏需求、过度扩展，以及正常和失败路径中的缺陷。", "evidence": { "primary": "审查结论与具体发现", "secondary": "已修复项或保留原因" } },
+			"test": { "goal": "在受影响层证明行为", "description": "执行与本次改动对应的真实前端、后端和可观察验收。", "evidence": { "primary": "测试命令与通过结果", "secondary": "失败、环境限制与未验证层" } },
+			"commit": { "goal": "冻结已审查候选", "description": "仅在最终代码与测试稳定后创建本地提交。", "evidence": { "primary": "精确提交 SHA 与主题", "secondary": "仓库、分支与包含范围" } },
+			"push": { "goal": "发布已授权候选到远端", "description": "把精确的已审查提交推送到明确指定的远端分支。", "evidence": { "primary": "远端引用与读回 SHA", "secondary": "漂移、集成或推送失败" } },
+			"release": { "goal": "发布明确授权的版本", "description": "通过项目既有入口部署精确 release SHA，并核验实际结果。", "evidence": { "primary": "运行版本与冒烟结果", "secondary": "目标环境与回滚入口" } }
+		}
 	},
   "status_catalog_error": {
     "title": "状态列表加载失败",

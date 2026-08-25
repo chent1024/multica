@@ -1,17 +1,37 @@
 {
 	"issue_session": {
 		"section": "Issue session",
+		"current_work": "Current work",
 		"stages_label": "Session stages",
 		"history": "History",
 		"handoff": "Handoff from parent",
+		"inherited_context": "Inherited context",
 		"parent_link": "Open parent",
 		"loading": "Loading issue session…",
 		"load_failed": "Could not load issue session.",
+		"retry": "Try again",
 		"stage_failed": "Could not change stage.",
-		"stage_hint": "Stage selection records workflow state only; it does not commit, push, or release.",
+		"stage_hint": "This records progress only. Running work, committing, pushing, and releasing require a separate authorized run.",
+		"expected_evidence": "Evidence to leave on this issue",
+		"continue_to": "Continue to {{stage}}",
+		"change_stage": "Change stage",
+		"release_complete_hint": "Record follow-up work by choosing another stage.",
+		"journey_details": "Journey details",
+		"continuity_label": "Execution context",
+		"gap_title": "Execution context was not fully resumed",
+		"gap_recovery": "Review the latest outcome in this issue before continuing, then record any missing decisions in the timeline.",
 		"handoff_sections": { "confirmed_facts": "Confirmed facts", "decisions": "Decisions", "constraints": "Constraints", "acceptance_criteria": "Acceptance criteria", "references": "References", "open_questions": "Open questions" },
 		"continuity": { "fresh": "Fresh", "pending": "Pending", "resumed": "Resumed", "gap": "Context gap" },
-		"stages": { "analysis": "Analysis", "implementation": "Build", "review": "Review", "test": "Test", "commit": "Commit", "push": "Push", "release": "Release" }
+		"stages": { "analysis": "Analysis", "implementation": "Build", "review": "Review", "test": "Test", "commit": "Commit", "push": "Push", "release": "Release" },
+		"stage_guidance": {
+			"analysis": { "goal": "Define the problem and acceptance boundary", "description": "Align on what must change, what must stay unchanged, and how success will be observed.", "evidence": { "primary": "Confirmed scope, constraints, and decisions", "secondary": "Acceptance criteria and remaining questions" } },
+			"implementation": { "goal": "Build the smallest complete solution", "description": "Implement the agreed behavior across every affected layer without adding future-facing machinery.", "evidence": { "primary": "The code-changing run and affected files", "secondary": "Implementation outcome and known limits" } },
+			"review": { "goal": "Check scope and correctness", "description": "Look for missed requirements, unnecessary expansion, and defects in normal and failure paths.", "evidence": { "primary": "Review result and concrete findings", "secondary": "Resolved findings or a reason they remain" } },
+			"test": { "goal": "Prove the behavior at the affected layers", "description": "Run real frontend, backend, and observable acceptance checks that match the change.", "evidence": { "primary": "Commands and passing results", "secondary": "Failures, environment limits, and unverified layers" } },
+			"commit": { "goal": "Freeze the reviewed candidate", "description": "Create a local commit only after the final code and tests are stable.", "evidence": { "primary": "Exact commit SHA and subject", "secondary": "Repository, branch, and included range" } },
+			"push": { "goal": "Publish the authorized candidate", "description": "Push the exact reviewed commit to the explicitly chosen remote branch.", "evidence": { "primary": "Remote ref and read-back SHA", "secondary": "Any drift, integration, or push failure" } },
+			"release": { "goal": "Release an explicitly authorized version", "description": "Deploy the exact release SHA through the product's established entry point and verify the result.", "evidence": { "primary": "Running version and smoke result", "secondary": "Target environment and rollback reference" } }
+		}
 	},
   "status_catalog_error": {
     "title": "Couldn't load the status list",

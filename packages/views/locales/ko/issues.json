@@ -1,17 +1,37 @@
 {
 	"issue_session": {
 		"section": "Issue 세션",
+		"current_work": "현재 작업",
 		"stages_label": "세션 단계",
 		"history": "단계 기록",
 		"handoff": "상위 작업 인계",
+		"inherited_context": "상속된 컨텍스트",
 		"parent_link": "상위 작업 열기",
 		"loading": "Issue 세션 로딩 중…",
 		"load_failed": "Issue 세션을 불러올 수 없습니다.",
+		"retry": "다시 시도",
 		"stage_failed": "단계를 변경할 수 없습니다.",
-		"stage_hint": "단계 선택은 워크플로 상태만 기록하며 커밋, 푸시 또는 릴리스를 실행하지 않습니다.",
+		"stage_hint": "여기서는 진행 상황만 기록합니다. 작업 실행, 커밋, 푸시, 릴리스에는 별도로 승인된 실행이 필요합니다.",
+		"expected_evidence": "이 작업에 남길 근거",
+		"continue_to": "{{stage}} 단계로 계속",
+		"change_stage": "단계 변경",
+		"release_complete_hint": "후속 작업이 있으면 다른 단계를 선택해 계속하세요.",
+		"journey_details": "작업 여정 세부 정보",
+		"continuity_label": "실행 컨텍스트",
+		"gap_title": "실행 컨텍스트가 완전히 이어지지 않았습니다",
+		"gap_recovery": "계속하기 전에 이 작업의 최신 결과를 확인하고 누락된 결정을 타임라인에 기록하세요.",
 		"handoff_sections": { "confirmed_facts": "확인된 사실", "decisions": "결정", "constraints": "제약", "acceptance_criteria": "수락 기준", "references": "참조", "open_questions": "열린 질문" },
 		"continuity": { "fresh": "새 세션", "pending": "대기", "resumed": "재개됨", "gap": "컨텍스트 끊김" },
-		"stages": { "analysis": "분석", "implementation": "구현", "review": "검토", "test": "테스트", "commit": "커밋", "push": "푸시", "release": "릴리스" }
+		"stages": { "analysis": "분석", "implementation": "구현", "review": "검토", "test": "테스트", "commit": "커밋", "push": "푸시", "release": "릴리스" },
+		"stage_guidance": {
+			"analysis": { "goal": "문제와 인수 범위를 정의하기", "description": "변경할 것, 유지할 것, 성공을 확인하는 방법에 합의합니다.", "evidence": { "primary": "확인된 범위, 제약 조건, 결정 사항", "secondary": "인수 기준과 미해결 질문" } },
+			"implementation": { "goal": "작지만 완전한 해결책 구현하기", "description": "불필요한 미래용 구조를 추가하지 않고 영향받는 모든 계층을 구현합니다.", "evidence": { "primary": "코드를 변경한 실행과 대상 파일", "secondary": "구현 결과와 알려진 제한" } },
+			"review": { "goal": "범위와 정확성 확인하기", "description": "누락된 요구 사항, 과도한 확장, 정상 및 실패 경로의 결함을 확인합니다.", "evidence": { "primary": "검토 결과와 구체적인 발견", "secondary": "해결된 항목 또는 남겨둔 이유" } },
+			"test": { "goal": "영향받는 계층에서 동작 증명하기", "description": "변경에 맞는 실제 프런트엔드, 백엔드, 인수 검증을 실행합니다.", "evidence": { "primary": "명령과 통과 결과", "secondary": "실패, 환경 제한, 미검증 계층" } },
+			"commit": { "goal": "검토된 후보 고정하기", "description": "최종 코드와 테스트가 안정된 뒤에만 로컬 커밋을 만듭니다.", "evidence": { "primary": "정확한 커밋 SHA와 제목", "secondary": "저장소, 브랜치, 포함 범위" } },
+			"push": { "goal": "승인된 후보를 원격에 게시하기", "description": "검토된 정확한 커밋을 명시된 원격 브랜치에 푸시합니다.", "evidence": { "primary": "원격 참조와 확인된 SHA", "secondary": "드리프트, 통합 또는 푸시 실패" } },
+			"release": { "goal": "명시적으로 승인된 버전 릴리스하기", "description": "기존 진입점으로 정확한 release SHA를 배포하고 결과를 확인합니다.", "evidence": { "primary": "실행 버전과 스모크 결과", "secondary": "대상 환경과 롤백 참조" } }
+		}
 	},
   "status_catalog_error": {
     "title": "상태 목록을 불러오지 못했습니다",

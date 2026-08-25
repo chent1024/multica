@@ -1,17 +1,37 @@
 {
 	"issue_session": {
 		"section": "Issue セッション",
+		"current_work": "現在の作業",
 		"stages_label": "セッションの段階",
 		"history": "段階の履歴",
 		"handoff": "親タスクからの引き継ぎ",
+		"inherited_context": "引き継いだコンテキスト",
 		"parent_link": "親タスクを開く",
 		"loading": "Issue セッションを読み込み中…",
 		"load_failed": "Issue セッションを読み込めませんでした。",
+		"retry": "再試行",
 		"stage_failed": "段階を変更できませんでした。",
-		"stage_hint": "段階の選択はワークフロー状態のみを記録し、コミット、プッシュ、リリースは実行しません。",
+		"stage_hint": "ここでは進捗だけを記録します。作業の実行、コミット、プッシュ、リリースには別途承認された実行が必要です。",
+		"expected_evidence": "このタスクに残す証拠",
+		"continue_to": "{{stage}}へ進む",
+		"change_stage": "段階を変更",
+		"release_complete_hint": "追加作業がある場合は、別の段階を選んで続けてください。",
+		"journey_details": "作業履歴の詳細",
+		"continuity_label": "実行コンテキスト",
+		"gap_title": "実行コンテキストを完全に再開できませんでした",
+		"gap_recovery": "続行前にこのタスクの最新結果を確認し、不足している判断をタイムラインに記録してください。",
 		"handoff_sections": { "confirmed_facts": "確認済みの事実", "decisions": "決定事項", "constraints": "制約", "acceptance_criteria": "受け入れ条件", "references": "参照", "open_questions": "未解決の質問" },
 		"continuity": { "fresh": "新規", "pending": "待機中", "resumed": "再開済み", "gap": "コンテキスト切断" },
-		"stages": { "analysis": "分析", "implementation": "実装", "review": "レビュー", "test": "テスト", "commit": "コミット", "push": "プッシュ", "release": "リリース" }
+		"stages": { "analysis": "分析", "implementation": "実装", "review": "レビュー", "test": "テスト", "commit": "コミット", "push": "プッシュ", "release": "リリース" },
+		"stage_guidance": {
+			"analysis": { "goal": "問題と受け入れ範囲を定義する", "description": "変更すること、維持すること、成功の確認方法を合意します。", "evidence": { "primary": "確認済みの範囲、制約、決定事項", "secondary": "受け入れ条件と未解決の質問" } },
+			"implementation": { "goal": "最小で完全な解決策を実装する", "description": "将来向けの余分な仕組みを増やさず、影響する全レイヤーを実装します。", "evidence": { "primary": "コードを変更した実行と対象ファイル", "secondary": "実装結果と既知の制限" } },
+			"review": { "goal": "範囲と正しさを確認する", "description": "要件漏れ、過剰な拡張、正常系と失敗系の欠陥を確認します。", "evidence": { "primary": "レビュー結果と具体的な指摘", "secondary": "修正済み項目または保留理由" } },
+			"test": { "goal": "影響するレイヤーで動作を証明する", "description": "変更に対応する実際のフロントエンド、バックエンド、受け入れ確認を実行します。", "evidence": { "primary": "コマンドと成功結果", "secondary": "失敗、環境制限、未確認レイヤー" } },
+			"commit": { "goal": "レビュー済み候補を固定する", "description": "最終コードとテストが安定した後にだけローカルコミットを作成します。", "evidence": { "primary": "正確なコミット SHA と件名", "secondary": "リポジトリ、ブランチ、対象範囲" } },
+			"push": { "goal": "承認済み候補を公開する", "description": "レビュー済みの正確なコミットを明示されたリモートブランチへプッシュします。", "evidence": { "primary": "リモート参照と確認済み SHA", "secondary": "差分、統合、プッシュ失敗" } },
+			"release": { "goal": "明示的に承認された版をリリースする", "description": "既存の入口から正確な release SHA を展開し、結果を確認します。", "evidence": { "primary": "稼働版とスモーク結果", "secondary": "対象環境とロールバック参照" } }
+		}
 	},
   "status_catalog_error": {
     "title": "ステータス一覧を読み込めませんでした",

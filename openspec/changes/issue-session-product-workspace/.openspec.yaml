@@ -1,0 +1,4 @@
+schema: spec-driven
+created: 2026-08-26
+goal: Help users understand the current goal, expected evidence, and next action
+  for each issue stage without exposing an operations dashboard.

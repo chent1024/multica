@@ -35,6 +35,13 @@ func TestIssueSessionStageAndChildHandoff(t *testing.T) {
 	if len(implementation.Stages) != 3 || implementation.Stages[2].Kind != "analysis" {
 		t.Fatalf("repeated stage missing: %#v", implementation.Stages)
 	}
+	var invalidStage map[string]any
+	requestJSON(t, server.URL, http.MethodPost, "/api/issues/"+parent.ID+"/session/stages", map[string]any{"kind": "deploy"}, http.StatusBadRequest, &invalidStage)
+	var afterInvalid IssueSession
+	requestJSON(t, server.URL, http.MethodGet, "/api/issues/"+parent.ID+"/session", nil, http.StatusOK, &afterInvalid)
+	if len(afterInvalid.Stages) != 3 || afterInvalid.ActiveStageID != implementation.ActiveStageID {
+		t.Fatalf("invalid activation changed session: %#v", afterInvalid)
+	}
 
 	var child Issue
 	requestJSON(t, server.URL, http.MethodPost, "/api/issues", map[string]any{

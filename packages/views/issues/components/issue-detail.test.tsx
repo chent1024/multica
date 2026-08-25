@@ -300,6 +300,8 @@ const mockApiObj = vi.hoisted(() => ({
   unsubscribeFromIssueSubtree: vi.fn().mockResolvedValue(undefined),
   getActiveTasksForIssue: vi.fn().mockResolvedValue({ tasks: [] }),
   listTasksByIssue: vi.fn().mockResolvedValue([]),
+  getIssueSession: vi.fn(),
+  activateIssueSessionStage: vi.fn(),
   rerunIssue: vi.fn(),
   listTaskMessages: vi.fn().mockResolvedValue([]),
   listChildIssues: vi.fn().mockResolvedValue({ issues: [] }),
@@ -699,6 +701,27 @@ describe("IssueDetail (shared)", () => {
     mockApiObj.listIssues.mockResolvedValue({ issues: [], total: 0 });
     mockApiObj.getActiveTasksForIssue.mockResolvedValue({ tasks: [] });
     mockApiObj.listTasksByIssue.mockResolvedValue([]);
+    mockApiObj.getIssueSession.mockResolvedValue({
+      id: "session-1",
+      issue_id: "issue-1",
+      workspace_id: "ws-1",
+      active_stage_id: "stage-analysis",
+      continuity_state: "fresh",
+      continuity_reason: null,
+      stages: [{
+        id: "stage-analysis",
+        session_id: "session-1",
+        kind: "analysis",
+        status: "active",
+        position: 0,
+        migrated: false,
+        started_at: "2026-01-01T00:00:00Z",
+        completed_at: null,
+      }],
+      handoff: null,
+      created_at: "2026-01-01T00:00:00Z",
+      updated_at: "2026-01-01T00:00:00Z",
+    });
     mockApiObj.rerunIssue.mockResolvedValue({ id: "task-rerun" });
     mockApiObj.listMembers.mockResolvedValue([
       { user_id: "user-1", name: "Test User", email: "test@test.com", role: "admin" },
@@ -772,6 +795,26 @@ describe("IssueDetail (shared)", () => {
     expect(screen.queryByTestId("title-editor")).not.toBeInTheDocument();
     expect(screen.getAllByTestId("rich-text-editor")).toHaveLength(1);
     expect(contentEditorMounts.count).toBe(1);
+  });
+
+  it("places one current-work journey in the main narrative across wide and narrow layouts", async () => {
+    const desktop = renderIssueDetail();
+    const workspace = await screen.findByRole("heading", {
+      name: "Define the problem and acceptance boundary",
+    });
+    const surface = workspace.closest("[data-issue-session-workspace]");
+    const activity = screen.getByRole("heading", { name: "Activity" });
+
+    expect(document.querySelectorAll("[data-issue-session-workspace]")).toHaveLength(1);
+    expect(surface).not.toBeNull();
+    expect(surface!.compareDocumentPosition(activity) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+
+    desktop.unmount();
+    mockViewport.isMobile = true;
+    renderIssueDetail();
+
+    expect(await screen.findByText("Current work")).toBeVisible();
+    expect(document.querySelectorAll("[data-issue-session-workspace]")).toHaveLength(1);
   });
 
   it("opts the description editor into the unmount flush", async () => {
