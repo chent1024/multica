@@ -952,34 +952,35 @@ function CommentCardImpl({
           <StickyHeaderShell
             sticky={stickyHeader}
             highlighted={isHighlighted}
-            className="px-4 max-md:px-3 py-3"
+            className={open ? "px-4 max-md:px-3 py-3" : undefined}
           >
-            <div className={cn("flex items-center gap-2.5", conversationRole === "local" && "justify-end")}>
-              {!conversationExpanded && (
-                <button
-                  type="button"
-                  aria-expanded={open}
-                  aria-controls={`comment-body-${entry.id}`}
-                  onClick={handleToggle}
-                  className={cn(
-                    "shrink-0 rounded p-0.5 text-muted-foreground hover:bg-muted hover:text-foreground transition-colors",
-                    conversationRole === "local" && "mr-auto",
-                  )}
-                >
-                  <ChevronRight className={cn("h-3.5 w-3.5 transition-transform", open && "rotate-90")} />
-                </button>
-              )}
-              {conversationRole === "local" ? (
-                <span
-                  data-testid="local-actor-avatar"
-                  className="order-last flex size-7 shrink-0 items-center justify-center rounded-full bg-muted text-muted-foreground"
-                  aria-hidden="true"
-                >
-                  <UserRound className="size-4" />
-                </span>
-              ) : (
-                <ActorAvatar actorType={displayActorType} actorId={displayActorId} size="md" enableHoverCard showStatusDot />
-              )}
+            {open ? (
+              <div className={cn("flex items-center gap-2.5", conversationRole === "local" && "justify-end")}>
+                {!conversationExpanded && (
+                  <button
+                    type="button"
+                    aria-expanded={open}
+                    aria-controls={`comment-body-${entry.id}`}
+                    onClick={handleToggle}
+                    className={cn(
+                      "shrink-0 rounded p-0.5 text-muted-foreground hover:bg-muted hover:text-foreground transition-colors",
+                      conversationRole === "local" && "mr-auto",
+                    )}
+                  >
+                    <ChevronRight className="h-3.5 w-3.5 rotate-90 transition-transform" />
+                  </button>
+                )}
+                {conversationRole === "local" ? (
+                  <span
+                    data-testid="local-actor-avatar"
+                    className="order-last flex size-7 shrink-0 items-center justify-center rounded-full bg-muted text-muted-foreground"
+                    aria-hidden="true"
+                  >
+                    <UserRound className="size-4" />
+                  </span>
+                ) : (
+                  <ActorAvatar actorType={displayActorType} actorId={displayActorId} size="md" enableHoverCard showStatusDot />
+                )}
               <span className="shrink-0 cursor-pointer text-body font-medium">
                 {conversationRole === "local"
                   ? t(($) => $.issue_session.you)
@@ -998,18 +999,6 @@ function CommentCardImpl({
                 </TooltipContent>
               </Tooltip>
 
-              {!open && contentPreview && (
-                <span className="min-w-0 flex-1 truncate text-caption text-muted-foreground">
-                  {contentPreview}
-                </span>
-              )}
-              {!open && replyCount > 0 && (
-                <span className="shrink-0 text-caption text-muted-foreground">
-                  {t(($) => $.comment.reply_count, { count: replyCount })}
-                </span>
-              )}
-
-              {open && (
                 <div className={cn("flex items-center gap-0.5", conversationRole === "agent" && "ml-auto")}>
                   <DropdownMenu>
                     <DropdownMenuTrigger
@@ -1073,8 +1062,66 @@ function CommentCardImpl({
                     hasReplies
                   />
                 </div>
-              )}
             </div>
+            ) : (
+              <button
+                type="button"
+                aria-expanded={open}
+                aria-controls={`comment-body-${entry.id}`}
+                onClick={handleToggle}
+                className={cn(
+                  "flex w-full cursor-pointer items-center gap-2.5 px-4 py-3 text-left transition-colors hover:bg-muted/50 max-md:px-3",
+                  conversationRole === "local" && "justify-end",
+                )}
+              >
+                <ChevronRight className={cn("h-3.5 w-3.5 shrink-0 text-muted-foreground", conversationRole === "local" && "mr-auto")} />
+                {conversationRole === "local" ? (
+                  <span
+                    data-testid="local-actor-avatar"
+                    className="order-last flex size-7 shrink-0 items-center justify-center rounded-full bg-muted text-muted-foreground"
+                    aria-hidden="true"
+                  >
+                    <UserRound className="size-4" />
+                  </span>
+                ) : (
+                  <ActorAvatar
+                    actorType={displayActorType}
+                    actorId={displayActorId}
+                    size="md"
+                    enableHoverCard
+                    showStatusDot
+                    profileLink={false}
+                  />
+                )}
+                <span className="shrink-0 text-body font-medium">
+                  {conversationRole === "local"
+                    ? t(($) => $.issue_session.you)
+                    : getActorName(displayActorType, displayActorId)}
+                </span>
+                <Tooltip>
+                  <TooltipTrigger
+                    render={
+                      <span className="shrink-0 text-caption text-muted-foreground">
+                        {timeAgo(entry.created_at)}
+                      </span>
+                    }
+                  />
+                  <TooltipContent side="top">
+                    {new Date(entry.created_at).toLocaleString()}
+                  </TooltipContent>
+                </Tooltip>
+                {contentPreview && (
+                  <span className="min-w-0 flex-1 truncate text-caption text-muted-foreground">
+                    {contentPreview}
+                  </span>
+                )}
+                {replyCount > 0 && (
+                  <span className="shrink-0 text-caption text-muted-foreground">
+                    {t(($) => $.comment.reply_count, { count: replyCount })}
+                  </span>
+                )}
+              </button>
+            )}
           </StickyHeaderShell>
 
         {/* Root comment body. Avoid Base UI's Panel here: every mounted panel

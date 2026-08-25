@@ -16,6 +16,7 @@ import enIssues from "../../locales/en/issues.json";
 const TEST_RESOURCES = { en: { common: enCommon, issues: enIssues } };
 
 const mockViewport = vi.hoisted(() => ({ isMobile: false }));
+const mockCommentToggle = vi.hoisted(() => vi.fn());
 const mockCommentCollapse = vi.hoisted(() => ({ collapsed: false }));
 
 // Counts MockContentEditor mounts. This pins the description to exactly one
@@ -397,7 +398,7 @@ vi.mock("@multica/core/issues/stores", async () => ({
     const state = {
       collapsedByIssue: {},
       isCollapsed: () => mockCommentCollapse.collapsed,
-      toggle: () => {},
+      toggle: mockCommentToggle,
     };
     return selector ? selector(state) : state;
   },
@@ -755,6 +756,22 @@ describe("IssueDetail (shared)", () => {
     expect(
       screen.getAllByRole("generic").some((el) => el.getAttribute("data-slot") === "skeleton"),
     ).toBe(true);
+  });
+
+  it("expands a collapsed comment when the user clicks anywhere on its header row", async () => {
+    mockCommentCollapse.collapsed = true;
+    mockApiObj.listTimeline.mockResolvedValue([mockTimeline[0]]);
+
+    renderIssueDetail();
+
+    const headerRow = await screen.findByRole("button", {
+      name: /Test User.*Started working on this/i,
+    });
+    expect(within(headerRow).queryByRole("link")).not.toBeInTheDocument();
+
+    fireEvent.click(within(headerRow).getByText("Started working on this"));
+
+    expect(mockCommentToggle).toHaveBeenCalledWith("issue-1", "comment-1");
   });
 
   it("gives the skeleton the same horizontal gutters as the loaded column", async () => {
