@@ -12,8 +12,6 @@ import {
   FolderOpen,
   Link2,
   Network,
-  Pin,
-  PinOff,
   Plus,
   Trash2,
   Unlink,
@@ -109,10 +107,8 @@ export function IssueActionsMenuItems({
   const statusOptions = useStatusOptions(wsId);
   const { categoryOf, colorOf } = useIssueStatuses(wsId);
   const {
-    isPinned,
     updateField,
     openInNewTab,
-    togglePin,
     copyLink,
     openCreateSubIssue,
     openSetParent,
@@ -301,14 +297,6 @@ export function IssueActionsMenuItems({
       <P.Item onClick={openInNewTab}>
         <ExternalLink className="h-3.5 w-3.5" />
         {t(($) => $.actions.open_in_new_tab)}
-      </P.Item>
-      <P.Item onClick={togglePin}>
-        {isPinned ? (
-          <PinOff className="h-3.5 w-3.5" />
-        ) : (
-          <Pin className="h-3.5 w-3.5" />
-        )}
-        {isPinned ? t(($) => $.actions.unpin_from_sidebar) : t(($) => $.actions.pin_to_sidebar)}
       </P.Item>
       <P.Item onClick={copyLink}>
         <Link2 className="h-3.5 w-3.5" />

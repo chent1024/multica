@@ -15,7 +15,10 @@ import { installNavigationGestures } from "./navigation-gestures";
 import { installNavigationGuard } from "./navigation-guard";
 import { createRendererWebPreferences } from "./renderer-web-preferences";
 import { getAppVersion } from "./app-version";
-import { loadRuntimeConfig } from "./runtime-config-loader";
+import {
+  loadRuntimeConfig,
+  shouldStartBundledLocalServer,
+} from "./runtime-config-loader";
 import type { RuntimeConfigResult } from "../shared/runtime-config";
 import {
   RENDERER_ROUTE_CONTEXT_CHANNEL,
@@ -543,7 +546,7 @@ if (!gotTheLock) {
       readonly VITE_APP_URL?: string;
     };
 
-    runtimeConfigResult = await loadRuntimeConfig({
+    const runtimeConfigOptions = {
       isDev: is.dev,
       // electron-vite exposes VITE_* on import.meta.env for the main process;
       // keep dev URL overrides on the same source the renderer used before
@@ -553,8 +556,12 @@ if (!gotTheLock) {
         wsUrl: viteEnv.VITE_WS_URL,
         appUrl: viteEnv.VITE_APP_URL,
       },
-    });
-    if (runtimeConfigResult.ok) {
+    };
+    runtimeConfigResult = await loadRuntimeConfig(runtimeConfigOptions);
+    if (
+      runtimeConfigResult.ok &&
+      shouldStartBundledLocalServer(runtimeConfigOptions)
+    ) {
       try {
         await startLocalServer(runtimeConfigResult.config.apiUrl);
       } catch (error) {

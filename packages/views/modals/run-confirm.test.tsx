@@ -229,11 +229,11 @@ describe("RunConfirmModal", () => {
     expect(mockToast.success).not.toHaveBeenCalled();
   });
 
-  it("disables the note box when the agent's runtime is too old", () => {
+  it("keeps the local handoff note editable regardless of legacy runtime metadata", () => {
     cache.runtimes = [{ id: "runtime-1", metadata: { cli_version: "0.2.21" } }];
     render(<RunConfirmModal onClose={vi.fn()} data={single} />);
-    expect(noteBox()).toBeDisabled();
-    expect(screen.getByText("runtime too old")).toBeInTheDocument();
+    expect(noteBox()).not.toBeDisabled();
+    expect(screen.queryByText("runtime too old")).not.toBeInTheDocument();
   });
 
   it("promote sends the status change with the handoff note and no assignee fields", async () => {
@@ -274,9 +274,7 @@ describe("RunConfirmModal", () => {
     expect(container.textContent).toContain("move to Todo, Walt starts");
   });
 
-  it("resolves a squad's verdict through its leader's runtime, locally", () => {
-    // A squad run is executed by its leader, so the leader's runtime decides.
-    // The squad list gives us leader_id, so this needs no server verdict.
+  it("does not apply a cloud runtime-version gate to a local assignee", () => {
     cache.runtimes = [{ id: "runtime-1", metadata: { cli_version: "0.2.21" } }];
     render(
       <RunConfirmModal
@@ -284,8 +282,8 @@ describe("RunConfirmModal", () => {
         data={{ ...single, assigneeType: "squad", assigneeId: "squad-1" }}
       />,
     );
-    expect(noteBox()).toBeDisabled();
-    expect(screen.getByText("runtime too old")).toBeInTheDocument();
+    expect(noteBox()).not.toBeDisabled();
+    expect(screen.queryByText("runtime too old")).not.toBeInTheDocument();
   });
 
   it("leaves the note box enabled when the target runtime can't be resolved", () => {

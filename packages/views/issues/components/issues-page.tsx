@@ -21,6 +21,7 @@ function IssuesSurfaceHeader({
   facetCountsExact,
   tableFacetCounts,
   onTableFacetChange,
+  localMode,
 }: {
   issues: Issue[];
   workingAgents: WorkingAgentSummary[] | undefined;
@@ -28,6 +29,7 @@ function IssuesSurfaceHeader({
   facetCountsExact: boolean;
   tableFacetCounts?: IssueTableFacetsResponse;
   onTableFacetChange: (facet: IssueTableFacetSpec | null) => void;
+  localMode: boolean;
 }) {
   const dateFilter = useViewStore((s) => s.dateFilter);
   const setDateFilter = useViewStore((s) => s.setDateFilter);
@@ -42,11 +44,12 @@ function IssuesSurfaceHeader({
       facetCountsExact={facetCountsExact}
       tableFacetCounts={tableFacetCounts}
       onTableFacetChange={onTableFacetChange}
+      localMode={localMode}
     />
   );
 }
 
-export function IssuesPage() {
+export function IssuesPage({ localMode = false }: { localMode?: boolean }) {
   const { t } = useT("issues");
   const scope = useIssuesScope("issues");
 
@@ -59,6 +62,7 @@ export function IssuesPage() {
 
       <IssueSurface
         scope={{ type: "workspace", actorKind: scope }}
+        localMode={localMode}
         modes={["board", "list", "table", "swimlane"]}
         batchToolbar="list"
         renderHeader={({ controller }) => (
@@ -69,6 +73,7 @@ export function IssuesPage() {
             facetCountsExact={controller.facetCountsExact}
             tableFacetCounts={controller.tableFacetCounts}
             onTableFacetChange={controller.setActiveTableFacet}
+            localMode={localMode}
           />
         )}
         renderEmpty={() => (

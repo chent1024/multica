@@ -135,6 +135,7 @@ CREATE TABLE IF NOT EXISTS task_runs (
     status TEXT NOT NULL,
     thread_id TEXT,
     runtime TEXT,
+    handoff_note TEXT,
     summary TEXT,
     error TEXT,
     started_at TEXT,
@@ -143,6 +144,20 @@ CREATE TABLE IF NOT EXISTS task_runs (
     updated_at TEXT NOT NULL
 );
 CREATE INDEX IF NOT EXISTS task_runs_issue_idx ON task_runs(issue_id, created_at DESC);
+
+CREATE TABLE IF NOT EXISTS task_messages (
+    task_id TEXT NOT NULL,
+    issue_id TEXT NOT NULL,
+    seq INTEGER NOT NULL,
+    type TEXT NOT NULL,
+    tool TEXT,
+    content TEXT,
+    input TEXT,
+    output TEXT,
+    created_at TEXT NOT NULL,
+    PRIMARY KEY(task_id, seq)
+);
+CREATE INDEX IF NOT EXISTS task_messages_issue_idx ON task_messages(issue_id, task_id, seq);
 
 CREATE TABLE IF NOT EXISTS runtimes (
     id TEXT PRIMARY KEY,
@@ -169,3 +184,9 @@ VALUES (2, strftime('%Y-%m-%dT%H:%M:%fZ', 'now'));
 
 INSERT OR IGNORE INTO schema_version(version, applied_at)
 VALUES (3, strftime('%Y-%m-%dT%H:%M:%fZ', 'now'));
+
+INSERT OR IGNORE INTO schema_version(version, applied_at)
+VALUES (4, strftime('%Y-%m-%dT%H:%M:%fZ', 'now'));
+
+INSERT OR IGNORE INTO schema_version(version, applied_at)
+VALUES (5, strftime('%Y-%m-%dT%H:%M:%fZ', 'now'));

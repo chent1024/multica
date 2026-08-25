@@ -567,6 +567,29 @@ describe("ApiClient issue move intent", () => {
   });
 });
 
+describe("ApiClient issue category filters", () => {
+  it("serializes status category filters used by the board fan-out", async () => {
+    const fetchMock = vi.fn().mockResolvedValue(
+      new Response(JSON.stringify({ issues: [], total: 0 }), {
+        status: 200,
+        headers: { "Content-Type": "application/json" },
+      }),
+    );
+    vi.stubGlobal("fetch", fetchMock);
+    const client = new ApiClient("https://api.example.test");
+
+    await client.listIssues({
+      status_category: "in_progress",
+      status_categories: ["in_progress", "in_review"],
+      limit: 50,
+    });
+
+    expect(fetchMock.mock.calls[0]?.[0]).toBe(
+      "https://api.example.test/api/issues?limit=50&status_category=in_progress&status_categories=in_progress%2Cin_review",
+    );
+  });
+});
+
 describe("ApiClient workspace working agents", () => {
   it("supports an optional source-type filter", async () => {
     const payload = [

@@ -99,7 +99,13 @@ function PropRow({
 // ProjectDetail
 // ---------------------------------------------------------------------------
 
-export function ProjectDetail({ projectId }: { projectId: string }) {
+export function ProjectDetail({
+  projectId,
+  localMode = false,
+}: {
+  projectId: string;
+  localMode?: boolean;
+}) {
   const { t } = useT("projects");
   const statusLabels = useProjectStatusLabels();
   const priorityLabels = useProjectPriorityLabels();
@@ -126,7 +132,10 @@ export function ProjectDetail({ projectId }: { projectId: string }) {
     () => ({ type: "project" as const, projectId, actorKind: issueTab }),
     [projectId, issueTab],
   );
-  const { data: members = [] } = useQuery(memberListOptions(wsId));
+  const { data: members = [] } = useQuery({
+    ...memberListOptions(wsId),
+    enabled: !localMode,
+  });
   const { data: agents = [] } = useQuery(agentListOptions(wsId));
   const { getActorName } = useActorName();
   const updateProject = useUpdateProject();
@@ -137,10 +146,11 @@ export function ProjectDetail({ projectId }: { projectId: string }) {
   });
   const isPinned = pinnedItems.some((p) => p.item_type === "project" && p.item_id === projectId);
   const isWorkspaceAdmin = useMemo(() => {
+    if (localMode) return true;
     if (!userId) return false;
     const me = members.find((m) => m.user_id === userId);
     return me?.role === "owner" || me?.role === "admin";
-  }, [members, userId]);
+  }, [localMode, members, userId]);
   const createPin = useCreatePin();
   const deletePinMut = useDeletePin();
   const descEditorRef = useRef<ContentEditorRef>(null);
@@ -203,7 +213,9 @@ export function ProjectDetail({ projectId }: { projectId: string }) {
   const [leadOpen, setLeadOpen] = useState(false);
   const [leadFilter, setLeadFilter] = useState("");
   const leadQuery = leadFilter.toLowerCase();
-  const filteredMembers = members.filter((m) => m.name.toLowerCase().includes(leadQuery) || matchesPinyin(m.name, leadQuery));
+  const filteredMembers = localMode
+    ? []
+    : members.filter((m) => m.name.toLowerCase().includes(leadQuery) || matchesPinyin(m.name, leadQuery));
   const filteredAgents = agents.filter((a) => !a.archived_at && (a.name.toLowerCase().includes(leadQuery) || matchesPinyin(a.name, leadQuery)));
 
   const handleUpdateField = useCallback(
@@ -483,21 +495,23 @@ export function ProjectDetail({ projectId }: { projectId: string }) {
             leaf={<span className="truncate font-medium text-foreground">{project.title}</span>}
             actions={
               <>
-              <Button
-                variant="ghost"
-                size="icon-sm"
-                className={cn("text-muted-foreground", isPinned && "text-foreground")}
-                title={isPinned ? t(($) => $.detail.unpin_tooltip) : t(($) => $.detail.pin_tooltip)}
-                onClick={() => {
-                  if (isPinned) {
-                    deletePinMut.mutate({ itemType: "project", itemId: projectId });
-                  } else {
-                    createPin.mutate({ item_type: "project", item_id: projectId });
-                  }
-                }}
-              >
-                {isPinned ? <PinOff /> : <Pin />}
-              </Button>
+              {!localMode && (
+                <Button
+                  variant="ghost"
+                  size="icon-sm"
+                  className={cn("text-muted-foreground", isPinned && "text-foreground")}
+                  title={isPinned ? t(($) => $.detail.unpin_tooltip) : t(($) => $.detail.pin_tooltip)}
+                  onClick={() => {
+                    if (isPinned) {
+                      deletePinMut.mutate({ itemType: "project", itemId: projectId });
+                    } else {
+                      createPin.mutate({ item_type: "project", item_id: projectId });
+                    }
+                  }}
+                >
+                  {isPinned ? <PinOff /> : <Pin />}
+                </Button>
+              )}
               <DropdownMenu>
                 <DropdownMenuTrigger
                   render={
@@ -550,6 +564,7 @@ export function ProjectDetail({ projectId }: { projectId: string }) {
 
           <IssueSurface
             scope={issueScope}
+            localMode={localMode}
             modes={["board", "list", "table", "swimlane", "gantt"]}
           />
           </div>

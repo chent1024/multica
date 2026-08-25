@@ -522,14 +522,14 @@ describe("createMentionSuggestion", () => {
     expect(highlightedLabel()).toBe("MUL-1");
   });
 
-  it("hides personal agents owned by someone else from a regular member", () => {
+  it("lists local agents despite legacy ownership metadata", () => {
     const qc = fakeQc({
       members: [
         { user_id: "u1", name: "Alice", role: "member" },
         { user_id: "u2", name: "Bob", role: "member" },
       ],
       agents: [
-        // Bob's personal agent — Alice (current user) should not see it.
+        // Legacy cloud metadata does not restrict a local execution target.
         {
           id: "a-personal-bob",
           name: "Atlas",
@@ -537,7 +537,7 @@ describe("createMentionSuggestion", () => {
           visibility: "private",
           owner_id: "u2",
         },
-        // Alice's own personal agent — should be visible.
+        // All registered local execution targets are visible.
         {
           id: "a-personal-alice",
           name: "Athena",
@@ -545,7 +545,7 @@ describe("createMentionSuggestion", () => {
           visibility: "private",
           owner_id: "u1",
         },
-        // Workspace agent — visible to everyone.
+        // Legacy workspace visibility is also ignored in local mode.
         {
           id: "a-shared",
           name: "Aether",
@@ -563,14 +563,10 @@ describe("createMentionSuggestion", () => {
 
     expect(items.some((i) => i.type === "agent" && i.label === "Athena")).toBe(true);
     expect(items.some((i) => i.type === "agent" && i.label === "Aether")).toBe(true);
-    expect(items.some((i) => i.type === "agent" && i.label === "Atlas")).toBe(false);
+    expect(items.some((i) => i.type === "agent" && i.label === "Atlas")).toBe(true);
   });
 
-  it("hides another owner's personal agent from a workspace admin (MUL-3963)", () => {
-    // Role lives in the member fixture, not in authState — promoting Alice
-    // to admin here exercises the gate. MUL-3963 removed the admin bypass:
-    // a private agent is invocable only by its owner, so the @mention list
-    // must NOT surface Bob's personal agent to admin Alice.
+  it("does not apply workspace-member permissions in local mode", () => {
     const qc = fakeQc({
       members: [
         { user_id: "u1", name: "Alice", role: "admin" },
@@ -592,7 +588,7 @@ describe("createMentionSuggestion", () => {
     const result = config.items!(itemArgs("a"));
     const items = result as MentionItem[];
 
-    expect(items.some((i) => i.type === "agent" && i.label === "Atlas")).toBe(false);
+    expect(items.some((i) => i.type === "agent" && i.label === "Atlas")).toBe(true);
   });
 
   it("includes cached issues in the synchronous response", () => {

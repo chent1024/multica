@@ -109,7 +109,7 @@ export const appRoutes: RouteObject[] = [
           { index: true, element: null },
           {
             path: "issues",
-            element: <IssuesPage />,
+            element: <IssuesPage localMode />,
             handle: { title: "Issues" },
           },
           {
@@ -143,6 +143,11 @@ export const appRoutes: RouteObject[] = [
             handle: { title: "Runtime" },
           },
           { path: "agents", element: <DesktopAgentsPage />, handle: { title: "Agents" } },
+          {
+            path: "agents/:id",
+            element: <DesktopAgentsPage />,
+            handle: { title: "Agent" },
+          },
           {
             path: "attachments/:id/preview",
             element: <AttachmentPreviewRoute />,

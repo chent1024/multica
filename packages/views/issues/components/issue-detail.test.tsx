@@ -1072,19 +1072,19 @@ describe("IssueDetail (shared)", () => {
     expect(screen.queryByRole("button", { name: /^Metadata\b/ })).not.toBeInTheDocument();
   });
 
-  it("renders Details section with Created by and dates", async () => {
+  it("renders local timestamps without a user identity", async () => {
     renderIssueDetail();
 
     await waitFor(() => {
       expect(screen.getByText("Details")).toBeInTheDocument();
     });
 
-    expect(screen.getByText("Created by")).toBeInTheDocument();
+    expect(screen.queryByText("Created by")).not.toBeInTheDocument();
     expect(screen.getByText("Created")).toBeInTheDocument();
     expect(screen.getByText("Updated")).toBeInTheDocument();
   });
 
-  // Details is creator + immutable timestamps, so it ranks below the
+  // Details is immutable local timestamps, so it ranks below the
   // execution log, which is what people actually open the sidebar for.
   it("orders the Details section after the execution log", async () => {
     mockApiObj.listTasksByIssue.mockResolvedValue([

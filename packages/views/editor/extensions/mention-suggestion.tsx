@@ -15,8 +15,6 @@ import { getCurrentWsId } from "@multica/core/platform";
 import { flattenIssueBuckets, issueKeys } from "@multica/core/issues/queries";
 import { issueStatusCategory } from "@multica/core/issues";
 import { workspaceKeys } from "@multica/core/workspace/queries";
-import { useAuthStore } from "@multica/core/auth";
-import { canAssignAgentToIssue } from "@multica/core/permissions";
 import { isAgentRuntimeBound } from "@multica/core/agents";
 import { api } from "@multica/core/api";
 import {
@@ -717,15 +715,6 @@ export function createMentionSuggestion(
     const cachedResponse = listQueries[0]?.[1];
     const cachedIssues: Issue[] = cachedResponse ? flattenIssueBuckets(cachedResponse) : [];
 
-    // Read current user identity imperatively — this factory runs outside
-    // React render so we can't useAuthStore() as a hook here. The Proxy in
-    // packages/core/auth/index.ts forwards `.getState()` to the registered
-    // store. Used to gate personal agents in the @mention list so members
-    // don't see (or auto-complete) agents they couldn't assign anyway.
-    const userId = useAuthStore.getState().user?.id ?? null;
-    const myRole =
-      members.find((m) => m.user_id === userId)?.role ?? null;
-
     const q = query.toLowerCase();
 
     const allItem: MentionItem[] =
@@ -745,8 +734,7 @@ export function createMentionSuggestion(
       .filter(
         (a) =>
           !a.archived_at &&
-          (a.name.toLowerCase().includes(q) || matchesPinyin(a.name, q)) &&
-          canAssignAgentToIssue(a, { userId, role: myRole }).allowed,
+          (a.name.toLowerCase().includes(q) || matchesPinyin(a.name, q)),
       )
       .map((a) => ({
         id: a.id,

@@ -3,7 +3,33 @@ import { mkdtemp, writeFile } from "fs/promises";
 import { join } from "path";
 import { tmpdir } from "os";
 import { describe, expect, it } from "vitest";
-import { loadRuntimeConfig } from "./runtime-config-loader";
+import {
+  loadRuntimeConfig,
+  shouldStartBundledLocalServer,
+} from "./runtime-config-loader";
+
+describe("shouldStartBundledLocalServer", () => {
+  it("leaves an explicit dev API under the dev environment owner", () => {
+    expect(
+      shouldStartBundledLocalServer({
+        isDev: true,
+        env: { apiUrl: "http://localhost:18517" },
+      }),
+    ).toBe(false);
+  });
+
+  it("starts the bundled server for standalone dev and packaged builds", () => {
+    expect(
+      shouldStartBundledLocalServer({ isDev: true, env: {} }),
+    ).toBe(true);
+    expect(
+      shouldStartBundledLocalServer({
+        isDev: false,
+        env: { apiUrl: "http://127.0.0.1:19090" },
+      }),
+    ).toBe(true);
+  });
+});
 
 describe("loadRuntimeConfig", () => {
   it("uses dev env and ignores desktop.json during electron-vite dev", async () => {

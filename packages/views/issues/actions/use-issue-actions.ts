@@ -1,17 +1,14 @@
 "use client";
 
 import { useCallback } from "react";
-import { useQuery } from "@tanstack/react-query";
 import { toast } from "sonner";
 import type { Issue, UpdateIssueRequest } from "@multica/core/types";
-import { useAuthStore } from "@multica/core/auth";
 import { useWorkspaceId } from "@multica/core/hooks";
 import { useWorkspacePaths } from "@multica/core/paths";
 import { useModalStore } from "@multica/core/modals";
 import { useUpdateIssue } from "@multica/core/issues/mutations";
 import { useIssueStatuses } from "@multica/core/issue-statuses/hooks";
 import { errorCode } from "@multica/core/api";
-import { pinListOptions, useCreatePin, useDeletePin } from "@multica/core/pins";
 import { copyText } from "@multica/ui/lib/clipboard";
 import { useNavigation } from "../../navigation";
 import { useT } from "../../i18n";
@@ -20,13 +17,11 @@ import { useIssueSurfaceActionsOptional } from "../surface/actions-context";
 import type { IssueSurfaceMutationOptions } from "../surface/actions-context";
 
 export interface UseIssueActionsResult {
-  isPinned: boolean;
   updateField: (
     updates: Partial<UpdateIssueRequest>,
     options?: IssueSurfaceMutationOptions,
   ) => void;
   openInNewTab: () => void;
-  togglePin: () => void;
   copyLink: () => Promise<void>;
   openCreateSubIssue: () => void;
   openSetParent: () => void;
@@ -45,24 +40,8 @@ export function useIssueActions(issue: Issue | null): UseIssueActionsResult {
   const wsId = useWorkspaceId();
   const paths = useWorkspacePaths();
   const navigation = useNavigation();
-  const user = useAuthStore((s) => s.user);
-  const userId = user?.id;
-
-  const { data: pinnedItems = [] } = useQuery({
-    ...pinListOptions(wsId, userId ?? ""),
-    enabled: !!userId,
-  });
-
-  const isPinned =
-    !!issue &&
-    pinnedItems.some(
-      (p) => p.item_type === "issue" && p.item_id === issue.id,
-    );
-
   const updateIssue = useUpdateIssue();
   const surfaceActions = useIssueSurfaceActionsOptional();
-  const createPin = useCreatePin();
-  const deletePin = useDeletePin();
   const openModal = useModalStore((s) => s.open);
 
   const issueId = issue?.id ?? null;
@@ -145,15 +124,6 @@ export function useIssueActions(issue: Issue | null): UseIssueActionsResult {
       "noopener,noreferrer",
     );
   }, [issueId, issueIdentifier, navigation, paths]);
-
-  const togglePin = useCallback(() => {
-    if (!issueId) return;
-    if (isPinned) {
-      deletePin.mutate({ itemType: "issue", itemId: issueId });
-    } else {
-      createPin.mutate({ item_type: "issue", item_id: issueId });
-    }
-  }, [isPinned, issueId, createPin, deletePin]);
 
   const copyLink = useCallback(async () => {
     if (!issueId) return;
@@ -261,10 +231,8 @@ export function useIssueActions(issue: Issue | null): UseIssueActionsResult {
   );
 
   return {
-    isPinned,
     updateField,
     openInNewTab,
-    togglePin,
     copyLink,
     openCreateSubIssue,
     openSetParent,

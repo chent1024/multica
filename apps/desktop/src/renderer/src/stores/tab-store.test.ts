@@ -35,6 +35,13 @@ describe("sanitizeTabPath", () => {
     expect(sanitizeTabPath("/my-team/projects/abc")).toBe("/my-team/projects/abc");
   });
 
+  it("drops routes removed from the local-only desktop", () => {
+    expect(sanitizeTabPath("/acme/chat")).toBeNull();
+    expect(sanitizeTabPath("/acme/members")).toBeNull();
+    expect(sanitizeTabPath("/acme/invitations")).toBeNull();
+    expect(sanitizeTabPath("/acme/subscription")).toBeNull();
+  });
+
   it("rejects paths whose first segment is a reserved slug (missing workspace prefix)", () => {
     const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
     expect(sanitizeTabPath("/issues")).toBeNull();
@@ -45,7 +52,7 @@ describe("sanitizeTabPath", () => {
 
   it("passes through user slugs that happen to look path-like but aren't reserved", () => {
     expect(sanitizeTabPath("/acme-issues/issues")).toBe("/acme-issues/issues");
-    expect(sanitizeTabPath("/project-x/inbox")).toBe("/project-x/inbox");
+    expect(sanitizeTabPath("/project-x/projects")).toBe("/project-x/projects");
   });
 
   it("normalizes a bare workspace url to its default surface (replaces the in-router index redirect)", () => {
@@ -202,8 +209,8 @@ describe("useTabStore actions", () => {
       const store = useTabStore.getState();
       store.switchWorkspace("acme"); // A = /acme/issues, active
       store.addTab("/acme/projects", "B");
-      store.addTab("/acme/skills", "C");
-      expect(urls()).toEqual(["/acme/issues", "/acme/projects", "/acme/skills"]);
+      store.addTab("/acme/agents", "C");
+      expect(urls()).toEqual(["/acme/issues", "/acme/projects", "/acme/agents"]);
 
       store.openTab("/acme/issues/d", "D"); // background: A stays active
       const s = useTabStore.getState();
@@ -211,7 +218,7 @@ describe("useTabStore actions", () => {
         "/acme/issues",
         "/acme/issues/d",
         "/acme/projects",
-        "/acme/skills",
+        "/acme/agents",
       ]);
       expect(getActiveTab(s)?.url).toBe("/acme/issues");
     });
@@ -220,7 +227,7 @@ describe("useTabStore actions", () => {
       const store = useTabStore.getState();
       store.switchWorkspace("acme"); // A
       store.addTab("/acme/projects", "B");
-      store.addTab("/acme/skills", "C");
+      store.addTab("/acme/agents", "C");
       const bId = useTabStore.getState().byWorkspace.acme.tabs[1].id;
       store.setActiveTab(bId);
 
@@ -230,7 +237,7 @@ describe("useTabStore actions", () => {
         "/acme/issues",
         "/acme/projects",
         "/acme/issues/d",
-        "/acme/skills",
+        "/acme/agents",
       ]);
       expect(getActiveTab(s)?.url).toBe("/acme/issues/d"); // foreground open
     });
@@ -253,20 +260,20 @@ describe("useTabStore actions", () => {
       const store = useTabStore.getState();
       store.switchWorkspace("acme"); // A active
       store.addTab("/acme/projects", "B");
-      store.addTab("/acme/skills", "C"); // active is still A — must append anyway
-      expect(urls()).toEqual(["/acme/issues", "/acme/projects", "/acme/skills"]);
+      store.addTab("/acme/agents", "C"); // active is still A — must append anyway
+      expect(urls()).toEqual(["/acme/issues", "/acme/projects", "/acme/agents"]);
     });
 
     it("a dedupe hit focuses the existing tab without reordering", () => {
       const store = useTabStore.getState();
       store.switchWorkspace("acme"); // A active
       store.addTab("/acme/projects", "B");
-      store.addTab("/acme/skills", "C");
+      store.addTab("/acme/agents", "C");
 
-      store.openTab("/acme/skills", "C again"); // hits C, at the far end
+      store.openTab("/acme/agents", "C again"); // hits C, at the far end
       const s = useTabStore.getState();
-      expect(urls()).toEqual(["/acme/issues", "/acme/projects", "/acme/skills"]);
-      expect(getActiveTab(s)?.url).toBe("/acme/skills");
+      expect(urls()).toEqual(["/acme/issues", "/acme/projects", "/acme/agents"]);
+      expect(getActiveTab(s)?.url).toBe("/acme/agents");
     });
   });
 
@@ -432,11 +439,11 @@ describe("navigateActiveSession", () => {
     store.goBack();
     store.goBack();
 
-    store.navigateActiveSession("/acme/inbox");
+    store.navigateActiveSession("/acme/runtimes");
 
     const active = getActiveTab(useTabStore.getState())!;
     expect(active.history).toEqual({
-      stack: ["/acme/issues", "/acme/inbox"],
+      stack: ["/acme/issues", "/acme/runtimes"],
       index: 1,
     });
   });
@@ -1133,14 +1140,14 @@ describe("mergePersistedTabs (rehydration, MUL-4370)", () => {
     ).byWorkspace.acme.tabs[0];
   }
 
-  // A user who opened /acme/autopilots on an older build has "ListTodo"
+  // A user who opened /acme/runtimes on an older build has "ListTodo"
   // persisted for it. Carrying that value forward is what kept the tab bar
   // showing the wrong icon after upgrade, while the sidebar showed the new
   // one. The session must not hold an icon at all.
   it("does not carry a stale persisted icon into the session", () => {
-    const tab = rehydrate(persistedTab("/acme/autopilots", { icon: "ListTodo" }));
+    const tab = rehydrate(persistedTab("/acme/runtimes", { icon: "ListTodo" }));
     expect(tab).not.toHaveProperty("icon");
-    expect(tab.url).toBe("/acme/autopilots");
+    expect(tab.url).toBe("/acme/runtimes");
   });
 
   it("ignores an unknown or corrupted persisted icon", () => {
@@ -1150,21 +1157,39 @@ describe("mergePersistedTabs (rehydration, MUL-4370)", () => {
   });
 
   it("rehydrates payloads with no icon field at all", () => {
-    const tab = rehydrate(persistedTab("/acme/squads"));
+    const tab = rehydrate(persistedTab("/acme/agents"));
     expect(tab).not.toHaveProperty("icon");
-    expect(tab.url).toBe("/acme/squads");
+    expect(tab.url).toBe("/acme/agents");
+  });
+
+  it("drops persisted tabs for routes removed from the local desktop", () => {
+    const state = mergePersistedTabs(
+      {
+        activeWorkspaceSlug: "acme",
+        byWorkspace: {
+          acme: {
+            activeTabId: "t1",
+            tabs: [persistedTab("/acme/chat")],
+          },
+        },
+      },
+      emptyState(),
+    );
+
+    expect(state.byWorkspace).toEqual({});
+    expect(state.activeWorkspaceSlug).toBeNull();
   });
 
   // Payloads written before the generic view-state entries existed carry a
   // memento with only `scroll`; the session shape requires `view` too.
   it("normalizes a memento persisted without view-state entries", () => {
     const tab = rehydrate(
-      persistedTab("/acme/inbox", {
-        memento: { scroll: { "/acme/inbox::list": { top: 5, height: 100 } } },
+      persistedTab("/acme/issues", {
+        memento: { scroll: { "/acme/issues::list": { top: 5, height: 100 } } },
       }),
     );
     expect(tab.memento).toEqual({
-      scroll: { "/acme/inbox::list": { top: 5, height: 100 } },
+      scroll: { "/acme/issues::list": { top: 5, height: 100 } },
       view: {},
     });
   });

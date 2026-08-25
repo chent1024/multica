@@ -46,7 +46,34 @@ vi.mock("@multica/core/workspace/queries", () => ({
   }),
   agentListOptions: () => ({
     queryKey: ["workspaces", "ws-1", "agents"],
-    queryFn: () => Promise.resolve([]),
+    queryFn: () =>
+      Promise.resolve([
+        {
+          id: "agent-local",
+          workspace_id: "ws-1",
+          runtime_id: "runtime-local",
+          runtime_bound: true,
+          name: "Codex",
+          description: "",
+          instructions: "",
+          avatar_url: null,
+          runtime_mode: "local",
+          runtime_config: {},
+          custom_args: [],
+          visibility: "private",
+          permission_mode: "private",
+          invocation_targets: [],
+          status: "idle",
+          max_concurrent_tasks: 1,
+          model: "",
+          owner_id: null,
+          skills: [],
+          created_at: "2026-01-01T00:00:00Z",
+          updated_at: "2026-01-01T00:00:00Z",
+          archived_at: null,
+          archived_by: null,
+        },
+      ]),
   }),
   squadListOptions: () => ({
     queryKey: ["workspaces", "ws-1", "squads"],
@@ -227,14 +254,13 @@ describe("IssueActionsDropdown", () => {
     fireEvent.click(screen.getByTestId("trigger"));
     fireEvent.click(await screen.findByText("Assignee"));
 
-    // The shared picker exposes a search input and renders the workspace
-    // member under a "Members" group — both come from `AssigneePicker`, not
-    // the legacy submenu (which had neither).
+    // The local-only picker exposes registered execution targets and does not
+    // surface cloud workspace members.
     expect(
       await screen.findByPlaceholderText("Assign to..."),
     ).toBeInTheDocument();
-    expect(await screen.findByText("Members")).toBeInTheDocument();
-    expect(await screen.findByText("Test User")).toBeInTheDocument();
+    expect(await screen.findByText("Codex")).toBeInTheDocument();
+    expect(screen.queryByText("Test User")).not.toBeInTheDocument();
   });
 
   it("shows 'Remove parent issue' in the Relations submenu only when the issue has a parent", async () => {

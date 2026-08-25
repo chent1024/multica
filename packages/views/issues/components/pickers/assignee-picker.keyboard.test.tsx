@@ -15,31 +15,73 @@ import { I18nProvider } from "@multica/core/i18n/react";
 import enIssues from "../../../locales/en/issues.json";
 import { AssigneePicker } from "./assignee-picker";
 
-const MEMBERS = [
-  { user_id: "user-1", name: "Ada Lovelace", role: "member" },
-  { user_id: "user-2", name: "Grace Hopper", role: "member" },
+const AGENTS = [
+  {
+    id: "agent-codex",
+    workspace_id: "workspace-1",
+    runtime_id: "runtime-codex",
+    runtime_bound: true,
+    name: "Codex",
+    description: "Local Codex runtime",
+    instructions: "",
+    avatar_url: null,
+    runtime_mode: "local",
+    runtime_config: {},
+    custom_args: [],
+    visibility: "private",
+    permission_mode: "private",
+    invocation_targets: [],
+    status: "idle",
+    max_concurrent_tasks: 1,
+    model: "",
+    owner_id: null,
+    skills: [],
+    created_at: "2026-08-24T00:00:00Z",
+    updated_at: "2026-08-24T00:00:00Z",
+    archived_at: null,
+    archived_by: null,
+  },
+  {
+    id: "agent-claude",
+    workspace_id: "workspace-1",
+    runtime_id: "runtime-claude",
+    runtime_bound: true,
+    name: "Claude",
+    description: "Local Claude runtime",
+    instructions: "",
+    avatar_url: null,
+    runtime_mode: "local",
+    runtime_config: {},
+    custom_args: [],
+    visibility: "private",
+    permission_mode: "private",
+    invocation_targets: [],
+    status: "idle",
+    max_concurrent_tasks: 1,
+    model: "",
+    owner_id: null,
+    skills: [],
+    created_at: "2026-08-24T00:00:00Z",
+    updated_at: "2026-08-24T00:00:00Z",
+    archived_at: null,
+    archived_by: null,
+  },
 ];
 
 vi.mock("@tanstack/react-query", () => ({
   useQuery: ({ queryKey }: { queryKey: string[] }) => {
-    if (queryKey[0] === "members") return { data: MEMBERS };
+    if (queryKey[0] === "agents") return { data: AGENTS };
     return { data: [] };
   },
 }));
 
 vi.mock("@multica/core/hooks", () => ({ useWorkspaceId: () => "workspace-1" }));
-vi.mock("@multica/core/auth", () => ({ useAuthStore: () => ({ id: "user-1" }) }));
 vi.mock("@multica/core/agents", () => ({ isAgentRuntimeBound: () => true }));
-vi.mock("@multica/core/permissions", () => ({
-  canAssignAgentToIssue: () => ({ allowed: true }),
-}));
 vi.mock("@multica/core/workspace/hooks", () => ({
   useActorName: () => ({ getActorName: () => "Ada Lovelace" }),
 }));
 vi.mock("@multica/core/workspace/queries", () => ({
-  memberListOptions: () => ({ queryKey: ["members"] }),
   agentListOptions: () => ({ queryKey: ["agents"] }),
-  squadListOptions: () => ({ queryKey: ["squads"] }),
   assigneeFrequencyOptions: () => ({ queryKey: ["frequency"] }),
 }));
 vi.mock("../../../common/actor-avatar", () => ({
@@ -64,18 +106,32 @@ function renderPicker(onUpdate: () => void) {
 }
 
 describe("AssigneePicker search keyboard defaults", () => {
+  it("allows selecting a runtime-bound local agent without a signed-in user", async () => {
+    const user = userEvent.setup();
+    const onUpdate = vi.fn();
+
+    renderPicker(onUpdate);
+    await user.click(screen.getByText("Codex"));
+
+    expect(onUpdate).toHaveBeenCalledWith({
+      assignee_type: "agent",
+      assignee_id: "agent-codex",
+    });
+    expect(screen.getByText("Codex").closest("button")).not.toBeDisabled();
+  });
+
   it("assigns the first match on Enter instead of unassigning", async () => {
     const user = userEvent.setup();
     const onUpdate = vi.fn();
 
     renderPicker(onUpdate);
 
-    await user.type(await screen.findByPlaceholderText(SEARCH_PLACEHOLDER), "grace");
+    await user.type(await screen.findByPlaceholderText(SEARCH_PLACEHOLDER), "claude");
     await user.keyboard("{Enter}");
 
     expect(onUpdate).toHaveBeenCalledWith({
-      assignee_type: "member",
-      assignee_id: "user-2",
+      assignee_type: "agent",
+      assignee_id: "agent-claude",
     });
   });
 

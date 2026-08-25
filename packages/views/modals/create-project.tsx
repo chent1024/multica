@@ -31,7 +31,7 @@ import {
 } from "@multica/core/projects/config";
 import { useWorkspaceId } from "@multica/core/hooks";
 import { useCurrentWorkspace, useWorkspacePaths } from "@multica/core/paths";
-import { memberListOptions, agentListOptions } from "@multica/core/workspace/queries";
+import { agentListOptions } from "@multica/core/workspace/queries";
 import { useActorName } from "@multica/core/workspace/hooks";
 import type { ProjectStatus, ProjectPriority } from "@multica/core/types";
 import { cn } from "@multica/ui/lib/utils";
@@ -136,7 +136,6 @@ export function CreateProjectModal({ onClose }: { onClose: () => void }) {
   const workspaceName = workspace?.name;
   const wsPaths = useWorkspacePaths();
   const wsId = useWorkspaceId();
-  const { data: members = [] } = useQuery(memberListOptions(wsId));
   const { data: agents = [] } = useQuery(agentListOptions(wsId));
   const { getActorName } = useActorName();
   const projectStatusLabels = useProjectStatusLabels();
@@ -308,7 +307,6 @@ export function CreateProjectModal({ onClose }: { onClose: () => void }) {
   const [leadFilter, setLeadFilter] = useState("");
 
   const leadQuery = leadFilter.toLowerCase();
-  const filteredMembers = members.filter((m) => m.name.toLowerCase().includes(leadQuery) || matchesPinyin(m.name, leadQuery));
   const filteredAgents = agents.filter(
     (a) => !a.archived_at && (a.name.toLowerCase().includes(leadQuery) || matchesPinyin(a.name, leadQuery)),
   );
@@ -581,27 +579,6 @@ export function CreateProjectModal({ onClose }: { onClose: () => void }) {
                   <UserMinus className="h-3.5 w-3.5 text-muted-foreground" />
                   <span className="text-muted-foreground">{t(($) => $.create_project.no_lead)}</span>
                 </button>
-                {filteredMembers.length > 0 && (
-                  <>
-                    <div className="px-2 pt-2 pb-1 text-caption font-medium text-muted-foreground uppercase tracking-wider">
-                      {t(($) => $.create_project.members_group)}
-                    </div>
-                    {filteredMembers.map((m) => (
-                      <button
-                        type="button"
-                        key={m.user_id}
-                        onClick={() => {
-                          updateLead("member", m.user_id);
-                          setLeadOpen(false);
-                        }}
-                        className="flex w-full items-center gap-2 rounded-md px-2 py-1.5 text-body hover:bg-accent transition-colors"
-                      >
-                        <ActorAvatar actorType="member" actorId={m.user_id} size="sm" />
-                        <span>{m.name}</span>
-                      </button>
-                    ))}
-                  </>
-                )}
                 {filteredAgents.length > 0 && (
                   <>
                     <div className="px-2 pt-2 pb-1 text-caption font-medium text-muted-foreground uppercase tracking-wider">
@@ -623,8 +600,7 @@ export function CreateProjectModal({ onClose }: { onClose: () => void }) {
                     ))}
                   </>
                 )}
-                {filteredMembers.length === 0 &&
-                  filteredAgents.length === 0 &&
+                {filteredAgents.length === 0 &&
                   leadFilter && (
                     <div className="px-2 py-3 text-center text-body text-muted-foreground">
                       {t(($) => $.create_project.no_results)}

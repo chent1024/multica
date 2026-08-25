@@ -47,6 +47,69 @@ func TestSQLiteWorkbenchPersistsCoreLifecycle(t *testing.T) {
 	if issue.Identifier != "LOCAL-1" || issue.ProjectID == nil || *issue.ProjectID != project.ID {
 		t.Fatalf("created issue = %#v", issue)
 	}
+	if issue.Metadata == nil {
+		t.Fatal("created issue metadata must be an object, got null")
+	}
+	var listed struct {
+		Issues []Issue `json:"issues"`
+		Total  int     `json:"total"`
+	}
+	requestJSON(t, server.URL, http.MethodGet, "/api/issues?status_category=todo&limit=50", nil, http.StatusOK, &listed)
+	if listed.Total != 1 || len(listed.Issues) != 1 || listed.Issues[0].ID != issue.ID {
+		t.Fatalf("listed issues = %#v", listed)
+	}
+	var queried struct {
+		Issues []Issue `json:"issues"`
+		Total  int     `json:"total"`
+	}
+	requestJSON(t, server.URL, http.MethodPost, "/api/issues/query", map[string]any{"ids": issue.ID}, http.StatusOK, &queried)
+	if queried.Total != 1 || len(queried.Issues) != 1 || queried.Issues[0].ID != issue.ID {
+		t.Fatalf("queried issues = %#v", queried)
+	}
+	var issueGroups struct {
+		Groups []struct {
+			Key string `json:"key"`
+		} `json:"groups"`
+	}
+	tableQuery := map[string]any{
+		"query": map[string]any{
+			"scope":   map[string]any{"kind": "workspace"},
+			"filters": map[string]any{},
+		},
+		"group": map[string]any{"kind": "status"},
+	}
+	requestJSON(t, server.URL, http.MethodPost, "/api/issues/table/groups", tableQuery, http.StatusOK, &issueGroups)
+	if len(issueGroups.Groups) != 1 || issueGroups.Groups[0].Key != "status:todo" {
+		t.Fatalf("issue groups = %#v, want status:todo", issueGroups.Groups)
+	}
+	var issueRows struct {
+		Rows []struct {
+			Issue Issue `json:"issue"`
+		} `json:"rows"`
+	}
+	tableQuery["group_key"] = "status:todo"
+	tableQuery["hierarchy"] = map[string]any{"enabled": false}
+	tableQuery["parent_id"] = nil
+	requestJSON(t, server.URL, http.MethodPost, "/api/issues/table/rows", tableQuery, http.StatusOK, &issueRows)
+	if len(issueRows.Rows) != 1 || issueRows.Rows[0].Issue.ID != issue.ID {
+		t.Fatalf("issue rows = %#v, want created issue", issueRows.Rows)
+	}
+	for _, test := range []struct {
+		name string
+		kind string
+		key  string
+	}{
+		{name: "project", kind: "project", key: "project:" + project.ID},
+		{name: "status category", kind: "status_category", key: "status_category:todo"},
+	} {
+		t.Run(test.name+" group key", func(t *testing.T) {
+			tableQuery["group"] = map[string]any{"kind": test.kind}
+			requestJSON(t, server.URL, http.MethodPost, "/api/issues/table/groups", tableQuery, http.StatusOK, &issueGroups)
+			if len(issueGroups.Groups) != 1 || issueGroups.Groups[0].Key != test.key {
+				t.Fatalf("issue groups = %#v, want %s", issueGroups.Groups, test.key)
+			}
+		})
+	}
 
 	var comment Comment
 	requestJSON(t, server.URL, http.MethodPost, "/api/issues/"+issue.ID+"/comments", map[string]any{
@@ -60,6 +123,18 @@ func TestSQLiteWorkbenchPersistsCoreLifecycle(t *testing.T) {
 	requestJSON(t, server.URL, http.MethodGet, "/api/issues/"+issue.ID+"/timeline", nil, http.StatusOK, &timeline)
 	if len(timeline) != 2 || timeline[0]["type"] != "activity" || timeline[1]["type"] != "comment" {
 		t.Fatalf("timeline = %#v", timeline)
+	}
+
+	var neighbor Issue
+	requestJSON(t, server.URL, http.MethodPost, "/api/issues", map[string]any{
+		"title": "Neighbor", "project_id": project.ID, "status": "in_progress",
+	}, http.StatusCreated, &neighbor)
+	var moved Issue
+	requestJSON(t, server.URL, http.MethodPost, "/api/issues/"+issue.ID+"/move", map[string]any{
+		"status": "in_progress", "before_id": neighbor.ID, "after_id": nil,
+	}, http.StatusOK, &moved)
+	if moved.Status != "in_progress" || moved.StatusCategory != "in_progress" || moved.Position != neighbor.Position+1 {
+		t.Fatalf("moved issue = %#v, neighbor = %#v", moved, neighbor)
 	}
 
 	server.Close()
@@ -152,6 +227,8 @@ func TestSQLiteWorkbenchServesLocalIssuePageDependencies(t *testing.T) {
 
 	var workspaces []Workspace
 	requestJSON(t, server.URL, http.MethodGet, "/api/workspaces", nil, http.StatusOK, &workspaces)
+	var issue Issue
+	requestJSON(t, server.URL, http.MethodPost, "/api/issues", map[string]any{"title": "Dependencies"}, http.StatusCreated, &issue)
 	paths := []string{
 		"/api/runtimes?workspace_id=" + workspaces[0].ID,
 		"/api/properties",
@@ -160,6 +237,8 @@ func TestSQLiteWorkbenchServesLocalIssuePageDependencies(t *testing.T) {
 		"/api/chat/sessions?status=all",
 		"/api/chat/pending-tasks",
 		"/api/chat/pending-tasks/has-any",
+		"/api/quick-actions",
+		"/api/issues/" + issue.ID + "/labels",
 	}
 	for _, path := range paths {
 		requestJSON[any](t, server.URL, http.MethodGet, path, nil, http.StatusOK, nil)
@@ -243,6 +322,7 @@ func TestSQLiteWorkbenchScopesNestedDataToOnlyLocalWorkspace(t *testing.T) {
 		requestJSON[any](t, server.URL, http.MethodGet, path, nil, http.StatusNotFound, nil)
 	}
 	requestJSON[any](t, server.URL, http.MethodGet, "/api/daemon/tasks/hidden-run/status", nil, http.StatusNotFound, nil)
+	requestJSON[any](t, server.URL, http.MethodGet, "/api/tasks/hidden-run/messages", nil, http.StatusNotFound, nil)
 	for _, path := range []string{
 		"/api/daemon/tasks/hidden-run/start",
 		"/api/daemon/tasks/hidden-run/progress",
@@ -279,11 +359,19 @@ func TestSQLiteWorkbenchRunsAssignedIssueThroughDaemonProtocol(t *testing.T) {
 	if len(agents) != 1 || agents[0]["id"] != LocalAgentID {
 		t.Fatalf("local agents = %#v", agents)
 	}
+	var agent map[string]any
+	requestJSON(t, server.URL, http.MethodGet, "/api/agents/"+LocalAgentID, nil, http.StatusOK, &agent)
+	if agent["name"] != "Codex" {
+		t.Fatalf("local agent = %#v", agent)
+	}
 
 	var issue Issue
 	requestJSON(t, server.URL, http.MethodPost, "/api/issues", map[string]any{
-		"title": "Run locally", "status": "todo", "assignee_type": "agent", "assignee_id": LocalAgentID,
+		"title": "Run locally", "status": "todo",
 	}, http.StatusCreated, &issue)
+	requestJSON(t, server.URL, http.MethodPut, "/api/issues/"+issue.ID, map[string]any{
+		"assignee_type": "agent", "assignee_id": LocalAgentID, "handoff_note": "Verify the local execution chain",
+	}, http.StatusOK, &issue)
 	var claim struct {
 		Tasks []map[string]any `json:"tasks"`
 	}
@@ -296,9 +384,18 @@ func TestSQLiteWorkbenchRunsAssignedIssueThroughDaemonProtocol(t *testing.T) {
 	if _, exists := claim.Tasks[0]["auth_token"]; exists {
 		t.Fatalf("local task must not carry auth_token: %#v", claim.Tasks[0])
 	}
+	if claim.Tasks[0]["handoff_note"] != "Verify the local execution chain" {
+		t.Fatalf("claimed task handoff note = %#v", claim.Tasks[0]["handoff_note"])
+	}
 	taskID := claim.Tasks[0]["id"].(string)
 	requestJSON[any](t, server.URL, http.MethodPost, "/api/daemon/tasks/"+taskID+"/start", map[string]any{}, http.StatusOK, nil)
 	requestJSON[any](t, server.URL, http.MethodPost, "/api/daemon/tasks/"+taskID+"/session", map[string]any{"session_id": "codex-thread-1"}, http.StatusOK, nil)
+	messages := map[string]any{"messages": []any{
+		map[string]any{"seq": 2, "type": "tool_result", "tool": "Read", "output": "ok"},
+		map[string]any{"seq": 1, "type": "tool_use", "tool": "Read", "input": map[string]any{"file_path": "README.md"}},
+	}}
+	requestJSON[any](t, server.URL, http.MethodPost, "/api/daemon/tasks/"+taskID+"/messages", messages, http.StatusOK, nil)
+	requestJSON[any](t, server.URL, http.MethodPost, "/api/daemon/tasks/"+taskID+"/messages", messages, http.StatusOK, nil)
 	requestJSON[any](t, server.URL, http.MethodPost, "/api/daemon/tasks/"+taskID+"/complete", map[string]any{"output": "Implemented and verified", "session_id": "codex-thread-1"}, http.StatusOK, nil)
 	requestJSON[any](t, server.URL, http.MethodPost, "/api/daemon/tasks/"+taskID+"/complete", map[string]any{"output": "Implemented and verified", "session_id": "codex-thread-1"}, http.StatusOK, nil)
 
@@ -307,10 +404,140 @@ func TestSQLiteWorkbenchRunsAssignedIssueThroughDaemonProtocol(t *testing.T) {
 	if len(runs) != 1 || runs[0]["status"] != "completed" {
 		t.Fatalf("task runs = %#v", runs)
 	}
+	if runs[0]["handoff_note"] != "Verify the local execution chain" {
+		t.Fatalf("task run handoff note = %#v", runs[0]["handoff_note"])
+	}
+	var transcript []map[string]any
+	requestJSON(t, server.URL, http.MethodGet, "/api/tasks/"+taskID+"/messages", nil, http.StatusOK, &transcript)
+	if len(transcript) != 2 || transcript[0]["seq"] != float64(1) || transcript[1]["seq"] != float64(2) {
+		t.Fatalf("task transcript = %#v", transcript)
+	}
+	if transcript[0]["task_id"] != taskID || transcript[0]["issue_id"] != issue.ID {
+		t.Fatalf("task transcript scope = %#v", transcript[0])
+	}
 	var comments []Comment
 	requestJSON(t, server.URL, http.MethodGet, "/api/issues/"+issue.ID+"/comments", nil, http.StatusOK, &comments)
 	if len(comments) != 1 || comments[0].Content != "Implemented and verified" {
 		t.Fatalf("completion comments = %#v", comments)
+	}
+	requestJSON(t, server.URL, http.MethodPut, "/api/issues/"+issue.ID, map[string]any{
+		"title": "Run locally after edit",
+	}, http.StatusOK, &issue)
+	claim.Tasks = nil
+	requestJSON(t, server.URL, http.MethodPost, "/api/daemon/tasks/claim", map[string]any{
+		"daemon_id": "local-daemon", "runtime_ids": []string{registration.Runtimes[0].ID}, "max_tasks": 1,
+	}, http.StatusOK, &claim)
+	if len(claim.Tasks) != 0 {
+		t.Fatalf("non-run issue edit unexpectedly queued tasks = %#v", claim.Tasks)
+	}
+
+	var suppressed Issue
+	requestJSON(t, server.URL, http.MethodPost, "/api/issues", map[string]any{
+		"title": "Assign without starting", "status": "todo",
+	}, http.StatusCreated, &suppressed)
+	requestJSON(t, server.URL, http.MethodPut, "/api/issues/"+suppressed.ID, map[string]any{
+		"assignee_type": "agent", "assignee_id": LocalAgentID, "suppress_run": true,
+	}, http.StatusOK, &suppressed)
+	requestJSON(t, server.URL, http.MethodPost, "/api/daemon/register", map[string]any{
+		"workspace_id": workspaces[0].ID, "daemon_id": "local-daemon", "device_name": "Mac",
+		"runtimes": []any{map[string]any{"name": "Codex", "type": "codex", "version": "1.0", "status": "online"}},
+	}, http.StatusOK, &registration)
+	claim.Tasks = nil
+	requestJSON(t, server.URL, http.MethodPost, "/api/daemon/tasks/claim", map[string]any{
+		"daemon_id": "local-daemon", "runtime_ids": []string{registration.Runtimes[0].ID}, "max_tasks": 1,
+	}, http.StatusOK, &claim)
+	if len(claim.Tasks) != 0 {
+		t.Fatalf("suppressed assignment unexpectedly queued tasks = %#v", claim.Tasks)
+	}
+}
+
+func TestSQLiteWorkbenchQuickCreatesWithOnlineLocalCodex(t *testing.T) {
+	app, err := New(context.Background(), filepath.Join(t.TempDir(), "multica.db"), nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer app.Close()
+	server := httptest.NewServer(app.Router())
+	defer server.Close()
+
+	var workspaces []Workspace
+	requestJSON(t, server.URL, http.MethodGet, "/api/workspaces", nil, http.StatusOK, &workspaces)
+	var registration struct {
+		Runtimes []localRuntime `json:"runtimes"`
+	}
+	requestJSON(t, server.URL, http.MethodPost, "/api/daemon/register", map[string]any{
+		"workspace_id": workspaces[0].ID, "daemon_id": "local-daemon", "device_name": "Mac",
+		"runtimes": []any{map[string]any{"name": "Codex", "type": "codex", "version": "0.147.0", "status": "online"}},
+	}, http.StatusOK, &registration)
+	var runtimes []struct {
+		Metadata map[string]any `json:"metadata"`
+	}
+	requestJSON(t, server.URL, http.MethodGet, "/api/runtimes", nil, http.StatusOK, &runtimes)
+	if len(runtimes) != 1 || runtimes[0].Metadata["cli_version"] != "0.147.0" {
+		t.Fatalf("runtime metadata = %#v", runtimes)
+	}
+
+	var issue Issue
+	requestJSON(t, server.URL, http.MethodPost, "/api/issues/quick-create", map[string]any{
+		"agent_id": LocalAgentID, "prompt": "Inspect the local chain\nand report the result", "priority": "high",
+	}, http.StatusCreated, &issue)
+	if issue.Title != "Inspect the local chain" || issue.Description == nil || *issue.Description != "Inspect the local chain\nand report the result" || issue.AssigneeID == nil || *issue.AssigneeID != LocalAgentID {
+		t.Fatalf("quick-created issue = %#v", issue)
+	}
+	var queued int
+	if err := app.store.db.QueryRowContext(t.Context(), `SELECT COUNT(*) FROM task_runs WHERE issue_id=? AND status='queued'`, issue.ID).Scan(&queued); err != nil {
+		t.Fatal(err)
+	}
+	if queued != 1 {
+		t.Fatalf("quick-create queued runs = %d, want 1", queued)
+	}
+}
+
+func TestSQLiteWorkbenchUpgradesTaskRunHandoffNote(t *testing.T) {
+	databasePath := filepath.Join(t.TempDir(), "multica.db")
+	store, err := Open(t.Context(), databasePath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := store.db.ExecContext(t.Context(), `ALTER TABLE task_runs DROP COLUMN handoff_note`); err != nil {
+		t.Fatal(err)
+	}
+	if err := store.Close(); err != nil {
+		t.Fatal(err)
+	}
+	reopened, err := Open(t.Context(), databasePath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer reopened.Close()
+	rows, err := reopened.db.QueryContext(t.Context(), `PRAGMA table_info(task_runs)`)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer rows.Close()
+	found := false
+	for rows.Next() {
+		var cid, notNull, primaryKey int
+		var name, columnType string
+		var defaultValue any
+		if err := rows.Scan(&cid, &name, &columnType, &notNull, &defaultValue, &primaryKey); err != nil {
+			t.Fatal(err)
+		}
+		found = found || name == "handoff_note"
+	}
+	if !found {
+		t.Fatal("handoff_note column was not restored")
+	}
+	var version int
+	if err := reopened.db.QueryRowContext(t.Context(), `SELECT MAX(version) FROM schema_version`).Scan(&version); err != nil {
+		t.Fatal(err)
+	}
+	if version != 5 {
+		t.Fatalf("schema version = %d, want 5", version)
+	}
+	var taskMessagesTable string
+	if err := reopened.db.QueryRowContext(t.Context(), `SELECT name FROM sqlite_master WHERE type='table' AND name='task_messages'`).Scan(&taskMessagesTable); err != nil {
+		t.Fatal(err)
 	}
 }
 

@@ -15,5 +15,5 @@ export function ProjectDetailPage() {
   useDocumentTitle(project ? project.title : "Project");
 
   if (!id) return null;
-  return <ProjectDetail projectId={id} />;
+  return <ProjectDetail projectId={id} localMode />;
 }

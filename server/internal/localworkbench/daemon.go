@@ -56,18 +56,26 @@ func (s *Store) codexRuntime(ctx context.Context, workspaceID string) (localRunt
 	return scanRuntime(s.db.QueryRowContext(ctx, `SELECT id, workspace_id, daemon_id, name, provider, version, status, device_name, profile_id, last_seen_at, created_at, updated_at FROM runtimes WHERE workspace_id=? AND provider='codex' AND status='online' ORDER BY updated_at DESC LIMIT 1`, workspaceID))
 }
 
+func (s *Store) latestCodexRuntime(ctx context.Context, workspaceID string) (localRuntime, error) {
+	return scanRuntime(s.db.QueryRowContext(ctx, `SELECT id, workspace_id, daemon_id, name, provider, version, status, device_name, profile_id, last_seen_at, created_at, updated_at FROM runtimes WHERE workspace_id=? AND provider='codex' ORDER BY updated_at DESC LIMIT 1`, workspaceID))
+}
+
 func localAgent(workspaceID string, runtime localRuntime) map[string]any {
+	status := "offline"
+	if runtime.Status == "online" {
+		status = "idle"
+	}
 	return map[string]any{
 		"id": LocalAgentID, "workspace_id": workspaceID, "runtime_id": runtime.ID, "runtime_bound": true,
 		"name": "Codex", "description": "Local Codex runtime", "instructions": "Work on the assigned local task and report the result.",
 		"avatar_url": nil, "runtime_mode": "local", "runtime_config": map[string]any{}, "custom_args": []any{},
-		"visibility": "private", "permission_mode": "private", "invocation_targets": []any{}, "status": "idle",
+		"visibility": "private", "permission_mode": "private", "invocation_targets": []any{}, "status": status,
 		"max_concurrent_tasks": 1, "model": "", "owner_id": nil, "skills": []any{}, "created_at": runtime.CreatedAt,
 		"updated_at": runtime.UpdatedAt, "archived_at": nil, "archived_by": nil,
 	}
 }
 
-func (s *Store) enqueueAssignedIssue(ctx context.Context, workspaceID, issueID string) error {
+func (s *Store) enqueueAssignedIssue(ctx context.Context, workspaceID, issueID, handoffNote string) error {
 	issue, err := s.GetIssue(ctx, workspaceID, issueID)
 	if err != nil {
 		return err
@@ -90,33 +98,8 @@ func (s *Store) enqueueAssignedIssue(ctx context.Context, workspaceID, issueID s
 		return nil
 	}
 	stamp := now()
-	_, err = s.db.ExecContext(ctx, `INSERT INTO task_runs(id, issue_id, status, runtime, created_at, updated_at) VALUES (?, ?, 'queued', ?, ?, ?)`, uuid.NewString(), issueID, runtime.ID, stamp, stamp)
+	_, err = s.db.ExecContext(ctx, `INSERT INTO task_runs(id, issue_id, status, runtime, handoff_note, created_at, updated_at) VALUES (?, ?, 'queued', ?, ?, ?, ?)`, uuid.NewString(), issueID, runtime.ID, nullable(handoffNote), stamp, stamp)
 	return err
-}
-
-func (s *Store) enqueuePendingAssignments(ctx context.Context, workspaceID string) error {
-	rows, err := s.db.QueryContext(ctx, `SELECT id FROM issues WHERE workspace_id=? AND assignee_type='agent' AND assignee_id=? AND status NOT IN ('done','cancelled')`, workspaceID, LocalAgentID)
-	if err != nil {
-		return err
-	}
-	ids := []string{}
-	for rows.Next() {
-		var id string
-		if err := rows.Scan(&id); err != nil {
-			_ = rows.Close()
-			return err
-		}
-		ids = append(ids, id)
-	}
-	if err := rows.Close(); err != nil {
-		return err
-	}
-	for _, id := range ids {
-		if err := s.enqueueAssignedIssue(ctx, workspaceID, id); err != nil {
-			return err
-		}
-	}
-	return nil
 }
 
 func (s *Server) listRuntimes(w http.ResponseWriter, r *http.Request) {
@@ -135,7 +118,7 @@ func (s *Server) listRuntimes(w http.ResponseWriter, r *http.Request) {
 		result = append(result, map[string]any{
 			"id": item.ID, "workspace_id": item.WorkspaceID, "daemon_id": item.DaemonID, "name": item.Name,
 			"runtime_mode": "local", "provider": item.Provider, "launch_header": "", "status": item.Status,
-			"device_info": "", "metadata": map[string]any{"version": item.Version}, "owner_id": nil, "visibility": "private",
+			"device_info": "", "metadata": map[string]any{"cli_version": item.Version}, "owner_id": nil, "visibility": "private",
 			"profile_id": item.ProfileID, "last_seen_at": item.LastSeenAt, "created_at": item.CreatedAt, "updated_at": item.UpdatedAt,
 		})
 	}
@@ -148,7 +131,7 @@ func (s *Server) listAgents(w http.ResponseWriter, r *http.Request) {
 		s.respondStoreError(w, err)
 		return
 	}
-	runtime, err := s.store.codexRuntime(r.Context(), ws.ID)
+	runtime, err := s.store.latestCodexRuntime(r.Context(), ws.ID)
 	if errors.Is(err, sql.ErrNoRows) {
 		writeJSON(w, http.StatusOK, []any{})
 		return
@@ -158,6 +141,24 @@ func (s *Server) listAgents(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	writeJSON(w, http.StatusOK, []any{localAgent(ws.ID, runtime)})
+}
+
+func (s *Server) getAgent(w http.ResponseWriter, r *http.Request) {
+	ws, err := s.workspaceFor(r)
+	if err != nil {
+		s.respondStoreError(w, err)
+		return
+	}
+	if chi.URLParam(r, "id") != LocalAgentID {
+		s.respondStoreError(w, sql.ErrNoRows)
+		return
+	}
+	runtime, err := s.store.codexRuntime(r.Context(), ws.ID)
+	if err != nil {
+		s.respondStoreError(w, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, localAgent(ws.ID, runtime))
 }
 
 func (s *Server) daemonRegister(w http.ResponseWriter, r *http.Request) {
@@ -217,10 +218,6 @@ func (s *Server) daemonRegister(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 	if err := tx.Commit(); err != nil {
-		s.fail(w, err)
-		return
-	}
-	if err := s.store.enqueuePendingAssignments(r.Context(), ws.ID); err != nil {
 		s.fail(w, err)
 		return
 	}
@@ -350,7 +347,8 @@ func (s *Server) claimTask(ctx context.Context, daemonID, runtimeID string) (map
 	defer func() { _ = tx.Rollback() }()
 	stamp := now()
 	var taskID, issueID string
-	err = tx.QueryRowContext(ctx, `UPDATE task_runs SET status='dispatched', updated_at=? WHERE id=(SELECT tr.id FROM task_runs tr JOIN issues i ON i.id=tr.issue_id WHERE tr.status='queued' AND tr.runtime=? AND i.workspace_id=? ORDER BY tr.created_at LIMIT 1) RETURNING id, issue_id`, stamp, runtimeID, workspaceID).Scan(&taskID, &issueID)
+	var handoffNote sql.NullString
+	err = tx.QueryRowContext(ctx, `UPDATE task_runs SET status='dispatched', updated_at=? WHERE id=(SELECT tr.id FROM task_runs tr JOIN issues i ON i.id=tr.issue_id WHERE tr.status='queued' AND tr.runtime=? AND i.workspace_id=? ORDER BY tr.created_at LIMIT 1) RETURNING id, issue_id, handoff_note`, stamp, runtimeID, workspaceID).Scan(&taskID, &issueID, &handoffNote)
 	if errors.Is(err, sql.ErrNoRows) {
 		return nil, tx.Commit()
 	}
@@ -372,6 +370,9 @@ func (s *Server) claimTask(ctx context.Context, daemonID, runtimeID string) (map
 		"id": taskID, "agent_id": LocalAgentID, "runtime_id": runtimeID, "issue_id": issue.ID, "workspace_id": workspaceID,
 		"thread_name": issue.Identifier + " " + issue.Title, "workspace_context": stringValue(ws.Context),
 		"agent": map[string]any{"id": LocalAgentID, "name": "Codex", "instructions": "Work on the assigned local task and report the result."},
+	}
+	if handoffNote.Valid && strings.TrimSpace(handoffNote.String) != "" {
+		task["handoff_note"] = handoffNote.String
 	}
 	if issue.ProjectID != nil {
 		project, err := s.store.GetProject(ctx, workspaceID, *issue.ProjectID)
@@ -547,6 +548,146 @@ func (s *Server) daemonTaskProgress(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 	writeJSON(w, http.StatusOK, map[string]any{})
+}
+
+type localTaskMessageInput struct {
+	Seq     int            `json:"seq"`
+	Type    string         `json:"type"`
+	Tool    string         `json:"tool"`
+	Content string         `json:"content"`
+	Input   map[string]any `json:"input"`
+	Output  string         `json:"output"`
+}
+
+func (s *Server) daemonTaskMessages(w http.ResponseWriter, r *http.Request) {
+	ws, err := s.workspaceFor(r)
+	if err != nil {
+		s.respondStoreError(w, err)
+		return
+	}
+	var input struct {
+		Messages []localTaskMessageInput `json:"messages"`
+	}
+	if err := decodeBody(r, &input); err != nil {
+		writeError(w, http.StatusBadRequest, err)
+		return
+	}
+	if len(input.Messages) > 1000 {
+		writeError(w, http.StatusBadRequest, errors.New("too many task messages"))
+		return
+	}
+	taskID := chi.URLParam(r, "taskID")
+	var issueID string
+	if err := s.store.db.QueryRowContext(r.Context(), `SELECT tr.issue_id FROM task_runs tr JOIN issues i ON i.id=tr.issue_id WHERE tr.id=? AND i.workspace_id=?`, taskID, ws.ID).Scan(&issueID); err != nil {
+		s.respondStoreError(w, err)
+		return
+	}
+	tx, err := s.store.db.BeginTx(r.Context(), nil)
+	if err != nil {
+		s.fail(w, err)
+		return
+	}
+	defer func() { _ = tx.Rollback() }()
+	payloads := make([]map[string]any, 0, len(input.Messages))
+	for _, message := range input.Messages {
+		if message.Seq <= 0 || !validTaskMessageType(message.Type) {
+			writeError(w, http.StatusBadRequest, errors.New("invalid task message"))
+			return
+		}
+		encodedInput, err := json.Marshal(message.Input)
+		if err != nil {
+			writeError(w, http.StatusBadRequest, errors.New("invalid task message input"))
+			return
+		}
+		stamp := now()
+		result, err := tx.ExecContext(r.Context(), `INSERT INTO task_messages(task_id, issue_id, seq, type, tool, content, input, output, created_at)
+			VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+			ON CONFLICT(task_id, seq) DO NOTHING`,
+			taskID, issueID, message.Seq, message.Type, nullable(message.Tool), nullable(message.Content), nullable(string(encodedInput)), nullable(message.Output), stamp)
+		if err != nil {
+			s.fail(w, err)
+			return
+		}
+		if inserted, _ := result.RowsAffected(); inserted != 0 {
+			payloads = append(payloads, taskMessagePayload(taskID, issueID, message.Seq, message.Type, message.Tool, message.Content, message.Input, message.Output, stamp))
+		}
+	}
+	if err := tx.Commit(); err != nil {
+		s.fail(w, err)
+		return
+	}
+	for _, payload := range payloads {
+		s.hub.broadcast("task:message", payload)
+	}
+	writeJSON(w, http.StatusOK, map[string]any{})
+}
+
+func validTaskMessageType(value string) bool {
+	switch value {
+	case "text", "thinking", "tool_use", "tool_result", "error":
+		return true
+	default:
+		return false
+	}
+}
+
+func taskMessagePayload(taskID, issueID string, seq int, messageType, tool, content string, input map[string]any, output, createdAt string) map[string]any {
+	payload := map[string]any{"task_id": taskID, "issue_id": issueID, "seq": seq, "type": messageType, "created_at": createdAt}
+	if tool != "" {
+		payload["tool"] = tool
+	}
+	if content != "" {
+		payload["content"] = content
+	}
+	if input != nil {
+		payload["input"] = input
+	}
+	if output != "" {
+		payload["output"] = output
+	}
+	return payload
+}
+
+func (s *Server) listTaskMessages(w http.ResponseWriter, r *http.Request) {
+	ws, err := s.workspaceFor(r)
+	if err != nil {
+		s.respondStoreError(w, err)
+		return
+	}
+	taskID := chi.URLParam(r, "taskID")
+	var issueID string
+	if err := s.store.db.QueryRowContext(r.Context(), `SELECT tr.issue_id FROM task_runs tr JOIN issues i ON i.id=tr.issue_id WHERE tr.id=? AND i.workspace_id=?`, taskID, ws.ID).Scan(&issueID); err != nil {
+		s.respondStoreError(w, err)
+		return
+	}
+	rows, err := s.store.db.QueryContext(r.Context(), `SELECT seq, type, COALESCE(tool,''), COALESCE(content,''), COALESCE(input,''), COALESCE(output,''), created_at FROM task_messages WHERE task_id=? AND issue_id=? ORDER BY seq`, taskID, issueID)
+	if err != nil {
+		s.fail(w, err)
+		return
+	}
+	defer rows.Close()
+	items := []map[string]any{}
+	for rows.Next() {
+		var seq int
+		var messageType, tool, content, encodedInput, output, createdAt string
+		if err := rows.Scan(&seq, &messageType, &tool, &content, &encodedInput, &output, &createdAt); err != nil {
+			s.fail(w, err)
+			return
+		}
+		var messageInput map[string]any
+		if encodedInput != "" {
+			if err := json.Unmarshal([]byte(encodedInput), &messageInput); err != nil {
+				s.fail(w, err)
+				return
+			}
+		}
+		items = append(items, taskMessagePayload(taskID, issueID, seq, messageType, tool, content, messageInput, output, createdAt))
+	}
+	if err := rows.Err(); err != nil {
+		s.fail(w, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, items)
 }
 
 func (s *Server) daemonTaskStatus(w http.ResponseWriter, r *http.Request) {

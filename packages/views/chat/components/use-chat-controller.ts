@@ -8,10 +8,8 @@ import {
 } from "@tanstack/react-query";
 import { toast } from "sonner";
 import { useWorkspaceId } from "@multica/core/hooks";
-import { useAuthStore } from "@multica/core/auth";
-import { agentListOptions, memberListOptions } from "@multica/core/workspace/queries";
+import { agentListOptions } from "@multica/core/workspace/queries";
 import { projectListOptions } from "@multica/core/projects/queries";
-import { canAssignAgent } from "@multica/views/issues/components";
 import { api, dispatchReasonCode } from "@multica/core/api";
 import {
   isAgentRuntimeBound as hasAgentRuntime,
@@ -211,12 +209,8 @@ export function useChatController(opts?: { isActive?: boolean }) {
   const setActiveSession = useChatStore((s) => s.setActiveSession);
   const setSelectedAgentId = useChatStore((s) => s.setSelectedAgentId);
   const setSelectedProjectId = useChatStore((s) => s.setSelectedProjectId);
-  const user = useAuthStore((s) => s.user);
   const { data: agents = [], isSuccess: agentsLoaded } = useQuery(
     agentListOptions(wsId),
-  );
-  const { data: members = [], isSuccess: membersLoaded } = useQuery(
-    memberListOptions(wsId),
   );
   const { data: sessions = [], isSuccess: sessionsLoaded } = useQuery(
     chatSessionsOptions(wsId),
@@ -306,18 +300,13 @@ export function useChatController(opts?: { isActive?: boolean }) {
   const setSessionProject = useSetChatSessionProject();
   const setArchived = useSetChatSessionArchived();
 
-  const currentMember = members.find((m) => m.user_id === user?.id);
-  const memberRole = currentMember?.role;
   const availableAgents = agents.filter(
-    (a) => !a.archived_at && canAssignAgent(a, user?.id, memberRole),
+    (a) => !a.archived_at && hasAgentRuntime(a),
   );
-  // `availableAgents` is only trustworthy once BOTH queries above succeeded:
-  // the permission filter reads the member role, so agents-without-members
-  // misreports a public_to agent as unavailable. Consumers that must tell
-  // "still loading" apart from "settled and not available" (the `?agent=`
-  // deep link) gate on this instead of sniffing list emptiness. Query errors
-  // deliberately keep this false — a failed fetch is not a permission verdict.
-  const agentsSettled = agentsLoaded && membersLoaded;
+  // Consumers that must tell "still loading" apart from "settled and not
+  // available" gate on this instead of sniffing list emptiness. Local mode has
+  // no membership query or permission verdict.
+  const agentsSettled = agentsLoaded;
 
   // The agent bound to the OPEN session, resolved from the full agent list
   // (archived included, since agentListOptions passes include_archived). An
@@ -341,15 +330,9 @@ export function useChatController(opts?: { isActive?: boolean }) {
     null;
   const isAgentRuntimeBound = !!activeAgent && hasAgentRuntime(activeAgent);
 
-  // A session outlives the permission that created it. The agent can be flipped
-  // to personal, change owner, or drop this member from its allow-list, and the
-  // server then refuses every send with `invocation_not_allowed` while still
-  // serving the transcript (MUL-4525 — read uses the view gate, send re-runs the
-  // invoke gate). Judge the SESSION's agent, not just the picker list, so the
-  // composer goes read-only up front instead of after the user types
-  // (MUL-6380). Same rule the server enforces, via the shared predicate.
-  const isAgentAccessRevoked =
-    !!activeAgent && !canAssignAgent(activeAgent, user?.id, memberRole);
+  // Kept in the shared controller result for component compatibility. Local
+  // mode has no user identity and therefore no per-user invocation revocation.
+  const isAgentAccessRevoked = false;
 
   const agentAvailability = useWorkspaceAgentAvailability();
   const noAgent = agentAvailability === "none";
@@ -474,17 +457,6 @@ export function useChatController(opts?: { isActive?: boolean }) {
       // input is disabled in this state; this is the belt-and-braces guard.
       if (isAgentArchived) {
         apiLogger.warn("sendChatMessage skipped: agent is archived", {
-          sessionId: activeSessionId,
-          agentId: activeAgent.id,
-        });
-        return false;
-      }
-      // Invoke permission was revoked while this session was open. The server
-      // would refuse with a 403 before persisting anything; not attempting the
-      // send keeps the draft and avoids a pointless roundtrip. The input is
-      // disabled in this state — this is the belt-and-braces guard.
-      if (isAgentAccessRevoked) {
-        apiLogger.warn("sendChatMessage skipped: invoke permission revoked", {
           sessionId: activeSessionId,
           agentId: activeAgent.id,
         });
@@ -633,7 +605,6 @@ export function useChatController(opts?: { isActive?: boolean }) {
       activeSessionId,
       activeAgent,
       isAgentArchived,
-      isAgentAccessRevoked,
       pendingTask,
       pendingTaskId,
       isAgentRuntimeBound,
@@ -797,7 +768,7 @@ export function useChatController(opts?: { isActive?: boolean }) {
   return {
     // identity / lists
     wsId,
-    user,
+    user: null as { id: string } | null,
     agents,
     availableAgents,
     agentsSettled,

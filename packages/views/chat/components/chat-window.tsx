@@ -14,10 +14,8 @@ import {
 } from "@multica/ui/components/ui/popover";
 import { toast } from "sonner";
 import { useWorkspaceId } from "@multica/core/hooks";
-import { useAuthStore } from "@multica/core/auth";
-import { agentListOptions, memberListOptions } from "@multica/core/workspace/queries";
+import { agentListOptions } from "@multica/core/workspace/queries";
 import { projectListOptions } from "@multica/core/projects/queries";
-import { canAssignAgent } from "@multica/views/issues/components";
 import { api, dispatchReasonCode } from "@multica/core/api";
 import {
   isAgentRuntimeBound,
@@ -114,9 +112,7 @@ export function ChatWindow() {
   const setActiveSession = useChatStore((s) => s.setActiveSession);
   const setSelectedAgentId = useChatStore((s) => s.setSelectedAgentId);
   const setSelectedProjectId = useChatStore((s) => s.setSelectedProjectId);
-  const user = useAuthStore((s) => s.user);
   const { data: agents = [] } = useQuery(agentListOptions(wsId));
-  const { data: members = [] } = useQuery(memberListOptions(wsId));
   // Single sessions cache — eliminates the separate active/all queries
   // that used to drift during the WS-invalidate window.
   const { data: sessions = [], isSuccess: sessionsLoaded } = useQuery(
@@ -215,10 +211,8 @@ export function ChatWindow() {
   const markRead = useMarkChatSessionRead();
   const setSessionProject = useSetChatSessionProject();
 
-  const currentMember = members.find((m) => m.user_id === user?.id);
-  const memberRole = currentMember?.role;
   const availableAgents = agents.filter(
-    (a) => !a.archived_at && canAssignAgent(a, user?.id, memberRole),
+    (a) => !a.archived_at && isAgentRuntimeBound(a),
   );
 
   // The agent bound to the OPEN session, resolved from the full agent list
@@ -248,8 +242,7 @@ export function ChatWindow() {
   // serving the transcript (MUL-4525). Judge the SESSION's agent, not just the
   // picker list, so the composer goes read-only up front rather than after the
   // user types (MUL-6380). Mirrors use-chat-controller.ts.
-  const isAgentAccessRevoked =
-    !!activeAgent && !canAssignAgent(activeAgent, user?.id, memberRole);
+  const isAgentAccessRevoked = false;
 
   const projectContextSupport = useChatProjectContextSupport(wsId, activeAgent);
 
@@ -991,7 +984,7 @@ export function ChatWindow() {
           <AgentDropdown
             agents={availableAgents}
             activeAgent={activeAgent}
-            userId={user?.id}
+            userId={undefined}
             onSelect={handleSelectAgent}
           />
         }

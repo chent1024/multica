@@ -322,7 +322,7 @@ describe("slash command suggestion items", () => {
     expect(items(qc)).toEqual([]);
   });
 
-  it("excludes skills from private agents the user cannot access", () => {
+  it("uses skills from the selected local agent despite legacy visibility metadata", () => {
     chatState.selectedAgentId = "private-agent";
     const qc = fakeQc({
       members: [
@@ -341,7 +341,7 @@ describe("slash command suggestion items", () => {
       ],
     });
 
-    expect(items(qc)).toEqual([]);
+    expect(items(qc).map((item) => item.id)).toEqual(["private-skill"]);
   });
 });
 

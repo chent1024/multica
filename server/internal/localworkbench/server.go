@@ -98,7 +98,7 @@ func (s *Server) Router() http.Handler {
 		api.Post("/daemon/runtimes/{runtimeID}/tasks/{taskID}/prepare-lease", s.daemonTaskNoop)
 		api.Post("/daemon/tasks/{taskID}/{action:start|complete|fail|wait-local-directory}", s.daemonTaskState)
 		api.Post("/daemon/tasks/{taskID}/progress", s.daemonTaskProgress)
-		api.Post("/daemon/tasks/{taskID}/messages", s.daemonTaskNoop)
+		api.Post("/daemon/tasks/{taskID}/messages", s.daemonTaskMessages)
 		api.Post("/daemon/tasks/{taskID}/usage", s.daemonTaskNoop)
 		api.Post("/daemon/tasks/{taskID}/session", s.daemonTaskSession)
 		api.Get("/daemon/tasks/{taskID}/status", s.daemonTaskStatus)
@@ -122,17 +122,22 @@ func (s *Server) Router() http.Handler {
 		api.Get("/issues/child-progress", s.childProgress)
 		api.Get("/issues/children", s.childrenByParents)
 		api.Post("/issues/preview-trigger", emptyObject("triggers", []any{}, "total_count", 0))
+		api.Get("/issues", s.listIssues)
+		api.Post("/issues/query", s.queryIssues)
+		api.Post("/issues/quick-create", s.quickCreateIssue)
 		api.Post("/issues", s.createIssue)
 		api.Post("/issues/batch-update", s.batchUpdateIssues)
 		api.Post("/issues/batch-delete", s.batchDeleteIssues)
 		api.Get("/issues/{id}", s.getIssue)
 		api.Put("/issues/{id}", s.updateIssue)
+		api.Post("/issues/{id}/move", s.moveIssue)
 		api.Delete("/issues/{id}", s.deleteIssue)
 		api.Get("/issues/{id}/children", s.listChildren)
 		api.Get("/issues/{id}/comments", s.listComments)
 		api.Post("/issues/{id}/comments", s.createComment)
 		api.Post("/issues/{id}/comments/trigger-preview", emptyObject("agents", []any{}))
 		api.Get("/issues/{id}/attachments", emptyArray())
+		api.Get("/issues/{id}/labels", emptyObject("labels", []any{}))
 		api.Get("/issues/{id}/timeline", s.timeline)
 		api.Get("/issues/{id}/active-task", s.activeTask)
 		api.Get("/issues/{id}/task-runs", s.listTaskRuns)
@@ -141,12 +146,15 @@ func (s *Server) Router() http.Handler {
 		api.Get("/issue-statuses", s.listIssueStatuses)
 		api.Get("/labels", emptyObject("labels", []any{}, "total", 0))
 		api.Get("/agents", s.listAgents)
+		api.Get("/agents/{id}", s.getAgent)
+		api.Get("/tasks/{taskID}/messages", s.listTaskMessages)
 		api.Get("/runtimes", s.listRuntimes)
 		api.Get("/agent-task-snapshot", emptyArray())
 		api.Get("/working-agents", emptyArray())
 		api.Get("/assignee-frequency", emptyArray())
 		api.Get("/issue-properties", emptyObject("properties", []any{}))
 		api.Get("/properties", emptyObject("properties", []any{}, "total", 0))
+		api.Get("/quick-actions", emptyObject("quick_actions", []any{}))
 		api.Get("/issue-views", emptyArray())
 		api.Get("/issue-view-preferences", emptyObject(
 			"scope_type", "workspace", "scope_id", nil,
@@ -676,6 +684,20 @@ func contains(values []string, value string) bool {
 	return false
 }
 
+func issueTableGroupKey(kind string, item Issue) string {
+	switch kind {
+	case "project":
+		if item.ProjectID == nil {
+			return "project:none"
+		}
+		return "project:" + *item.ProjectID
+	case "status_category":
+		return "status_category:" + item.StatusCategory
+	default:
+		return "status:" + item.Status
+	}
+}
+
 func (s *Server) tableIssues(r *http.Request, input tableRequest) ([]Issue, error) {
 	ws, err := s.workspaceFor(r)
 	if err != nil {
@@ -718,23 +740,21 @@ func (s *Server) listIssueTableGroups(w http.ResponseWriter, r *http.Request) {
 	}
 	counts := map[string]int{}
 	for _, item := range items {
-		key := item.StatusCategory
-		if input.Group.Kind == "project" {
-			if item.ProjectID == nil {
-				key = "none"
-			} else {
-				key = *item.ProjectID
-			}
-		}
+		key := issueTableGroupKey(input.Group.Kind, item)
 		counts[key]++
 	}
 	groups := []any{}
 	for key, count := range counts {
-		value := map[string]any{"kind": "status", "status": key}
+		status := strings.TrimPrefix(key, "status:")
+		if input.Group.Kind == "status_category" {
+			status = strings.TrimPrefix(key, "status_category:")
+		}
+		value := map[string]any{"kind": "status", "status": status}
 		if input.Group.Kind == "project" {
 			var project any = nil
-			if key != "none" {
-				project = key
+			projectID := strings.TrimPrefix(key, "project:")
+			if projectID != "none" {
+				project = projectID
 			}
 			value = map[string]any{"kind": "project", "project_id": project}
 		}
@@ -757,14 +777,7 @@ func (s *Server) listIssueTableRows(w http.ResponseWriter, r *http.Request) {
 	rows := []any{}
 	for _, item := range items {
 		if input.GroupKey != nil && *input.GroupKey != "" {
-			key := item.StatusCategory
-			if input.Group.Kind == "project" {
-				if item.ProjectID == nil {
-					key = "none"
-				} else {
-					key = *item.ProjectID
-				}
-			}
+			key := issueTableGroupKey(input.Group.Kind, item)
 			if key != *input.GroupKey {
 				continue
 			}
@@ -813,6 +826,149 @@ func (s *Server) searchIssues(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, 200, map[string]any{"issues": result, "total": len(result)})
 }
 
+func issueListValues(r *http.Request) map[string]string {
+	values := map[string]string{}
+	for key, list := range r.URL.Query() {
+		if len(list) > 0 {
+			values[key] = list[0]
+		}
+	}
+	return values
+}
+
+func commaValues(raw string) map[string]bool {
+	result := map[string]bool{}
+	for _, value := range strings.Split(raw, ",") {
+		if value = strings.TrimSpace(value); value != "" {
+			result[value] = true
+		}
+	}
+	return result
+}
+
+func requestsRun(updates map[string]any) bool {
+	for _, key := range []string{"status", "assignee_type", "assignee_id"} {
+		if _, exists := updates[key]; exists {
+			return true
+		}
+	}
+	return false
+}
+
+func (s *Server) issueListResponse(ctx context.Context, ws Workspace, values map[string]string) (map[string]any, error) {
+	items, err := s.store.ListIssues(ctx, ws.ID, "", "")
+	if err != nil {
+		return nil, err
+	}
+	statuses, statusCategories := commaValues(values["statuses"]), commaValues(values["status_categories"])
+	priorities := commaValues(values["priorities"])
+	projectIDs, assigneeIDs := commaValues(values["project_ids"]), commaValues(values["assignee_ids"])
+	ids, idsPresent := commaValues(values["ids"]), false
+	if _, ok := values["ids"]; ok {
+		idsPresent = true
+	}
+	q := strings.ToLower(strings.TrimSpace(values["q"]))
+	filtered := make([]Issue, 0, len(items))
+	for _, item := range items {
+		if idsPresent && !ids[item.ID] {
+			continue
+		}
+		if value := values["status_category"]; value != "" && item.StatusCategory != value {
+			continue
+		}
+		if len(statusCategories) > 0 && !statusCategories[item.StatusCategory] {
+			continue
+		}
+		if value := values["status"]; value != "" && item.Status != value {
+			continue
+		}
+		if len(statuses) > 0 && !statuses[item.Status] {
+			continue
+		}
+		if value := values["priority"]; value != "" && item.Priority != value {
+			continue
+		}
+		if len(priorities) > 0 && !priorities[item.Priority] {
+			continue
+		}
+		if value := values["project_id"]; value != "" && (item.ProjectID == nil || *item.ProjectID != value) {
+			continue
+		}
+		if len(projectIDs) > 0 && (item.ProjectID == nil || !projectIDs[*item.ProjectID]) {
+			continue
+		}
+		if value := values["assignee_id"]; value != "" && (item.AssigneeID == nil || *item.AssigneeID != value) {
+			continue
+		}
+		if len(assigneeIDs) > 0 && (item.AssigneeID == nil || !assigneeIDs[*item.AssigneeID]) {
+			continue
+		}
+		if values["top_level_only"] == "true" && item.ParentIssueID != nil {
+			continue
+		}
+		if values["open_only"] == "true" && (item.StatusCategory == "done" || item.StatusCategory == "cancelled") {
+			continue
+		}
+		if q != "" && !strings.Contains(strings.ToLower(item.Title), q) && !strings.Contains(strings.ToLower(item.Identifier), q) {
+			continue
+		}
+		filtered = append(filtered, item)
+	}
+	total := len(filtered)
+	offset, _ := strconv.Atoi(values["offset"])
+	limit, _ := strconv.Atoi(values["limit"])
+	if offset < 0 {
+		offset = 0
+	}
+	if offset > len(filtered) {
+		offset = len(filtered)
+	}
+	end := len(filtered)
+	if limit > 0 && offset+limit < end {
+		end = offset + limit
+	}
+	return map[string]any{"issues": filtered[offset:end], "total": total}, nil
+}
+
+func (s *Server) listIssues(w http.ResponseWriter, r *http.Request) {
+	ws, err := s.workspaceFor(r)
+	if err != nil {
+		s.respondStoreError(w, err)
+		return
+	}
+	result, err := s.issueListResponse(r.Context(), ws, issueListValues(r))
+	if err != nil {
+		s.respondStoreError(w, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, result)
+}
+
+func (s *Server) queryIssues(w http.ResponseWriter, r *http.Request) {
+	ws, err := s.workspaceFor(r)
+	if err != nil {
+		s.respondStoreError(w, err)
+		return
+	}
+	var input map[string]any
+	if err := decodeBody(r, &input); err != nil {
+		writeError(w, http.StatusBadRequest, err)
+		return
+	}
+	values := map[string]string{}
+	for key, value := range input {
+		if value != nil {
+			values[key] = fmt.Sprint(value)
+		}
+	}
+	result, err := s.issueListResponse(r.Context(), ws, values)
+	if err != nil {
+		s.respondStoreError(w, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, result)
+}
+
 func (s *Server) createIssue(w http.ResponseWriter, r *http.Request) {
 	ws, err := s.workspaceFor(r)
 	if err != nil {
@@ -829,12 +985,66 @@ func (s *Server) createIssue(w http.ResponseWriter, r *http.Request) {
 		s.fail(w, err)
 		return
 	}
-	if err := s.store.enqueueAssignedIssue(r.Context(), ws.ID, item.ID); err != nil {
+	if err := s.store.enqueueAssignedIssue(r.Context(), ws.ID, item.ID, ""); err != nil {
 		s.fail(w, err)
 		return
 	}
 	s.hub.broadcast("issue:created", map[string]any{"issue": item})
 	writeJSON(w, 201, item)
+}
+
+func (s *Server) quickCreateIssue(w http.ResponseWriter, r *http.Request) {
+	ws, err := s.workspaceFor(r)
+	if err != nil {
+		s.respondStoreError(w, err)
+		return
+	}
+	var input struct {
+		AgentID       string   `json:"agent_id"`
+		Prompt        string   `json:"prompt"`
+		ProjectID     *string  `json:"project_id"`
+		ParentID      *string  `json:"parent_issue_id"`
+		Priority      string   `json:"priority"`
+		DueDate       *string  `json:"due_date"`
+		AttachmentIDs []string `json:"attachment_ids"`
+	}
+	if err := decodeBody(r, &input); err != nil {
+		writeError(w, http.StatusBadRequest, err)
+		return
+	}
+	prompt := strings.TrimSpace(input.Prompt)
+	if prompt == "" || input.AgentID != LocalAgentID {
+		writeError(w, http.StatusBadRequest, errors.New("a local Codex agent and prompt are required"))
+		return
+	}
+	if _, err := s.store.codexRuntime(r.Context(), ws.ID); err != nil {
+		if errors.Is(err, sql.ErrNoRows) {
+			writeError(w, http.StatusConflict, errors.New("local Codex runtime is not online"))
+			return
+		}
+		s.fail(w, err)
+		return
+	}
+	title := strings.TrimSpace(strings.SplitN(prompt, "\n", 2)[0])
+	if len([]rune(title)) > 120 {
+		title = string([]rune(title)[:120])
+	}
+	agentType, agentID := "agent", LocalAgentID
+	item, err := s.store.CreateIssue(r.Context(), ws.ID, CreateIssueInput{
+		Title: title, Description: prompt, Status: "todo", Priority: input.Priority,
+		AssigneeType: &agentType, AssigneeID: &agentID,
+		ProjectID: input.ProjectID, ParentIssueID: input.ParentID, DueDate: input.DueDate,
+	})
+	if err != nil {
+		s.respondStoreError(w, err)
+		return
+	}
+	if err := s.store.enqueueAssignedIssue(r.Context(), ws.ID, item.ID, ""); err != nil {
+		s.fail(w, err)
+		return
+	}
+	s.hub.broadcast("issue:created", map[string]any{"issue": item})
+	writeJSON(w, http.StatusCreated, item)
 }
 
 func (s *Server) getIssue(w http.ResponseWriter, r *http.Request) {
@@ -862,14 +1072,91 @@ func (s *Server) updateIssue(w http.ResponseWriter, r *http.Request) {
 		writeError(w, 400, err)
 		return
 	}
+	handoffNote, _ := input["handoff_note"].(string)
+	suppressRun, _ := input["suppress_run"].(bool)
 	item, err := s.store.UpdateIssue(r.Context(), ws.ID, chi.URLParam(r, "id"), input)
 	if err != nil {
 		s.respondStoreError(w, err)
 		return
 	}
-	if err := s.store.enqueueAssignedIssue(r.Context(), ws.ID, item.ID); err != nil {
-		s.fail(w, err)
+	if !suppressRun && requestsRun(input) {
+		if err := s.store.enqueueAssignedIssue(r.Context(), ws.ID, item.ID, handoffNote); err != nil {
+			s.fail(w, err)
+			return
+		}
+	}
+	s.hub.broadcast("issue:updated", map[string]any{"issue": item})
+	writeJSON(w, 200, item)
+}
+
+func (s *Server) moveIssue(w http.ResponseWriter, r *http.Request) {
+	ws, err := s.workspaceFor(r)
+	if err != nil {
+		s.respondStoreError(w, err)
 		return
+	}
+	var input map[string]any
+	if err := decodeBody(r, &input); err != nil {
+		writeError(w, http.StatusBadRequest, err)
+		return
+	}
+	issueID := chi.URLParam(r, "id")
+	if _, err := s.store.GetIssue(r.Context(), ws.ID, issueID); err != nil {
+		s.respondStoreError(w, err)
+		return
+	}
+	position := 0.0
+	var before, after *Issue
+	beforeID, _ := input["before_id"].(string)
+	afterID, _ := input["after_id"].(string)
+	if beforeID != "" {
+		if beforeID == issueID {
+			writeError(w, http.StatusBadRequest, errors.New("move neighbor cannot be the issue itself"))
+			return
+		}
+		item, err := s.store.GetIssue(r.Context(), ws.ID, beforeID)
+		if err != nil {
+			s.respondStoreError(w, err)
+			return
+		}
+		before = &item
+	}
+	if afterID != "" {
+		if afterID == issueID {
+			writeError(w, http.StatusBadRequest, errors.New("move neighbor cannot be the issue itself"))
+			return
+		}
+		item, err := s.store.GetIssue(r.Context(), ws.ID, afterID)
+		if err != nil {
+			s.respondStoreError(w, err)
+			return
+		}
+		after = &item
+	}
+	switch {
+	case before != nil && after != nil:
+		position = (before.Position + after.Position) / 2
+	case before != nil:
+		position = before.Position + 1
+	case after != nil:
+		position = after.Position - 1
+	}
+	updates := map[string]any{"position": position}
+	for _, key := range []string{"status", "assignee_type", "assignee_id", "parent_issue_id", "project_id"} {
+		if value, exists := input[key]; exists {
+			updates[key] = value
+		}
+	}
+	item, err := s.store.UpdateIssue(r.Context(), ws.ID, issueID, updates)
+	if err != nil {
+		s.respondStoreError(w, err)
+		return
+	}
+	if requestsRun(updates) {
+		if err := s.store.enqueueAssignedIssue(r.Context(), ws.ID, item.ID, ""); err != nil {
+			s.fail(w, err)
+			return
+		}
 	}
 	s.hub.broadcast("issue:updated", map[string]any{"issue": item})
 	writeJSON(w, 200, item)
@@ -939,11 +1226,23 @@ func (s *Server) batchUpdateIssues(w http.ResponseWriter, r *http.Request) {
 		writeError(w, 400, err)
 		return
 	}
+	handoffNote, _ := input.Updates["handoff_note"].(string)
+	suppressRun, _ := input.Updates["suppress_run"].(bool)
 	updated := 0
 	for _, id := range input.IssueIDs {
-		if _, err := s.store.UpdateIssue(r.Context(), ws.ID, id, input.Updates); err == nil {
-			updated++
+		item, err := s.store.UpdateIssue(r.Context(), ws.ID, id, input.Updates)
+		if err != nil {
+			s.respondStoreError(w, err)
+			return
 		}
+		if !suppressRun && requestsRun(input.Updates) {
+			if err := s.store.enqueueAssignedIssue(r.Context(), ws.ID, item.ID, handoffNote); err != nil {
+				s.fail(w, err)
+				return
+			}
+		}
+		updated++
+		s.hub.broadcast("issue:updated", map[string]any{"issue": item})
 	}
 	writeJSON(w, 200, map[string]any{"updated": updated})
 }
@@ -1055,7 +1354,7 @@ func (s *Server) listTaskRuns(w http.ResponseWriter, r *http.Request) {
 		s.respondStoreError(w, err)
 		return
 	}
-	rows, err := s.store.db.QueryContext(r.Context(), `SELECT id, issue_id, status, thread_id, runtime, summary, error, started_at, completed_at, created_at FROM task_runs WHERE issue_id=? ORDER BY created_at DESC`, chi.URLParam(r, "id"))
+	rows, err := s.store.db.QueryContext(r.Context(), `SELECT id, issue_id, status, thread_id, runtime, handoff_note, summary, error, started_at, completed_at, created_at FROM task_runs WHERE issue_id=? ORDER BY created_at DESC`, chi.URLParam(r, "id"))
 	if err != nil {
 		s.fail(w, err)
 		return
@@ -1064,12 +1363,12 @@ func (s *Server) listTaskRuns(w http.ResponseWriter, r *http.Request) {
 	items := []any{}
 	for rows.Next() {
 		var id, issueID, status, createdAt string
-		var threadID, runtimeName, summary, errorText, startedAt, completedAt sql.NullString
-		if err := rows.Scan(&id, &issueID, &status, &threadID, &runtimeName, &summary, &errorText, &startedAt, &completedAt, &createdAt); err != nil {
+		var threadID, runtimeName, handoffNote, summary, errorText, startedAt, completedAt sql.NullString
+		if err := rows.Scan(&id, &issueID, &status, &threadID, &runtimeName, &handoffNote, &summary, &errorText, &startedAt, &completedAt, &createdAt); err != nil {
 			s.fail(w, err)
 			return
 		}
-		items = append(items, map[string]any{"id": id, "agent_id": LocalAgentID, "runtime_id": nullableString(runtimeName), "issue_id": issueID, "status": status, "priority": 0, "dispatched_at": nil, "started_at": stringPtr(startedAt), "completed_at": stringPtr(completedAt), "result": map[string]any{"thread_id": nullableString(threadID), "summary": nullableString(summary)}, "error": stringPtr(errorText), "created_at": createdAt})
+		items = append(items, map[string]any{"id": id, "agent_id": LocalAgentID, "runtime_id": nullableString(runtimeName), "issue_id": issueID, "status": status, "priority": 0, "handoff_note": nullableString(handoffNote), "dispatched_at": nil, "started_at": stringPtr(startedAt), "completed_at": stringPtr(completedAt), "result": map[string]any{"thread_id": nullableString(threadID), "summary": nullableString(summary)}, "error": stringPtr(errorText), "created_at": createdAt})
 	}
 	writeJSON(w, 200, items)
 }

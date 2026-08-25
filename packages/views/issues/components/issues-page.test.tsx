@@ -800,6 +800,21 @@ describe("IssuesPage (shared)", () => {
     expect(screen.getByText("Agents")).toBeInTheDocument();
   });
 
+  it("local mode removes the member scope and normalizes persisted member state", async () => {
+    mockScope = "members";
+    mockViewState.viewMode = "list";
+
+    renderWithQuery(<IssuesPage localMode />);
+
+    expect(await screen.findAllByText("All")).not.toHaveLength(0);
+    expect(screen.queryByText("Members")).not.toBeInTheDocument();
+    expect(screen.getByText("Agents")).toBeInTheDocument();
+    expect(mockListIssues).toHaveBeenCalled();
+    for (const [params] of mockListIssues.mock.calls) {
+      expect(params.assignee_types).toBeUndefined();
+    }
+  });
+
   // The Members/Agents tabs filter server-side via assignee_types (the same
   // param the grouped endpoint takes), so the mock mirrors the server's
   // WHERE clause instead of a client-side post-filter.

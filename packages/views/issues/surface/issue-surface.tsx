@@ -55,6 +55,7 @@ interface IssueSurfaceComponentProps extends IssueSurfaceProps {
   showClientEmpty?: (context: IssueSurfaceRenderContext) => boolean;
   batchToolbar?: "always" | "list" | "never";
   contentClassName?: string;
+  localMode?: boolean;
 }
 
 export function IssueSurface({
@@ -70,6 +71,7 @@ export function IssueSurface({
   showClientEmpty,
   batchToolbar = "always",
   contentClassName,
+  localMode = false,
 }: IssueSurfaceComponentProps) {
   const wsId = useWorkspaceId();
   // Saved views exist on workspace / my / project surfaces only.
@@ -102,12 +104,19 @@ export function IssueSurface({
   // own tab state is never touched — it is exactly where they left it when
   // the view closes (or vanishes). A variant-free view resolves to the
   // unrestricted axis value.
-  const effectiveScope: IssueScope =
+  const viewResolvedScope: IssueScope =
     activeView && (scope.type === "workspace" || scope.type === "project")
       ? { ...scope, actorKind: actorKindForViewVariant(activeView.scope_variant) }
       : activeView && scope.type === "my"
         ? { ...scope, relation: myRelationForViewVariant(activeView.scope_variant) }
         : scope;
+  const effectiveScope: IssueScope =
+    localMode &&
+    (viewResolvedScope.type === "workspace" ||
+      viewResolvedScope.type === "project") &&
+    viewResolvedScope.actorKind === "members"
+      ? { ...viewResolvedScope, actorKind: "all" }
+      : viewResolvedScope;
   const store = useMemo(() => {
     // First-open seeding happens HERE, at store-creation time for this key:
     // no React component has subscribed to the new key's store yet, so the
@@ -159,6 +168,7 @@ export function IssueSurface({
         showClientEmpty={showClientEmpty}
         batchToolbar={batchToolbar}
         contentClassName={contentClassName}
+        localMode={localMode}
       />
       </ViewBaselineProvider>
     </ViewStoreProvider>
@@ -177,6 +187,7 @@ function IssueSurfaceContent({
   showClientEmpty,
   batchToolbar,
   contentClassName,
+  localMode,
 }: Omit<IssueSurfaceComponentProps, "surfaceKey">) {
   const { t } = useT("projects");
   const controller = useIssueSurfaceController({
@@ -252,6 +263,7 @@ function IssueSurfaceContent({
             }
             tableFacetCounts={controller.tableFacetCounts}
             onTableFacetChange={controller.setActiveTableFacet}
+            localMode={localMode}
             saveViewScope={
               scope.type === "project"
                 ? { kind: "project", projectId: scope.projectId }

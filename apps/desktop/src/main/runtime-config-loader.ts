@@ -45,6 +45,13 @@ export async function loadRuntimeConfig(options: {
   }
 }
 
+export function shouldStartBundledLocalServer(options: {
+  isDev: boolean;
+  env: RuntimeConfigEnv;
+}): boolean {
+  return !options.isDev || !options.env.apiUrl?.trim();
+}
+
 export function desktopConfigPath(): string {
   return join(app.getPath("home"), ".multica", "desktop.json");
 }

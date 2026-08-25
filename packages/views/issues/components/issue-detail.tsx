@@ -24,8 +24,6 @@ import {
   Milestone,
   MoreHorizontal,
   PanelRight,
-  Pin,
-  PinOff,
   Plus,
   SlidersHorizontal,
   Tag,
@@ -2378,7 +2376,7 @@ export function IssueDetail({ issueId, onDelete, onDone, defaultSidebarOpen = tr
           Hides itself when there are no runs to show. */}
       <ExecutionLogSection issueId={id} identifier={issue.identifier} />
 
-      {/* Details — creator and timestamps. Sits below the execution log
+      {/* Details — local timestamps. Sits below the execution log
           because it is the least-read block in the sidebar: the values
           never change once the issue exists, while the log above it is
           what people actually come here to check. */}
@@ -2392,10 +2390,6 @@ export function IssueDetail({ issueId, onDelete, onDone, defaultSidebarOpen = tr
           <ChevronRight className={`!size-3 shrink-0 stroke-[2.5] text-muted-foreground transition-transform ${detailsOpen ? "rotate-90" : ""}`} />
         </button>
         {detailsOpen && <div className="grid grid-cols-[auto_1fr] gap-x-2 gap-y-0.5 pl-2">
-          <PropRow label={t(($) => $.detail.prop_created_by)}>
-            <ActorAvatar actorType={issue.creator_type} actorId={issue.creator_id} size="sm" enableHoverCard />
-            <span className="cursor-pointer truncate">{getActorName(issue.creator_type, issue.creator_id)}</span>
-          </PropRow>
           <PropRow label={t(($) => $.detail.prop_created)}>
             <span className="text-muted-foreground">{shortDate(issue.created_at)}</span>
           </PropRow>
@@ -2622,21 +2616,6 @@ export function IssueDetail({ issueId, onDelete, onDone, defaultSidebarOpen = tr
                 <TooltipContent side="bottom">{t(($) => $.detail.archive_tooltip)}</TooltipContent>
               </Tooltip>
             )}
-            <Tooltip>
-              <TooltipTrigger
-                render={
-                  <Button
-                    variant="ghost"
-                    size="icon-sm"
-                    className={cn("text-muted-foreground", actions.isPinned && "text-foreground")}
-                    onClick={actions.togglePin}
-                  >
-                    {actions.isPinned ? <PinOff /> : <Pin />}
-                  </Button>
-                }
-              />
-              <TooltipContent side="bottom">{actions.isPinned ? t(($) => $.detail.unpin_tooltip) : t(($) => $.detail.pin_tooltip)}</TooltipContent>
-            </Tooltip>
             <IssueActionsDropdown
               issue={issue}
               align="end"

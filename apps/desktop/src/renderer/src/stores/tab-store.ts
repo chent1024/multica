@@ -319,6 +319,15 @@ export function resourceKeyForUrl(url: string): string {
   return splitTabUrl(url).pathname;
 }
 
+const LOCAL_TAB_ROUTE_SEGMENTS = new Set([
+  "agents",
+  "attachments",
+  "issues",
+  "projects",
+  "runtimes",
+  "settings",
+]);
+
 /**
  * Defensive: catch URLs that don't belong in the tab store, and normalize
  * the ones that do.
@@ -359,6 +368,9 @@ export function sanitizeTabPath(path: string): string | null {
   }
   if (segments.length === 1) {
     return `/${firstSegment}/issues${suffix}`;
+  }
+  if (!LOCAL_TAB_ROUTE_SEGMENTS.has(segments[1])) {
+    return null;
   }
   return path;
 }

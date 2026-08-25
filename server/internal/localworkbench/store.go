@@ -135,12 +135,73 @@ func Open(ctx context.Context, path string) (*Store, error) {
 		_ = db.Close()
 		return nil, fmt.Errorf("initializing sqlite schema: %w", err)
 	}
+	if err := migrateLocalSchema(ctx, db); err != nil {
+		_ = db.Close()
+		return nil, fmt.Errorf("upgrading sqlite schema: %w", err)
+	}
 	s := &Store{db: db}
 	if err := s.ensureDefaultWorkspace(ctx); err != nil {
 		_ = db.Close()
 		return nil, err
 	}
 	return s, nil
+}
+
+func migrateLocalSchema(ctx context.Context, db *sql.DB) error {
+	rows, err := db.QueryContext(ctx, `PRAGMA table_info(task_runs)`)
+	if err != nil {
+		return err
+	}
+	hasHandoffNote := false
+	for rows.Next() {
+		var cid, notNull, primaryKey int
+		var name, columnType string
+		var defaultValue any
+		if err := rows.Scan(&cid, &name, &columnType, &notNull, &defaultValue, &primaryKey); err != nil {
+			_ = rows.Close()
+			return err
+		}
+		if name == "handoff_note" {
+			hasHandoffNote = true
+		}
+	}
+	if err := rows.Close(); err != nil {
+		return err
+	}
+	tx, err := db.BeginTx(ctx, nil)
+	if err != nil {
+		return err
+	}
+	defer func() { _ = tx.Rollback() }()
+	if !hasHandoffNote {
+		if _, err := tx.ExecContext(ctx, `ALTER TABLE task_runs ADD COLUMN handoff_note TEXT`); err != nil {
+			return err
+		}
+	}
+	if _, err := tx.ExecContext(ctx, `INSERT OR IGNORE INTO schema_version(version, applied_at) VALUES (4, ?)`, now()); err != nil {
+		return err
+	}
+	if _, err := tx.ExecContext(ctx, `CREATE TABLE IF NOT EXISTS task_messages (
+		task_id TEXT NOT NULL,
+		issue_id TEXT NOT NULL,
+		seq INTEGER NOT NULL,
+		type TEXT NOT NULL,
+		tool TEXT,
+		content TEXT,
+		input TEXT,
+		output TEXT,
+		created_at TEXT NOT NULL,
+		PRIMARY KEY(task_id, seq)
+	)`); err != nil {
+		return err
+	}
+	if _, err := tx.ExecContext(ctx, `CREATE INDEX IF NOT EXISTS task_messages_issue_idx ON task_messages(issue_id, task_id, seq)`); err != nil {
+		return err
+	}
+	if _, err := tx.ExecContext(ctx, `INSERT OR IGNORE INTO schema_version(version, applied_at) VALUES (5, ?)`, now()); err != nil {
+		return err
+	}
+	return tx.Commit()
 }
 
 func (s *Store) Close() error { return s.db.Close() }
@@ -157,6 +218,9 @@ func nullable(v string) any {
 func decodeObject(raw string) map[string]any {
 	result := map[string]any{}
 	_ = json.Unmarshal([]byte(raw), &result)
+	if result == nil {
+		return map[string]any{}
+	}
 	return result
 }
 
@@ -437,16 +501,23 @@ func (s *Store) CreateIssue(ctx context.Context, workspaceID string, input Creat
 	if err := tx.QueryRowContext(ctx, "SELECT COALESCE(MAX(number), 0)+1 FROM issues WHERE workspace_id=?", workspaceID).Scan(&number); err != nil {
 		return Issue{}, err
 	}
+	var position float64
+	if err := tx.QueryRowContext(ctx, "SELECT COALESCE(MAX(position), -1)+1 FROM issues WHERE workspace_id=?", workspaceID).Scan(&position); err != nil {
+		return Issue{}, err
+	}
 	if input.Status == "" {
 		input.Status = "backlog"
 	}
 	if input.Priority == "" {
 		input.Priority = "none"
 	}
+	if input.Metadata == nil {
+		input.Metadata = map[string]any{}
+	}
 	metadata, _ := json.Marshal(input.Metadata)
 	stamp, id := now(), uuid.NewString()
-	_, err = tx.ExecContext(ctx, `INSERT INTO issues(id, workspace_id, number, title, description, status, priority, assignee_type, assignee_id, creator_type, creator_id, parent_issue_id, project_id, start_date, due_date, metadata, last_activity_at, created_at, updated_at)
-		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 'system', ?, ?, ?, ?, ?, ?, ?, ?, ?)`, id, workspaceID, number, input.Title, nullable(input.Description), input.Status, input.Priority, input.AssigneeType, input.AssigneeID, LocalActorID, input.ParentIssueID, input.ProjectID, input.StartDate, input.DueDate, string(metadata), stamp, stamp, stamp)
+	_, err = tx.ExecContext(ctx, `INSERT INTO issues(id, workspace_id, number, title, description, status, priority, assignee_type, assignee_id, creator_type, creator_id, parent_issue_id, project_id, position, start_date, due_date, metadata, last_activity_at, created_at, updated_at)
+		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 'system', ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`, id, workspaceID, number, input.Title, nullable(input.Description), input.Status, input.Priority, input.AssigneeType, input.AssigneeID, LocalActorID, input.ParentIssueID, input.ProjectID, position, input.StartDate, input.DueDate, string(metadata), stamp, stamp, stamp)
 	if err != nil {
 		return Issue{}, err
 	}
@@ -510,7 +581,7 @@ func (s *Store) DeleteIssue(ctx context.Context, workspaceID, id string) error {
 		return err
 	}
 	defer func() { _ = tx.Rollback() }()
-	for _, query := range []string{"DELETE FROM comments WHERE issue_id=?", "DELETE FROM activities WHERE issue_id=?", "DELETE FROM task_runs WHERE issue_id=?", "DELETE FROM issues WHERE id=?"} {
+	for _, query := range []string{"DELETE FROM comments WHERE issue_id=?", "DELETE FROM activities WHERE issue_id=?", "DELETE FROM task_messages WHERE issue_id=?", "DELETE FROM task_runs WHERE issue_id=?", "DELETE FROM issues WHERE id=?"} {
 		if _, err := tx.ExecContext(ctx, query, issue.ID); err != nil {
 			return err
 		}

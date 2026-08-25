@@ -1,5 +1,5 @@
 import { describe, it, expect, vi, beforeEach } from "vitest";
-import { renderHook, act, waitFor } from "@testing-library/react";
+import { renderHook, act } from "@testing-library/react";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { buildIssueStatusCatalog } from "@multica/core/issue-statuses";
 import type { Issue, IssueStatusEntry } from "@multica/core/types";
@@ -422,44 +422,11 @@ describe("useIssueActions", () => {
     expect(toast.success).toHaveBeenCalledTimes(1);
   });
 
-  it("togglePin calls createPin when not pinned and deletePin when pinned", async () => {
-    pinListRef.value = [];
-    const { result: r1 } = renderHook(() => useIssueActions(mockIssue), { wrapper });
-    await waitFor(() => {
-      expect(r1.current.isPinned).toBe(false);
-    });
-    act(() => {
-      r1.current.togglePin();
-    });
-    expect(mockCreatePinMutate).toHaveBeenCalledWith({
-      item_type: "issue",
-      item_id: "issue-1",
-    });
-    expect(mockDeletePinMutate).not.toHaveBeenCalled();
-
-    mockCreatePinMutate.mockReset();
-    mockDeletePinMutate.mockReset();
-    pinListRef.value = [{ item_type: "issue", item_id: "issue-1" }];
-    const { result: r2 } = renderHook(() => useIssueActions(mockIssue), { wrapper });
-    await waitFor(() => {
-      expect(r2.current.isPinned).toBe(true);
-    });
-    act(() => {
-      r2.current.togglePin();
-    });
-    expect(mockDeletePinMutate).toHaveBeenCalledWith({
-      itemType: "issue",
-      itemId: "issue-1",
-    });
-    expect(mockCreatePinMutate).not.toHaveBeenCalled();
-  });
-
   it("is a safe no-op when issue is null", () => {
     const { result } = renderHook(() => useIssueActions(null), { wrapper });
 
     act(() => {
       result.current.updateField({ status: "done" });
-      result.current.togglePin();
       result.current.openSetParent();
     });
 

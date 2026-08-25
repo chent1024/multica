@@ -60,7 +60,6 @@ import { ActorAvatar } from "../common/actor-avatar";
 import { ClearablePillButton, PillButton } from "../common/pill-button";
 import { ProjectPicker } from "../projects/components/project-picker";
 import { DueDatePicker, PriorityIcon, PriorityPicker } from "../issues/components";
-import { canAssignAgent } from "../issues/components/pickers/assignee-picker";
 import { isAgentRuntimeBound } from "@multica/core/agents";
 import {
   PropertyPicker,
@@ -68,8 +67,6 @@ import {
   PickerSection,
   PickerEmpty,
 } from "../issues/components/pickers/property-picker";
-import { useAuthStore } from "@multica/core/auth";
-import { memberListOptions } from "@multica/core/workspace/queries";
 import {
   ContentEditor,
   type ContentEditorRef,
@@ -121,8 +118,6 @@ export function AgentCreatePanel({
   const workspaceName = useCurrentWorkspace()?.name;
   const workspacePaths = useWorkspacePaths();
   const wsId = useWorkspaceId();
-  const userId = useAuthStore((s) => s.user?.id);
-  const { data: members = [] } = useQuery(memberListOptions(wsId));
   const { data: agents = [] } = useQuery(agentListOptions(wsId));
   const { data: squads = [] } = useQuery(squadListOptions(wsId));
   // Pull `isSuccess` so the stale-id sweep below can distinguish "still
@@ -132,24 +127,16 @@ export function AgentCreatePanel({
     projectListOptions(wsId),
   );
 
-  const memberRole = useMemo(
-    () => members.find((m) => m.user_id === userId)?.role,
-    [members, userId],
-  );
-
-  // Visible = not archived AND assignable by this user. Squads inherit
-  // their leader agent's reachability: the backend always routes a squad
-  // pick to the leader, so hiding squads whose leader isn't visible keeps
-  // the picker honest with what the server would actually accept.
+  // Local mode has no user identity or member permissions. An execution
+  // target is available when it exists locally and has a bound runtime.
   const visibleAgents = useMemo(
     () =>
       agents.filter(
         (a) =>
           !a.archived_at &&
-          isAgentRuntimeBound(a) &&
-          canAssignAgent(a, userId, memberRole),
+          isAgentRuntimeBound(a),
       ),
-    [agents, userId, memberRole],
+    [agents],
   );
   const visibleAgentIds = useMemo(
     () => new Set(visibleAgents.map((a) => a.id)),

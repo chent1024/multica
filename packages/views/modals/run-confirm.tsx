@@ -1,7 +1,6 @@
 "use client";
 
-import { useMemo, useState, type ReactNode } from "react";
-import { useQuery } from "@tanstack/react-query";
+import { useState, type ReactNode } from "react";
 import { toast } from "sonner";
 import {
   Dialog,
@@ -19,8 +18,6 @@ import { useUpdateIssue, useBatchUpdateIssues } from "@multica/core/issues/mutat
 import { errorCode } from "@multica/core/api";
 import { useActorName } from "@multica/core/workspace/hooks";
 import { useWorkspaceId } from "@multica/core/hooks";
-import { agentListOptions, squadListOptions } from "@multica/core/workspace/queries";
-import { runtimeListOptions, readRuntimeCliVersion, handoffSupported } from "@multica/core/runtimes";
 import { useShortcut, shortcutMatchesEvent, isPlainShortcut } from "@multica/core/shortcuts";
 import { isImeComposing } from "@multica/core/utils";
 import { ShortcutKeycaps } from "../common/shortcut-keycaps";
@@ -117,43 +114,10 @@ export function RunConfirmModal({
   const updateIssue = useUpdateIssue();
   const batchUpdate = useBatchUpdateIssues();
 
-  // Handoff-support verdict, resolved entirely from warm client caches
-  // (useWorkspacePresencePrefetch keeps agents / squads / runtimes hot), so the
-  // note box settles on the first frame with no round-trip — the same shape as
-  // the quick-create version gate. An agent assignee targets its own runtime; a
-  // squad targets its leader's, which the squad list gives us directly, so both
-  // are knowable locally. `null` means "cannot tell" (assignee not in cache
-  // yet, or no runtime bound) and leaves the box enabled: the note is a soft
-  // gate, and a spurious warning is worse than a note an old daemon drops.
   const wsId = useWorkspaceId();
   // Built-ins resolve through i18n, custom statuses through the catalog, so the
   // promotion headline reads the same way the picker the user just used does.
   const statusLabel = useStatusLabel(wsId);
-  const { data: agents = [] } = useQuery({ ...agentListOptions(wsId), enabled: !!wsId });
-  const { data: runtimes = [] } = useQuery({ ...runtimeListOptions(wsId), enabled: !!wsId });
-  const { data: squads = [] } = useQuery({ ...squadListOptions(wsId), enabled: !!wsId });
-  const localHandoff = useMemo<boolean | null>(() => {
-    if (!d.assigneeId) return null;
-    let agentId: string | undefined;
-    if (d.assigneeType === "agent") {
-      agentId = d.assigneeId;
-    } else if (d.assigneeType === "squad") {
-      // A squad run is executed by its leader, so the leader's runtime is the
-      // one that has to render the note.
-      agentId = squads.find((s) => s.id === d.assigneeId)?.leader_id;
-    }
-    if (!agentId) return null;
-    const agent = agents.find((a) => a.id === agentId);
-    if (!agent?.runtime_id) return null;
-    const runtime = runtimes.find((r) => r.id === agent.runtime_id);
-    if (!runtime) return null;
-    return handoffSupported(readRuntimeCliVersion(runtime.metadata));
-  }, [d.assigneeType, d.assigneeId, agents, runtimes, squads]);
-
-  // Soft gate: an old runtime can't render the note. Disable the box but let
-  // the assignment proceed (MUL-3375 §6.3).
-  const noteDisabled = localHandoff === false;
-
   // A promotion carries the status and nothing else: the owner is already on
   // the issue, and re-sending the same assignee would turn a status write into
   // an assignee write on the server's side of the trigger predicate.
@@ -180,7 +144,7 @@ export function RunConfirmModal({
     setPendingAction(suppressRun ? "suppress" : "go");
     const payload = applyTo({
       ...(suppressRun ? { suppress_run: true } : {}),
-      ...(!suppressRun && !noteDisabled && note.trim() ? { handoff_note: note.trim() } : {}),
+      ...(!suppressRun && note.trim() ? { handoff_note: note.trim() } : {}),
     });
     try {
       // Completion is silent, exactly as before: the assignee and any run show
@@ -277,14 +241,11 @@ export function RunConfirmModal({
             id="handoff-note"
             value={note}
             maxLength={MAX_HANDOFF_NOTE}
-            disabled={submitting || noteDisabled}
+            disabled={submitting}
             placeholder={t(($) => $.run_confirm.note_placeholder)}
             onChange={(e) => setNote(e.target.value)}
             rows={3}
           />
-          {noteDisabled ? (
-            <p className="text-caption text-muted-foreground">{t(($) => $.run_confirm.note_unsupported)}</p>
-          ) : null}
         </div>
 
         {/* The only spinner left is on the button the user just pressed, and it

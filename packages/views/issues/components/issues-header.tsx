@@ -296,6 +296,7 @@ function useIssueCounts(
 // ---------------------------------------------------------------------------
 
 const SCOPE_VALUES: IssuesScope[] = ["all", "members", "agents"];
+const LOCAL_SCOPE_VALUES: IssuesScope[] = ["all", "agents"];
 
 // ---------------------------------------------------------------------------
 // Actor sub-menu content (shared between Assignee and Creator)
@@ -941,6 +942,7 @@ export function IssuesHeader({
   tableFacetCounts,
   onTableFacetChange,
   saveViewScope = { kind: "workspace" },
+  localMode = false,
 }: {
   scopedIssues: Issue[];
   /** See IssueSurfaceController.workingAgents — the surface-scoped projection
@@ -958,6 +960,7 @@ export function IssuesHeader({
    *  default; the project-detail fallback passes its project scope; `null`
    *  hides the save affordance entirely. */
   saveViewScope?: SaveViewScope | null;
+  localMode?: boolean;
 }) {
   const { t } = useT("issues");
   const [saveViewOpen, setSaveViewOpen] = useState(false);
@@ -996,7 +999,9 @@ export function IssuesHeader({
     saveViewScope?.kind === "project"
       ? `project:${saveViewScope.projectId}`
       : "issues";
-  const scope = useIssuesScope(scopePage);
+  const persistedScope = useIssuesScope(scopePage);
+  const scope = localMode && persistedScope === "members" ? "all" : persistedScope;
+  const scopeValues = localMode ? LOCAL_SCOPE_VALUES : SCOPE_VALUES;
   const setScopeForPage = useIssuesScopeStore((s) => s.setScope);
   const setScope = useCallback(
     (next: IssuesScope) => setScopeForPage(scopePage, next),
@@ -1059,7 +1064,7 @@ export function IssuesHeader({
             <ViewBar
               wsId={headerWsId}
               scope={viewListScope}
-              builtins={SCOPE_VALUES.map((s) => ({
+              builtins={scopeValues.map((s) => ({
                 key: s,
                 label: t(($) => $.scope[SCOPE_LABEL_KEY[s]]),
                 description: t(($) => $.scope[SCOPE_DESC_KEY[s]]),
@@ -1102,7 +1107,7 @@ export function IssuesHeader({
           />
           <DropdownMenuContent align="start" className="w-auto">
             <DropdownMenuRadioGroup value={scope} onValueChange={(value) => setScope(value as IssuesScope)}>
-              {SCOPE_VALUES.map((s) => (
+              {scopeValues.map((s) => (
                 <DropdownMenuRadioItem key={s} value={s}>
                   {t(($) => $.scope[SCOPE_LABEL_KEY[s]])}
                 </DropdownMenuRadioItem>

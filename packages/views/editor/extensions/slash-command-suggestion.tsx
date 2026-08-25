@@ -11,13 +11,11 @@ import {
 import type { QueryClient } from "@tanstack/react-query";
 import type { SuggestionOptions } from "@tiptap/suggestion";
 import { PluginKey } from "@tiptap/pm/state";
-import { useAuthStore } from "@multica/core/auth";
 import { useChatStore } from "@multica/core/chat";
 import { getCurrentWsId } from "@multica/core/platform";
-import { canAssignAgentToIssue } from "@multica/core/permissions";
 import { isImeComposing } from "@multica/core/utils";
 import { workspaceKeys } from "@multica/core/workspace/queries";
-import type { Agent, MemberWithUser } from "@multica/core/types";
+import type { Agent } from "@multica/core/types";
 import { useT } from "../../i18n";
 import {
   createSuggestionPopupRender,
@@ -197,18 +195,12 @@ function buildItems(qc: QueryClient, query: string): SlashCommandItem[] {
   if (!wsId) return [];
 
   const agents: Agent[] = qc.getQueryData(workspaceKeys.agents(wsId)) ?? [];
-  const members: MemberWithUser[] =
-    qc.getQueryData(workspaceKeys.members(wsId)) ?? [];
   // Tiptap calls suggestion items outside React render, so direct store reads
   // are intentional here.
   const { selectedAgentId } = useChatStore.getState();
-  const userId = useAuthStore.getState().user?.id ?? null;
-  const memberRole = members.find((m) => m.user_id === userId)?.role ?? null;
 
   const availableAgents = agents.filter(
-    (a) =>
-      !a.archived_at &&
-      canAssignAgentToIssue(a, { userId, role: memberRole }).allowed,
+    (a) => !a.archived_at,
   );
   const activeAgent =
     availableAgents.find((a) => a.id === selectedAgentId) ??
