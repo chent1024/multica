@@ -1,6 +1,7 @@
 import type { Issue, IssueMetadata, IssueStatus, IssueStatusCategory, IssuePriority, IssueAssigneeType } from "./issue";
 import type { MemberRole } from "./workspace";
 import type { Project } from "./project";
+import type { AgentTask } from "./agent";
 
 // Issue API
 export interface CreateIssueRequest {
@@ -46,6 +47,7 @@ export interface IssueHandoff extends Omit<IssueHandoffInput, "source_run_id"> {
   parent_session_id: string;
   source_stage_id: string;
   source_run_id: string | null;
+  source_stage_kind?: IssueSessionStageKind;
   created_at: string;
 }
 
@@ -71,6 +73,12 @@ export interface IssueSession {
   updated_at: string;
   stages: IssueSessionStage[];
   handoff: IssueHandoff | null;
+}
+
+export interface IssueSessionContinuation {
+  outcome: "active" | "queued";
+  issue: Issue;
+  task: AgentTask;
 }
 
 export interface UpdateIssueRequest {

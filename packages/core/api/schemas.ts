@@ -1655,6 +1655,7 @@ export const AgentTaskSchema = z.object({
 const IssueHandoffSchema = z.object({
 	id: z.string(), child_issue_id: z.string(), parent_issue_id: z.string(),
 	parent_session_id: z.string(), source_stage_id: z.string(), source_run_id: z.string().nullable().optional(),
+	source_stage_kind: z.enum(["analysis", "implementation", "review", "test", "commit", "push", "release"]).optional(),
 	objective: z.string(), confirmed_facts: z.array(z.string()), decisions: z.array(z.string()),
 	constraints: z.array(z.string()), acceptance_criteria: z.array(z.string()), references: z.array(z.string()),
 	open_questions: z.array(z.string()), created_at: z.string(),
@@ -1669,6 +1670,12 @@ export const IssueSessionSchema = z.object({
 		status: z.enum(["active", "completed"]), position: z.number(), migrated: z.boolean(), started_at: z.string(), completed_at: z.string().nullable(),
 	})),
 	handoff: IssueHandoffSchema.nullable(),
+});
+
+export const IssueSessionContinuationSchema = z.object({
+	outcome: z.enum(["active", "queued"]),
+	issue: IssueSchema,
+	task: AgentTaskSchema,
 });
 
 export const AgentTaskListSchema = z.array(AgentTaskSchema);

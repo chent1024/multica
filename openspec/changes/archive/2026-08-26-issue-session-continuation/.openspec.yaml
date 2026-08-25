@@ -1,0 +1,5 @@
+schema: spec-driven
+created: 2026-08-26
+goal: Users can continue one durable Issue conversation, understand current work
+  without status contradictions, and inspect real stage outcomes without an
+  operations dashboard.

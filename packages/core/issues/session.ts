@@ -1,6 +1,7 @@
 import { queryOptions, useMutation, useQueryClient } from "@tanstack/react-query";
 import { api } from "../api";
 import type { IssueSession, IssueSessionStageKind } from "../types";
+import { issueKeys } from "./queries";
 
 export const issueSessionKeys = {
   all: () => ["issues", "session"] as const,
@@ -58,5 +59,22 @@ export function useActivateIssueSessionStage(issueId: string) {
     },
     onSuccess: (session) => queryClient.setQueryData(queryKey, session),
     onSettled: () => queryClient.invalidateQueries({ queryKey }),
+  });
+}
+
+export function useContinueIssueSession(workspaceId: string, issueId: string) {
+  const queryClient = useQueryClient();
+  return useMutation({
+    mutationFn: () => api.continueIssueSession(issueId),
+    onSuccess: ({ issue, task }) => {
+      queryClient.setQueryData(issueKeys.detail(workspaceId, issue.id), issue);
+      queryClient.setQueryData(issueKeys.identifier(workspaceId, issue.identifier), issue);
+      queryClient.setQueryData(issueKeys.tasks(issueId), (previous: typeof task[] | undefined) => {
+        if (!previous) return [task];
+        return [task, ...previous.filter((entry) => entry.id !== task.id)];
+      });
+      void queryClient.invalidateQueries({ queryKey: issueSessionKeys.detail(issueId) });
+      void queryClient.invalidateQueries({ queryKey: issueKeys.list(workspaceId) });
+    },
   });
 }

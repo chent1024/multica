@@ -31,6 +31,7 @@ import type {
   UpdateAgentEnvRequest,
   AgentTask,
 	IssueSession,
+	IssueSessionContinuation,
 	IssueSessionStageKind,
   AgentActivityBucket,
   AgentRunCount,
@@ -237,6 +238,7 @@ import { parseWithFallback } from "./schema";
 import {
   AgentTaskListSchema,
 	IssueSessionSchema,
+	IssueSessionContinuationSchema,
   AttachmentResponseSchema,
   CancelTaskResponseSchema,
   ChatDraftRestoresResponseSchema,
@@ -1037,6 +1039,13 @@ export class ApiClient {
 			method: "POST", body: JSON.stringify({ kind }),
 		});
 		return IssueSessionSchema.parse(raw) as IssueSession;
+	}
+
+	async continueIssueSession(issueId: string): Promise<IssueSessionContinuation> {
+		const raw = await this.fetch<unknown>(`/api/issues/${encodeURIComponent(issueId)}/session/continue`, {
+			method: "POST",
+		});
+		return IssueSessionContinuationSchema.parse(raw) as IssueSessionContinuation;
 	}
 
   async createIssue(data: CreateIssueRequest): Promise<Issue> {

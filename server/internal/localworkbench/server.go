@@ -135,6 +135,7 @@ func (s *Server) Router() http.Handler {
 		api.Post("/issues/batch-delete", s.batchDeleteIssues)
 		api.Get("/issues/{id}", s.getIssue)
 		api.Get("/issues/{id}/session", s.getIssueSession)
+		api.Post("/issues/{id}/session/continue", s.continueIssueSession)
 		api.Post("/issues/{id}/session/stages", s.activateIssueSessionStage)
 		api.Put("/issues/{id}", s.updateIssue)
 		api.Post("/issues/{id}/move", s.moveIssue)
@@ -1050,6 +1051,35 @@ func (s *Server) activateIssueSessionStage(w http.ResponseWriter, r *http.Reques
 	writeJSON(w, http.StatusOK, session)
 }
 
+func (s *Server) continueIssueSession(w http.ResponseWriter, r *http.Request) {
+	ws, err := s.workspaceFor(r)
+	if err != nil {
+		s.respondStoreError(w, err)
+		return
+	}
+	issue, taskID, outcome, err := s.store.ContinueIssueSession(r.Context(), ws.ID, chi.URLParam(r, "id"))
+	if err != nil {
+		if errors.Is(err, ErrIssueSessionNotRunnable) || errors.Is(err, ErrIssueSessionRuntimeUnavailable) {
+			writeError(w, http.StatusConflict, err)
+			return
+		}
+		s.respondStoreError(w, err)
+		return
+	}
+	task, err := s.taskRun(r.Context(), ws.ID, issue.ID, taskID)
+	if err != nil {
+		s.respondStoreError(w, err)
+		return
+	}
+	status := http.StatusOK
+	if outcome == "queued" {
+		status = http.StatusCreated
+		s.hub.broadcast("issue:updated", map[string]any{"issue": issue})
+		s.hub.broadcast("task:created", map[string]any{"task": task})
+	}
+	writeJSON(w, status, map[string]any{"outcome": outcome, "issue": issue, "task": task})
+}
+
 func (s *Server) quickCreateIssue(w http.ResponseWriter, r *http.Request) {
 	ws, err := s.workspaceFor(r)
 	if err != nil {
@@ -1578,12 +1608,13 @@ func (s *Server) rerunIssue(w http.ResponseWriter, r *http.Request) {
 
 func (s *Server) taskRun(ctx context.Context, workspaceID, issueID, taskID string) (map[string]any, error) {
 	var id, status, createdAt string
-	var runtimeID, handoffNote, threadID, summary, errorText, startedAt, completedAt sql.NullString
-	err := s.store.db.QueryRowContext(ctx, `SELECT tr.id, tr.status, tr.runtime, tr.handoff_note, tr.thread_id, tr.summary, tr.error, tr.started_at, tr.completed_at, tr.created_at FROM task_runs tr JOIN issues i ON i.id=tr.issue_id WHERE tr.id=? AND tr.issue_id=? AND i.workspace_id=?`, taskID, issueID, workspaceID).Scan(&id, &status, &runtimeID, &handoffNote, &threadID, &summary, &errorText, &startedAt, &completedAt, &createdAt)
+	var runtimeID, handoffNote, threadID, summary, errorText, startedAt, completedAt, sessionID, stageID, stageKind, priorTaskID, continuityReason sql.NullString
+	var continuityState string
+	err := s.store.db.QueryRowContext(ctx, `SELECT tr.id, tr.status, tr.runtime, tr.handoff_note, tr.thread_id, tr.summary, tr.error, tr.started_at, tr.completed_at, tr.created_at, tr.session_id, tr.stage_id, st.kind, tr.prior_task_id, tr.continuity_state, tr.continuity_reason FROM task_runs tr JOIN issues i ON i.id=tr.issue_id LEFT JOIN issue_session_stages st ON st.id=tr.stage_id WHERE tr.id=? AND tr.issue_id=? AND i.workspace_id=?`, taskID, issueID, workspaceID).Scan(&id, &status, &runtimeID, &handoffNote, &threadID, &summary, &errorText, &startedAt, &completedAt, &createdAt, &sessionID, &stageID, &stageKind, &priorTaskID, &continuityState, &continuityReason)
 	if err != nil {
 		return nil, err
 	}
-	return map[string]any{"id": id, "agent_id": LocalAgentID, "runtime_id": nullableString(runtimeID), "issue_id": issueID, "status": status, "priority": 0, "handoff_note": nullableString(handoffNote), "started_at": stringPtr(startedAt), "completed_at": stringPtr(completedAt), "result": map[string]any{"thread_id": nullableString(threadID), "summary": nullableString(summary)}, "error": stringPtr(errorText), "created_at": createdAt}, nil
+	return map[string]any{"id": id, "agent_id": LocalAgentID, "runtime_id": nullableString(runtimeID), "issue_id": issueID, "status": status, "priority": 0, "handoff_note": nullableString(handoffNote), "started_at": stringPtr(startedAt), "completed_at": stringPtr(completedAt), "result": map[string]any{"thread_id": nullableString(threadID), "summary": nullableString(summary)}, "error": stringPtr(errorText), "created_at": createdAt, "session_id": nullableString(sessionID), "stage_id": nullableString(stageID), "stage_kind": nullableString(stageKind), "prior_task_id": nullableString(priorTaskID), "continuity_state": continuityState, "continuity_reason": nullableString(continuityReason)}, nil
 }
 
 func nullableString(v sql.NullString) string {

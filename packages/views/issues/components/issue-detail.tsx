@@ -2924,7 +2924,7 @@ export function IssueDetail({ issueId, onDelete, onDone, defaultSidebarOpen = tr
             {descDragOver && <FileDropOverlay />}
           </div>
 
-          <IssueSessionWorkspace issueId={id} />
+          <IssueSessionWorkspace issue={issue} timeline={timeline} />
 
           {/* Sub-issues — Linear-style */}
           {childIssues.length === 0 && (

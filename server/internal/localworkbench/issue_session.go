@@ -26,6 +26,11 @@ var sessionStageKinds = map[string]struct{}{
 
 var ErrInvalidIssueHandoff = errors.New("invalid issue handoff")
 
+var (
+	ErrIssueSessionNotRunnable        = errors.New("issue session is not runnable")
+	ErrIssueSessionRuntimeUnavailable = errors.New("local Codex runtime is not online")
+)
+
 func isSessionStageKind(kind string) bool {
 	_, ok := sessionStageKinds[kind]
 	return ok
@@ -59,6 +64,7 @@ type IssueHandoff struct {
 	ParentIssueID      string   `json:"parent_issue_id"`
 	ParentSessionID    string   `json:"parent_session_id"`
 	SourceStageID      string   `json:"source_stage_id"`
+	SourceStageKind    string   `json:"source_stage_kind"`
 	SourceRunID        *string  `json:"source_run_id"`
 	Objective          string   `json:"objective"`
 	ConfirmedFacts     []string `json:"confirmed_facts"`
@@ -68,6 +74,104 @@ type IssueHandoff struct {
 	References         []string `json:"references"`
 	OpenQuestions      []string `json:"open_questions"`
 	CreatedAt          string   `json:"created_at"`
+}
+
+// ContinueIssueSession returns the active run when one already exists or
+// atomically aligns an unassigned parked issue and queues one new run against
+// the current session stage. It deliberately never activates a stage.
+func (s *Store) ContinueIssueSession(ctx context.Context, workspaceID, issueID string) (Issue, string, string, error) {
+	tx, err := s.db.BeginTx(ctx, nil)
+	if err != nil {
+		return Issue{}, "", "", fmt.Errorf("beginning issue session continuation: %w", err)
+	}
+	defer func() { _ = tx.Rollback() }()
+
+	var status, statusCategory string
+	var assigneeType, assigneeID sql.NullString
+	err = tx.QueryRowContext(ctx, `SELECT i.status, COALESCE(st.category, i.status), i.assignee_type, i.assignee_id
+		FROM issues i LEFT JOIN issue_statuses st ON st.workspace_id=i.workspace_id AND st.key=i.status
+		WHERE i.workspace_id=? AND i.id=?`, workspaceID, issueID).Scan(&status, &statusCategory, &assigneeType, &assigneeID)
+	if err != nil {
+		return Issue{}, "", "", fmt.Errorf("reading issue for session continuation: %w", err)
+	}
+	if statusCategory == "done" || statusCategory == "cancelled" {
+		return Issue{}, "", "", fmt.Errorf("%w: finished issue", ErrIssueSessionNotRunnable)
+	}
+	if assigneeType.Valid || assigneeID.Valid {
+		if !assigneeType.Valid || !assigneeID.Valid || assigneeType.String != "agent" || assigneeID.String != LocalAgentID {
+			return Issue{}, "", "", fmt.Errorf("%w: issue is assigned to another actor", ErrIssueSessionNotRunnable)
+		}
+	} else if statusCategory != "backlog" {
+		return Issue{}, "", "", fmt.Errorf("%w: only an unassigned backlog issue can be claimed", ErrIssueSessionNotRunnable)
+	}
+
+	var activeTaskID string
+	err = tx.QueryRowContext(ctx, `SELECT id FROM task_runs WHERE issue_id=? AND status IN ('queued','dispatched','waiting_local_directory','running') ORDER BY created_at DESC LIMIT 1`, issueID).Scan(&activeTaskID)
+	if err == nil {
+		if err := tx.Commit(); err != nil {
+			return Issue{}, "", "", fmt.Errorf("committing active issue session continuation: %w", err)
+		}
+		issue, err := s.GetIssue(ctx, workspaceID, issueID)
+		if err != nil {
+			return Issue{}, "", "", fmt.Errorf("reading continued issue: %w", err)
+		}
+		return issue, activeTaskID, "active", nil
+	}
+	if !errors.Is(err, sql.ErrNoRows) {
+		return Issue{}, "", "", fmt.Errorf("checking active issue run: %w", err)
+	}
+
+	var runtimeID string
+	if err := tx.QueryRowContext(ctx, `SELECT id FROM runtimes WHERE workspace_id=? AND provider='codex' AND status='online' ORDER BY updated_at DESC LIMIT 1`, workspaceID).Scan(&runtimeID); err != nil {
+		if errors.Is(err, sql.ErrNoRows) {
+			return Issue{}, "", "", ErrIssueSessionRuntimeUnavailable
+		}
+		return Issue{}, "", "", fmt.Errorf("reading Codex runtime for session continuation: %w", err)
+	}
+
+	stamp := now()
+	if !assigneeType.Valid && !assigneeID.Valid {
+		status = "in_progress"
+		if _, err := tx.ExecContext(ctx, `UPDATE issues SET status=?, assignee_type='agent', assignee_id=?, revision=revision+1, updated_at=?, last_activity_at=? WHERE workspace_id=? AND id=?`, status, LocalAgentID, stamp, stamp, workspaceID, issueID); err != nil {
+			return Issue{}, "", "", fmt.Errorf("aligning parked issue for session continuation: %w", err)
+		}
+	}
+
+	var sessionID, stageID string
+	if err := tx.QueryRowContext(ctx, `SELECT s.id, s.active_stage_id FROM issue_sessions s JOIN issue_session_stages st ON st.id=s.active_stage_id WHERE s.workspace_id=? AND s.issue_id=?`, workspaceID, issueID).Scan(&sessionID, &stageID); err != nil {
+		return Issue{}, "", "", fmt.Errorf("reading issue session for continuation: %w", err)
+	}
+	var historyCount int
+	if err := tx.QueryRowContext(ctx, `SELECT COUNT(*) FROM task_runs WHERE issue_id=?`, issueID).Scan(&historyCount); err != nil {
+		return Issue{}, "", "", fmt.Errorf("counting prior issue runs: %w", err)
+	}
+	var priorTaskID sql.NullString
+	err = tx.QueryRowContext(ctx, `SELECT id FROM task_runs WHERE issue_id=? AND NULLIF(TRIM(thread_id),'') IS NOT NULL AND NULLIF(TRIM(work_dir),'') IS NOT NULL ORDER BY created_at DESC LIMIT 1`, issueID).Scan(&priorTaskID)
+	if err != nil && !errors.Is(err, sql.ErrNoRows) {
+		return Issue{}, "", "", fmt.Errorf("reading prior issue continuation pointer: %w", err)
+	}
+	continuityState, continuityReason := "fresh", ""
+	if priorTaskID.Valid {
+		continuityState = "pending"
+	} else if historyCount > 0 {
+		continuityState = "gap"
+		continuityReason = "missing_resume_pointer"
+	}
+	taskID := uuid.NewString()
+	if _, err := tx.ExecContext(ctx, `INSERT INTO task_runs(id, issue_id, status, runtime, session_id, stage_id, prior_task_id, continuity_state, continuity_reason, created_at, updated_at) VALUES (?, ?, 'queued', ?, ?, ?, ?, ?, ?, ?, ?)`, taskID, issueID, runtimeID, sessionID, stageID, nullable(priorTaskID.String), continuityState, nullable(continuityReason), stamp, stamp); err != nil {
+		return Issue{}, "", "", fmt.Errorf("queueing issue session run: %w", err)
+	}
+	if _, err := tx.ExecContext(ctx, `UPDATE issue_sessions SET continuity_state=?, continuity_reason=?, updated_at=? WHERE id=?`, continuityState, nullable(continuityReason), stamp, sessionID); err != nil {
+		return Issue{}, "", "", fmt.Errorf("updating issue session continuity: %w", err)
+	}
+	if err := tx.Commit(); err != nil {
+		return Issue{}, "", "", fmt.Errorf("committing issue session continuation: %w", err)
+	}
+	issue, err := s.GetIssue(ctx, workspaceID, issueID)
+	if err != nil {
+		return Issue{}, "", "", fmt.Errorf("reading continued issue: %w", err)
+	}
+	return issue, taskID, "queued", nil
 }
 
 type IssueSession struct {
@@ -256,7 +360,7 @@ func (s *Store) getIssueHandoff(ctx context.Context, childIssueID string) (Issue
 	var handoff IssueHandoff
 	var sourceRunID sql.NullString
 	var facts, decisions, constraints, criteria, references, questions string
-	err := s.db.QueryRowContext(ctx, `SELECT id, child_issue_id, parent_issue_id, parent_session_id, source_stage_id, source_run_id, objective, confirmed_facts, decisions, constraints, acceptance_criteria, references_json, open_questions, created_at FROM issue_handoffs WHERE child_issue_id=?`, childIssueID).Scan(&handoff.ID, &handoff.ChildIssueID, &handoff.ParentIssueID, &handoff.ParentSessionID, &handoff.SourceStageID, &sourceRunID, &handoff.Objective, &facts, &decisions, &constraints, &criteria, &references, &questions, &handoff.CreatedAt)
+	err := s.db.QueryRowContext(ctx, `SELECT h.id, h.child_issue_id, h.parent_issue_id, h.parent_session_id, h.source_stage_id, st.kind, h.source_run_id, h.objective, h.confirmed_facts, h.decisions, h.constraints, h.acceptance_criteria, h.references_json, h.open_questions, h.created_at FROM issue_handoffs h JOIN issue_session_stages st ON st.id=h.source_stage_id WHERE h.child_issue_id=?`, childIssueID).Scan(&handoff.ID, &handoff.ChildIssueID, &handoff.ParentIssueID, &handoff.ParentSessionID, &handoff.SourceStageID, &handoff.SourceStageKind, &sourceRunID, &handoff.Objective, &facts, &decisions, &constraints, &criteria, &references, &questions, &handoff.CreatedAt)
 	if err != nil {
 		return IssueHandoff{}, err
 	}

@@ -131,6 +131,23 @@ export function TranscriptButton({
     [liveCacheMode, providedItems, loadedItems, setOpen, task.id],
   );
 
+  // Product surfaces may own the trigger while this component owns the
+  // transcript dialog. In that controlled mode there is no internal button
+  // click to start the terminal-task lazy load, so opening the dialog is the
+  // fetch signal. Live tasks remain on the shared cache path below.
+  useEffect(() => {
+    if (controlledOpen === undefined || !open || liveCacheMode || liveSession || providedItems !== undefined || loadedItems !== null || loading) return;
+    setLoading(true);
+    api
+      .listTaskMessages(task.id)
+      .then((messages) => setLoadedItems(buildTimeline(messages)))
+      .catch((error) => {
+        console.error(error);
+        setLoadedItems([]);
+      })
+      .finally(() => setLoading(false));
+  }, [controlledOpen, liveCacheMode, liveSession, loadedItems, loading, open, providedItems, task.id]);
+
   useEffect(() => {
     if (!open) return;
 

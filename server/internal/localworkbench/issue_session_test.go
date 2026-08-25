@@ -5,6 +5,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"path/filepath"
+	"sync"
 	"testing"
 )
 
@@ -50,7 +51,7 @@ func TestIssueSessionStageAndChildHandoff(t *testing.T) {
 	}, http.StatusCreated, &child)
 	var childSession IssueSession
 	requestJSON(t, server.URL, http.MethodGet, "/api/issues/"+child.ID+"/session", nil, http.StatusOK, &childSession)
-	if childSession.Handoff == nil || childSession.Handoff.ParentIssueID != parent.ID || childSession.Handoff.SourceStageID != implementation.ActiveStageID {
+	if childSession.Handoff == nil || childSession.Handoff.ParentIssueID != parent.ID || childSession.Handoff.SourceStageID != implementation.ActiveStageID || childSession.Handoff.SourceStageKind != "analysis" {
 		t.Fatalf("child handoff = %#v", childSession.Handoff)
 	}
 
@@ -184,8 +185,190 @@ func TestHandoffUsesTheSourceRunsExactStage(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if childSession.Handoff == nil || childSession.Handoff.SourceStageID != initial.ActiveStageID {
+	if childSession.Handoff == nil || childSession.Handoff.SourceStageID != initial.ActiveStageID || childSession.Handoff.SourceStageKind != "analysis" {
 		t.Fatalf("handoff source stage = %#v, want %s", childSession.Handoff, initial.ActiveStageID)
+	}
+}
+
+func TestIssueSessionContinuationCommand(t *testing.T) {
+	app, err := New(t.Context(), filepath.Join(t.TempDir(), "multica.db"), nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer app.Close()
+	server := httptest.NewServer(app.Router())
+	defer server.Close()
+	workspaces, err := app.store.ListWorkspaces(t.Context())
+	if err != nil {
+		t.Fatal(err)
+	}
+	ws := workspaces[0]
+	stamp := now()
+	if _, err := app.store.db.ExecContext(t.Context(), `INSERT INTO runtimes(id, workspace_id, daemon_id, name, provider, status, created_at, updated_at) VALUES ('runtime-continue', ?, 'daemon-continue', 'Codex', 'codex', 'online', ?, ?)`, ws.ID, stamp, stamp); err != nil {
+		t.Fatal(err)
+	}
+
+	var issue Issue
+	requestJSON(t, server.URL, http.MethodPost, "/api/issues", map[string]any{"title": "Continue me"}, http.StatusCreated, &issue)
+	var sessionBefore IssueSession
+	requestJSON(t, server.URL, http.MethodGet, "/api/issues/"+issue.ID+"/session", nil, http.StatusOK, &sessionBefore)
+	var first struct {
+		Outcome string         `json:"outcome"`
+		Issue   Issue          `json:"issue"`
+		Task    map[string]any `json:"task"`
+	}
+	requestJSON(t, server.URL, http.MethodPost, "/api/issues/"+issue.ID+"/session/continue", map[string]any{}, http.StatusCreated, &first)
+	if first.Outcome != "queued" || first.Issue.Status != "in_progress" || first.Issue.AssigneeID == nil || *first.Issue.AssigneeID != LocalAgentID {
+		t.Fatalf("first continuation = %#v", first)
+	}
+	firstTaskID, _ := first.Task["id"].(string)
+	if firstTaskID == "" || first.Task["stage_id"] != sessionBefore.ActiveStageID || first.Task["stage_kind"] != "analysis" {
+		t.Fatalf("first continuation task = %#v", first.Task)
+	}
+
+	var active struct {
+		Outcome string         `json:"outcome"`
+		Issue   Issue          `json:"issue"`
+		Task    map[string]any `json:"task"`
+	}
+	requestJSON(t, server.URL, http.MethodPost, "/api/issues/"+issue.ID+"/session/continue", map[string]any{}, http.StatusOK, &active)
+	if active.Outcome != "active" || active.Task["id"] != firstTaskID {
+		t.Fatalf("active continuation = %#v", active)
+	}
+	var count int
+	if err := app.store.db.QueryRowContext(t.Context(), `SELECT COUNT(*) FROM task_runs WHERE issue_id=?`, issue.ID).Scan(&count); err != nil {
+		t.Fatal(err)
+	}
+	if count != 1 {
+		t.Fatalf("active continuation queued %d runs, want 1", count)
+	}
+
+	if _, err := app.store.db.ExecContext(t.Context(), `UPDATE task_runs SET status='completed', thread_id='thread-1', work_dir='/tmp/work-1', completed_at=?, updated_at=? WHERE id=?`, now(), now(), firstTaskID); err != nil {
+		t.Fatal(err)
+	}
+	var implementation IssueSession
+	requestJSON(t, server.URL, http.MethodPost, "/api/issues/"+issue.ID+"/session/stages", map[string]any{"kind": "implementation"}, http.StatusOK, &implementation)
+	var resumed struct {
+		Outcome string         `json:"outcome"`
+		Issue   Issue          `json:"issue"`
+		Task    map[string]any `json:"task"`
+	}
+	requestJSON(t, server.URL, http.MethodPost, "/api/issues/"+issue.ID+"/session/continue", map[string]any{}, http.StatusCreated, &resumed)
+	if resumed.Task["stage_id"] != implementation.ActiveStageID || resumed.Task["stage_kind"] != "implementation" || resumed.Task["prior_task_id"] != firstTaskID || resumed.Task["continuity_state"] != "pending" {
+		t.Fatalf("resumed continuation = %#v", resumed.Task)
+	}
+	var sessionAfter IssueSession
+	requestJSON(t, server.URL, http.MethodGet, "/api/issues/"+issue.ID+"/session", nil, http.StatusOK, &sessionAfter)
+	if sessionAfter.ActiveStageID != implementation.ActiveStageID {
+		t.Fatalf("continuation changed active stage: got %s want %s", sessionAfter.ActiveStageID, implementation.ActiveStageID)
+	}
+}
+
+func TestIssueSessionContinuationIsConcurrentIdempotent(t *testing.T) {
+	app, err := New(t.Context(), filepath.Join(t.TempDir(), "multica.db"), nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer app.Close()
+	workspaces, err := app.store.ListWorkspaces(t.Context())
+	if err != nil {
+		t.Fatal(err)
+	}
+	ws := workspaces[0]
+	stamp := now()
+	if _, err := app.store.db.ExecContext(t.Context(), `INSERT INTO runtimes(id, workspace_id, daemon_id, name, provider, status, created_at, updated_at) VALUES ('runtime-concurrent', ?, 'daemon-concurrent', 'Codex', 'codex', 'online', ?, ?)`, ws.ID, stamp, stamp); err != nil {
+		t.Fatal(err)
+	}
+	issue, err := app.store.CreateIssue(t.Context(), ws.ID, CreateIssueInput{Title: "Continue concurrently"})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	type result struct {
+		taskID  string
+		outcome string
+		err     error
+	}
+	results := make(chan result, 2)
+	var start sync.WaitGroup
+	start.Add(1)
+	for range 2 {
+		go func() {
+			start.Wait()
+			_, taskID, outcome, err := app.store.ContinueIssueSession(t.Context(), ws.ID, issue.ID)
+			results <- result{taskID: taskID, outcome: outcome, err: err}
+		}()
+	}
+	start.Done()
+	first, second := <-results, <-results
+	for _, got := range []result{first, second} {
+		if got.err != nil {
+			t.Fatal(got.err)
+		}
+	}
+	if first.taskID != second.taskID {
+		t.Fatalf("concurrent continuation returned tasks %q and %q", first.taskID, second.taskID)
+	}
+	if !((first.outcome == "queued" && second.outcome == "active") || (first.outcome == "active" && second.outcome == "queued")) {
+		t.Fatalf("concurrent outcomes = %q, %q", first.outcome, second.outcome)
+	}
+	var count int
+	if err := app.store.db.QueryRowContext(t.Context(), `SELECT COUNT(*) FROM task_runs WHERE issue_id=?`, issue.ID).Scan(&count); err != nil {
+		t.Fatal(err)
+	}
+	if count != 1 {
+		t.Fatalf("concurrent continuation queued %d runs, want 1", count)
+	}
+}
+
+func TestIssueSessionContinuationRejectsUnrunnableIssueWithoutPartialChange(t *testing.T) {
+	for _, tc := range []struct {
+		name       string
+		input      map[string]any
+		addRuntime bool
+	}{
+		{name: "runtime offline", input: map[string]any{"title": "Offline"}},
+		{name: "foreign assignee", input: map[string]any{"title": "Owned", "assignee_type": "member", "assignee_id": "member-1"}, addRuntime: true},
+		{name: "unassigned non backlog", input: map[string]any{"title": "Unassigned todo", "status": "todo"}, addRuntime: true},
+		{name: "finished", input: map[string]any{"title": "Done", "status": "done"}, addRuntime: true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			app, err := New(t.Context(), filepath.Join(t.TempDir(), "multica.db"), nil)
+			if err != nil {
+				t.Fatal(err)
+			}
+			defer app.Close()
+			server := httptest.NewServer(app.Router())
+			defer server.Close()
+			workspaces, err := app.store.ListWorkspaces(t.Context())
+			if err != nil {
+				t.Fatal(err)
+			}
+			if tc.addRuntime {
+				if _, err := app.store.db.ExecContext(t.Context(), `INSERT INTO runtimes(id, workspace_id, daemon_id, name, provider, status, created_at, updated_at) VALUES ('runtime-1', ?, 'daemon-1', 'Codex', 'codex', 'online', ?, ?)`, workspaces[0].ID, now(), now()); err != nil {
+					t.Fatal(err)
+				}
+			}
+			var issue Issue
+			requestJSON(t, server.URL, http.MethodPost, "/api/issues", tc.input, http.StatusCreated, &issue)
+			var failure map[string]any
+			requestJSON(t, server.URL, http.MethodPost, "/api/issues/"+issue.ID+"/session/continue", map[string]any{}, http.StatusConflict, &failure)
+			var after Issue
+			requestJSON(t, server.URL, http.MethodGet, "/api/issues/"+issue.ID, nil, http.StatusOK, &after)
+			sameOptional := func(left, right *string) bool {
+				return left == nil && right == nil || left != nil && right != nil && *left == *right
+			}
+			if after.Status != issue.Status || !sameOptional(after.AssigneeType, issue.AssigneeType) || !sameOptional(after.AssigneeID, issue.AssigneeID) {
+				t.Fatalf("rejected continuation changed issue: before=%#v after=%#v", issue, after)
+			}
+			var runs int
+			if err := app.store.db.QueryRowContext(t.Context(), `SELECT COUNT(*) FROM task_runs WHERE issue_id=?`, issue.ID).Scan(&runs); err != nil {
+				t.Fatal(err)
+			}
+			if runs != 0 {
+				t.Fatalf("rejected continuation queued %d runs", runs)
+			}
+		})
 	}
 }
 

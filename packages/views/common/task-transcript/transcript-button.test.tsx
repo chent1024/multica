@@ -202,6 +202,23 @@ describe("TranscriptButton", () => {
     expect(listTaskMessages).toHaveBeenCalledTimes(1);
   });
 
+  it("controlled terminal mode loads the transcript when a product action opens it", async () => {
+    const qc = newClient();
+    listTaskMessages.mockResolvedValue([msg(1, "Bash")]);
+
+    renderWith(qc, (
+      <TranscriptButton
+        task={{ ...baseTask, status: "completed", completed_at: "2026-05-15T10:00:10.000Z" }}
+        agentName="Codex"
+        renderButton={false}
+        open
+      />
+    ));
+
+    await waitFor(() => expect(screen.getAllByTestId("event")).toHaveLength(1));
+    expect(listTaskMessages).toHaveBeenCalledWith(LIVE_TASK_ID);
+  });
+
   it("running→terminal: keeps the dialog populated and takes a final backfill", async () => {
     const qc = newClient();
     qc.setQueryData(chatKeys.taskMessages(LIVE_TASK_ID), [msg(1, "Bash")]);
