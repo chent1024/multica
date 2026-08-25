@@ -1457,7 +1457,8 @@ func (s *Server) createComment(w http.ResponseWriter, r *http.Request) {
 		s.respondStoreError(w, err)
 		return
 	}
-	if _, err := s.store.GetIssue(r.Context(), ws.ID, chi.URLParam(r, "id")); err != nil {
+	issueID := chi.URLParam(r, "id")
+	if _, err := s.store.GetIssue(r.Context(), ws.ID, issueID); err != nil {
 		s.respondStoreError(w, err)
 		return
 	}
@@ -1471,7 +1472,27 @@ func (s *Server) createComment(w http.ResponseWriter, r *http.Request) {
 		writeError(w, 400, errors.New("content is required"))
 		return
 	}
-	item, err := s.store.CreateCommentWithAttachments(r.Context(), ws.ID, chi.URLParam(r, "id"), input.Content, input.Type, input.ParentID, input.AttachmentIDs)
+	agentID := strings.TrimSpace(r.Header.Get("X-Agent-ID"))
+	taskID := strings.TrimSpace(r.Header.Get("X-Task-ID"))
+	var item Comment
+	if agentID == "" && taskID == "" {
+		item, err = s.store.CreateCommentWithAttachments(r.Context(), ws.ID, issueID, input.Content, input.Type, input.ParentID, input.AttachmentIDs)
+	} else {
+		if agentID != LocalAgentID || taskID == "" {
+			writeError(w, http.StatusForbidden, errors.New("invalid agent task identity"))
+			return
+		}
+		var taskExists int
+		if err := s.store.db.QueryRowContext(r.Context(), `SELECT COUNT(*) FROM task_runs WHERE id=? AND issue_id=? AND status='running'`, taskID, issueID).Scan(&taskExists); err != nil {
+			s.fail(w, err)
+			return
+		}
+		if taskExists == 0 {
+			writeError(w, http.StatusForbidden, errors.New("agent task is not active for issue"))
+			return
+		}
+		item, err = s.store.createAgentCommentWithAttachments(r.Context(), ws.ID, issueID, input.Content, input.Type, input.ParentID, taskID, input.AttachmentIDs)
+	}
 	if err != nil {
 		s.respondStoreError(w, err)
 		return

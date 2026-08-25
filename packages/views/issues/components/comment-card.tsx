@@ -955,7 +955,18 @@ function CommentCardImpl({
             className={open ? "px-4 max-md:px-3 py-3" : undefined}
           >
             {open ? (
-              <div className={cn("flex items-center gap-2.5", conversationRole === "local" && "justify-end")}>
+              <div
+                className={cn(
+                  "flex items-center gap-2.5",
+                  conversationRole === "local" && "justify-end",
+                  !conversationExpanded && "cursor-pointer",
+                )}
+                onClick={(event) => {
+                  if (conversationExpanded) return;
+                  if ((event.target as HTMLElement).closest("button, a, [role='link']")) return;
+                  handleToggle();
+                }}
+              >
                 {!conversationExpanded && (
                   <button
                     type="button"
@@ -981,24 +992,23 @@ function CommentCardImpl({
                 ) : (
                   <ActorAvatar actorType={displayActorType} actorId={displayActorId} size="md" enableHoverCard showStatusDot />
                 )}
-              <span className="shrink-0 cursor-pointer text-body font-medium">
-                {conversationRole === "local"
-                  ? t(($) => $.issue_session.you)
-                  : getActorName(displayActorType, displayActorId)}
-              </span>
-              <Tooltip>
-                <TooltipTrigger
-                  render={
-                    <span className="shrink-0 text-caption text-muted-foreground cursor-default">
-                      {timeAgo(entry.created_at)}
-                    </span>
-                  }
-                />
-                <TooltipContent side="top">
-                  {new Date(entry.created_at).toLocaleString()}
-                </TooltipContent>
-              </Tooltip>
-
+                <span className="shrink-0 text-body font-medium">
+                  {conversationRole === "local"
+                    ? t(($) => $.issue_session.you)
+                    : getActorName(displayActorType, displayActorId)}
+                </span>
+                <Tooltip>
+                  <TooltipTrigger
+                    render={
+                      <span className="shrink-0 cursor-default text-caption text-muted-foreground">
+                        {timeAgo(entry.created_at)}
+                      </span>
+                    }
+                  />
+                  <TooltipContent side="top">
+                    {new Date(entry.created_at).toLocaleString()}
+                  </TooltipContent>
+                </Tooltip>
                 <div className={cn("flex items-center gap-0.5", conversationRole === "agent" && "ml-auto")}>
                   <DropdownMenu>
                     <DropdownMenuTrigger
@@ -1062,7 +1072,7 @@ function CommentCardImpl({
                     hasReplies
                   />
                 </div>
-            </div>
+              </div>
             ) : (
               <button
                 type="button"

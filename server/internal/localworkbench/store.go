@@ -819,14 +819,18 @@ func scanComment(row rowScanner) (Comment, error) {
 }
 
 func (s *Store) CreateComment(ctx context.Context, issueID, content, kind, parentID string) (Comment, error) {
-	return s.createComment(ctx, "", issueID, content, kind, parentID, "system", LocalActorID, nil)
+	return s.createComment(ctx, "", issueID, content, kind, parentID, "system", LocalActorID, "", nil)
 }
 
 func (s *Store) CreateCommentWithAttachments(ctx context.Context, workspaceID, issueID, content, kind, parentID string, attachmentIDs []string) (Comment, error) {
-	return s.createComment(ctx, workspaceID, issueID, content, kind, parentID, "system", LocalActorID, attachmentIDs)
+	return s.createComment(ctx, workspaceID, issueID, content, kind, parentID, "system", LocalActorID, "", attachmentIDs)
 }
 
-func (s *Store) createComment(ctx context.Context, workspaceID, issueID, content, kind, parentID, authorType, authorID string, attachmentIDs []string) (Comment, error) {
+func (s *Store) createAgentCommentWithAttachments(ctx context.Context, workspaceID, issueID, content, kind, parentID, taskID string, attachmentIDs []string) (Comment, error) {
+	return s.createComment(ctx, workspaceID, issueID, content, kind, parentID, "agent", LocalAgentID, taskID, attachmentIDs)
+}
+
+func (s *Store) createComment(ctx context.Context, workspaceID, issueID, content, kind, parentID, authorType, authorID, sourceTaskID string, attachmentIDs []string) (Comment, error) {
 	if kind == "" {
 		kind = "comment"
 	}
@@ -840,7 +844,7 @@ func (s *Store) createComment(ctx context.Context, workspaceID, issueID, content
 	if err := tx.QueryRowContext(ctx, "UPDATE issues SET revision=revision+1, updated_at=?, last_activity_at=? WHERE id=? RETURNING revision", stamp, stamp, issueID).Scan(&revision); err != nil {
 		return Comment{}, err
 	}
-	_, err = tx.ExecContext(ctx, `INSERT INTO comments(id, issue_id, author_type, author_id, content, type, parent_id, issue_revision, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`, id, issueID, authorType, authorID, content, kind, nullable(parentID), revision, stamp, stamp)
+	_, err = tx.ExecContext(ctx, `INSERT INTO comments(id, issue_id, author_type, author_id, content, type, parent_id, issue_revision, source_task_id, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`, id, issueID, authorType, authorID, content, kind, nullable(parentID), revision, nullable(sourceTaskID), stamp, stamp)
 	if err != nil {
 		return Comment{}, err
 	}

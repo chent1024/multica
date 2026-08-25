@@ -90,8 +90,8 @@ func TestLocalAttachmentUploadAndCommentBinding(t *testing.T) {
 	requestJSON(t, server.URL, http.MethodPost, "/api/issues/"+issue.ID+"/comments", map[string]any{
 		"content": "Screenshot attached", "attachment_ids": []string{attachment.ID},
 	}, http.StatusCreated, &comment)
-	if len(comment.Attachments) != 1 || comment.Attachments[0].ID != attachment.ID {
-		t.Fatalf("comment attachments = %#v", comment.Attachments)
+	if comment.AuthorType != "system" || comment.AuthorID != LocalActorID || len(comment.Attachments) != 1 || comment.Attachments[0].ID != attachment.ID {
+		t.Fatalf("system comment = %#v", comment)
 	}
 	requestJSON(t, server.URL, http.MethodPost, "/api/comments/"+comment.ID+"/resolve", map[string]any{}, http.StatusOK, &comment)
 	if comment.ResolvedAt == nil || comment.ResolvedByID == nil || *comment.ResolvedByID != LocalActorID {
@@ -576,6 +576,22 @@ func TestSQLiteWorkbenchRunsAssignedIssueThroughDaemonProtocol(t *testing.T) {
 	requestJSON[any](t, server.URL, http.MethodPost, "/api/daemon/tasks/"+taskID+"/start", map[string]any{}, http.StatusOK, nil)
 	readWSEventKinds(t, conn, "issue:updated", "task:running")
 	requestJSON[any](t, server.URL, http.MethodPost, "/api/daemon/tasks/"+taskID+"/session", map[string]any{"session_id": "codex-thread-1"}, http.StatusOK, nil)
+	var agentComment Comment
+	requestJSONWithHeaders(t, server.URL, http.MethodPost, "/api/issues/"+issue.ID+"/comments", map[string]any{
+		"content": "Agent-authored result",
+	}, map[string]string{
+		"X-Agent-ID": LocalAgentID,
+		"X-Task-ID":  taskID,
+	}, http.StatusCreated, &agentComment)
+	if agentComment.AuthorType != "agent" || agentComment.AuthorID != LocalAgentID || agentComment.SourceTaskID == nil || *agentComment.SourceTaskID != taskID {
+		t.Fatalf("agent comment attribution = %#v", agentComment)
+	}
+	requestJSONWithHeaders[any](t, server.URL, http.MethodPost, "/api/issues/"+issue.ID+"/comments", map[string]any{
+		"content": "Spoofed agent result",
+	}, map[string]string{
+		"X-Agent-ID": LocalAgentID,
+		"X-Task-ID":  "other-task",
+	}, http.StatusForbidden, nil)
 	messages := map[string]any{"messages": []any{
 		map[string]any{"seq": 2, "type": "tool_result", "tool": "Read", "output": "ok"},
 		map[string]any{"seq": 1, "type": "tool_use", "tool": "Read", "input": map[string]any{"file_path": "README.md"}},
@@ -585,6 +601,12 @@ func TestSQLiteWorkbenchRunsAssignedIssueThroughDaemonProtocol(t *testing.T) {
 	requestJSON[any](t, server.URL, http.MethodPost, "/api/daemon/tasks/"+taskID+"/complete", map[string]any{"output": "Implemented and verified", "session_id": "codex-thread-1"}, http.StatusOK, nil)
 	readWSEventKinds(t, conn, "issue:updated", "comment:created", "task:completed")
 	requestJSON[any](t, server.URL, http.MethodPost, "/api/daemon/tasks/"+taskID+"/complete", map[string]any{"output": "Implemented and verified", "session_id": "codex-thread-1"}, http.StatusOK, nil)
+	requestJSONWithHeaders[any](t, server.URL, http.MethodPost, "/api/issues/"+issue.ID+"/comments", map[string]any{
+		"content": "Late agent result",
+	}, map[string]string{
+		"X-Agent-ID": LocalAgentID,
+		"X-Task-ID":  taskID,
+	}, http.StatusForbidden, nil)
 
 	var runs []map[string]any
 	requestJSON(t, server.URL, http.MethodGet, "/api/issues/"+issue.ID+"/task-runs", nil, http.StatusOK, &runs)
@@ -616,7 +638,7 @@ func TestSQLiteWorkbenchRunsAssignedIssueThroughDaemonProtocol(t *testing.T) {
 	}
 	var comments []Comment
 	requestJSON(t, server.URL, http.MethodGet, "/api/issues/"+issue.ID+"/comments", nil, http.StatusOK, &comments)
-	if len(comments) != 1 || comments[0].Content != "Implemented and verified" {
+	if len(comments) != 2 || comments[0].Content != "Agent-authored result" || comments[1].Content != "Implemented and verified" || comments[1].SourceTaskID == nil || *comments[1].SourceTaskID != taskID {
 		t.Fatalf("completion comments = %#v", comments)
 	}
 	requestJSON(t, server.URL, http.MethodPut, "/api/issues/"+issue.ID, map[string]any{
@@ -803,6 +825,11 @@ func readWSEventKinds(t *testing.T, conn *websocket.Conn, kinds ...string) {
 
 func requestJSON[T any](t *testing.T, baseURL, method, path string, body any, wantStatus int, output *T) {
 	t.Helper()
+	requestJSONWithHeaders(t, baseURL, method, path, body, nil, wantStatus, output)
+}
+
+func requestJSONWithHeaders[T any](t *testing.T, baseURL, method, path string, body any, headers map[string]string, wantStatus int, output *T) {
+	t.Helper()
 	var reader io.Reader
 	if body != nil {
 		raw, err := json.Marshal(body)
@@ -817,6 +844,9 @@ func requestJSON[T any](t *testing.T, baseURL, method, path string, body any, wa
 	}
 	request.Header.Set("Content-Type", "application/json")
 	request.Header.Set("X-Workspace-Slug", "local")
+	for key, value := range headers {
+		request.Header.Set(key, value)
+	}
 	response, err := http.DefaultClient.Do(request)
 	if err != nil {
 		t.Fatal(err)

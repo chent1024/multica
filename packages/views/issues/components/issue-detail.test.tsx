@@ -758,20 +758,42 @@ describe("IssueDetail (shared)", () => {
     ).toBe(true);
   });
 
-  it("expands a collapsed comment when the user clicks anywhere on its header row", async () => {
+  it("keeps issue-session comments expanded when the legacy collapse store says collapsed", async () => {
     mockCommentCollapse.collapsed = true;
     mockApiObj.listTimeline.mockResolvedValue([mockTimeline[0]]);
 
     renderIssueDetail();
 
-    const headerRow = await screen.findByRole("button", {
-      name: /Test User.*Started working on this/i,
-    });
-    expect(within(headerRow).queryByRole("link")).not.toBeInTheDocument();
+    expect(await screen.findByText("Started working on this")).toBeVisible();
+    expect(screen.getByText("You")).toBeVisible();
+    expect(mockCommentToggle).not.toHaveBeenCalled();
+  });
 
-    fireEvent.click(within(headerRow).getByText("Started working on this"));
+  it("does not collapse an issue-session comment when the user clicks its author", async () => {
+    mockApiObj.listTimeline.mockResolvedValue([mockTimeline[0]]);
 
-    expect(mockCommentToggle).toHaveBeenCalledWith("issue-1", "comment-1");
+    renderIssueDetail();
+
+    const content = await screen.findByText("Started working on this");
+    const card = content.closest<HTMLElement>('[data-slot="card"]');
+    expect(card).not.toBeNull();
+    fireEvent.click(within(card!).getByText("You"));
+
+    expect(mockCommentToggle).not.toHaveBeenCalled();
+  });
+
+  it("keeps expanded-comment actions independent from the row collapse target", async () => {
+    mockApiObj.listTimeline.mockResolvedValue([mockTimeline[0]]);
+
+    renderIssueDetail();
+
+    const content = await screen.findByText("Started working on this");
+    const card = content.closest<HTMLElement>('[data-slot="card"]');
+    const menuTrigger = card?.querySelector<HTMLElement>('[data-slot="dropdown-menu-trigger"]');
+    expect(menuTrigger).toBeTruthy();
+    fireEvent.click(menuTrigger!);
+
+    expect(mockCommentToggle).not.toHaveBeenCalled();
   });
 
   it("gives the skeleton the same horizontal gutters as the loaded column", async () => {
