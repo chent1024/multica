@@ -24,6 +24,8 @@ var codexSymlinkedFiles = []string{
 // Copies are isolated — task-local config and cache refreshes don't mutate
 // the shared home.
 var codexCopiedFiles = []string{
+	"AGENTS.md",
+	"AGENTS.override.md",
 	"config.json",
 	"config.toml",
 	"instructions.md",
@@ -1334,8 +1336,9 @@ func logCodexAuthState(authPath string, logger *slog.Logger) {
 //   - src absent,  dst absent:  no-op
 //
 // Regression for MUL-2646: the prior "don't overwrite" guard left per-task
-// config.toml / config.json / instructions.md stuck on whatever snapshot they
-// were seeded with at first Prepare. A user who edited ~/.codex/config.toml
+// AGENTS.md / AGENTS.override.md / config.toml / config.json / instructions.md
+// stuck on whatever snapshot they were seeded with at first Prepare. A user who
+// edited ~/.codex/config.toml
 // between runs — switching the active [model_providers.X] base_url, pointing
 // env_key at a freshly rotated API key, or removing the file outright to
 // drop a provider — kept hitting the stale per-task copy on session resume,
@@ -1346,9 +1349,9 @@ func logCodexAuthState(authPath string, logger *slog.Logger) {
 // passes recreate the file from scratch when the shared source is gone, so
 // the per-task home keeps the daemon-managed defaults but loses every
 // user-managed [model_providers.X] / model_provider line that no longer
-// exists in the shared config. For config.json / instructions.md there is
-// no daemon-managed default, so they simply disappear in lockstep with the
-// shared source.
+// exists in the shared config. For AGENTS.md / AGENTS.override.md / config.json /
+// instructions.md there is no daemon-managed default, so they simply disappear
+// in lockstep with the shared source.
 func syncCopiedFile(src, dst string) error {
 	_, srcErr := os.Stat(src)
 	srcMissing := os.IsNotExist(srcErr)

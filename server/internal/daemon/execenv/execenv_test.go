@@ -2480,6 +2480,79 @@ func TestPrepareCodexHomeSeedsFromShared(t *testing.T) {
 	}
 }
 
+func TestPrepareCodexHomeCopiesGlobalAgentsFiles(t *testing.T) {
+	// Cannot use t.Parallel() with t.Setenv.
+
+	sharedHome := t.TempDir()
+	t.Setenv("CODEX_HOME", sharedHome)
+	codexHome := filepath.Join(t.TempDir(), "codex-home")
+
+	files := map[string]string{
+		"AGENTS.md":          "global guidance v1",
+		"AGENTS.override.md": "override guidance v1",
+	}
+	for name, content := range files {
+		if err := os.WriteFile(filepath.Join(sharedHome, name), []byte(content), 0o644); err != nil {
+			t.Fatalf("seed shared %s: %v", name, err)
+		}
+	}
+
+	if err := prepareCodexHome(codexHome, testLogger()); err != nil {
+		t.Fatalf("first prepareCodexHome: %v", err)
+	}
+	assertCopied := func(name, want string) {
+		t.Helper()
+		path := filepath.Join(codexHome, name)
+		info, err := os.Lstat(path)
+		if err != nil {
+			t.Fatalf("stat per-task %s: %v", name, err)
+		}
+		if info.Mode()&os.ModeSymlink != 0 {
+			t.Errorf("per-task %s should be a copy, not a symlink", name)
+		}
+		data, err := os.ReadFile(path)
+		if err != nil {
+			t.Fatalf("read per-task %s: %v", name, err)
+		}
+		if string(data) != want {
+			t.Errorf("per-task %s content = %q, want %q", name, data, want)
+		}
+	}
+	for name, content := range files {
+		assertCopied(name, content)
+	}
+
+	files = map[string]string{
+		"AGENTS.md":          "global guidance v2",
+		"AGENTS.override.md": "override guidance v2",
+	}
+	for name, content := range files {
+		if err := os.WriteFile(filepath.Join(sharedHome, name), []byte(content), 0o644); err != nil {
+			t.Fatalf("refresh shared %s: %v", name, err)
+		}
+	}
+	if err := prepareCodexHome(codexHome, testLogger()); err != nil {
+		t.Fatalf("second prepareCodexHome: %v", err)
+	}
+	for name, content := range files {
+		assertCopied(name, content)
+	}
+
+	for name := range files {
+		if err := os.Remove(filepath.Join(sharedHome, name)); err != nil {
+			t.Fatalf("remove shared %s: %v", name, err)
+		}
+	}
+	if err := prepareCodexHome(codexHome, testLogger()); err != nil {
+		t.Fatalf("third prepareCodexHome: %v", err)
+	}
+	for name := range files {
+		if _, err := os.Stat(filepath.Join(codexHome, name)); !os.IsNotExist(err) {
+			t.Errorf("per-task %s still exists after shared source removal (stat err = %v)", name, err)
+		}
+	}
+}
+
 func TestPrepareCodexHomeCopiesRelativeModelCatalog(t *testing.T) {
 	// Cannot use t.Parallel() with t.Setenv.
 
