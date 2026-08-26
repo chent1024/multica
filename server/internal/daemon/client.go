@@ -462,12 +462,12 @@ func (c *Client) CompleteTask(ctx context.Context, taskID, output, branchName, s
 }
 
 func (c *Client) ReportTaskUsage(ctx context.Context, taskID string, usage []TaskUsageEntry) error {
-	if len(usage) == 0 {
-		return nil
+	if usage == nil {
+		usage = []TaskUsageEntry{}
 	}
-	return c.postJSON(ctx, fmt.Sprintf("/api/daemon/tasks/%s/usage", taskID), map[string]any{
+	return c.postJSONWithRetry(ctx, fmt.Sprintf("/api/daemon/tasks/%s/usage", taskID), map[string]any{
 		"usage": usage,
-	}, nil)
+	}, nil, usageReportRetrySchedule)
 }
 
 func (c *Client) FailTask(ctx context.Context, taskID, errMsg, sessionID, workDir, branchName, failureReason string, sessionRolloutMissing bool, retiredSessionID, durableWorkDir string) error {
@@ -913,6 +913,17 @@ var defaultTerminalRetrySchedule = []time.Duration{
 	16 * time.Second,
 	32 * time.Second,
 	64 * time.Second,
+}
+
+// usageReportRetrySchedule is intentionally much shorter than the terminal
+// callback schedule. Usage is reported synchronously before complete/fail so
+// the terminal event observes the stored snapshot; a multi-minute usage retry
+// would delay the visible task outcome and then repeat the same long wait for
+// the terminal callback itself.
+var usageReportRetrySchedule = []time.Duration{
+	500 * time.Millisecond,
+	1500 * time.Millisecond,
+	3 * time.Second,
 }
 
 // skillBundleResolveRetrySchedule rides out brief transport blips on a single

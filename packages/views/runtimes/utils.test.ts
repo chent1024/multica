@@ -12,6 +12,7 @@ import {
   estimateCost,
   estimateCostBreakdown,
   formatTokens,
+  inputCacheHitPercent,
   isModelPriced,
   isSelfHealingRuntime,
   sliceWindow,
@@ -1516,6 +1517,22 @@ describe("summarizeTaskUsageAcross", () => {
   it("is null only when no run has any usage", () => {
     expect(summarizeTaskUsageAcross([undefined, [], undefined])).toBeNull();
     expect(summarizeTaskUsageAcross([])).toBeNull();
+  });
+});
+
+describe("inputCacheHitPercent", () => {
+  it("uses aggregated token weights instead of averaging run percentages", () => {
+    // A 1-token 100% hit and a 999-token 0% hit must be 0%, not 50%.
+    expect(inputCacheHitPercent(999, 1)).toBe(0);
+  });
+
+  it("floors near-perfect rates without fabricating 100%", () => {
+    expect(inputCacheHitPercent(573_500, 126_000_000)).toBe(99);
+    expect(inputCacheHitPercent(0, 1_000)).toBe(100);
+  });
+
+  it("returns unknown when there was no input", () => {
+    expect(inputCacheHitPercent(0, 0)).toBeNull();
   });
 });
 

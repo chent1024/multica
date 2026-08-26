@@ -26,14 +26,15 @@ function makeTask(overrides: Partial<AgentTask> = {}): AgentTask {
     error: null,
     created_at: "2026-08-05T08:00:00Z",
     trigger_summary: "Initial run",
+    stage_kind: "implementation",
     ...overrides,
   };
 }
 
 function usage(overrides: Partial<TaskUsage> = {}): TaskUsage {
   return {
-    provider: "anthropic",
-    model: "claude-opus-5",
+    provider: "openai",
+    model: "gpt-5.6-sol",
     input_tokens: 1_000,
     output_tokens: 1_000,
     cache_read_tokens: 1_000,
@@ -43,8 +44,8 @@ function usage(overrides: Partial<TaskUsage> = {}): TaskUsage {
 }
 
 function open(tasks: AgentTask[]) {
-  renderWithI18n(
-    <IssueUsageDialog open onOpenChange={() => {}} identifier="ACM-1" tasks={tasks} />,
+  return renderWithI18n(
+    <IssueUsageDialog open onOpenChange={() => {}} identifier="MUL-1" tasks={tasks} />,
   );
 }
 
@@ -56,37 +57,82 @@ beforeEach(() => {
 afterEach(cleanup);
 
 describe("IssueUsageDialog", () => {
-  it("floors the cache hit rate instead of rounding it up to 100%", () => {
-    // 99.55% — rounding would print "100% hit rate" and claim every token came
-    // from cache on an issue that plainly read some fresh input.
+  it("calculates one weighted cache hit rate from aggregated counters", () => {
     open([
+      makeTask({
+        id: "tiny-hit",
+        usage: [usage({ input_tokens: 0, cache_read_tokens: 1 })],
+      }),
+      makeTask({
+        id: "large-miss",
+        usage: [usage({ input_tokens: 999, cache_read_tokens: 0 })],
+      }),
+    ]);
+
+    expect(screen.getAllByText("0%").length).toBeGreaterThan(0);
+    expect(screen.queryByText("50%")).not.toBeInTheDocument();
+  });
+
+  it("floors a near-perfect rate and only shows 100% for a real full hit", () => {
+    const { unmount } = open([
       makeTask({
         usage: [usage({ input_tokens: 573_500, cache_read_tokens: 126_000_000 })],
       }),
     ]);
+    expect(screen.getAllByText("99%").length).toBeGreaterThan(0);
+    expect(screen.queryByText("100%")).not.toBeInTheDocument();
 
-    expect(screen.getByText(/99% hit rate/)).toBeInTheDocument();
-    expect(screen.queryByText(/100% hit rate/)).not.toBeInTheDocument();
+    unmount();
+    open([makeTask({ usage: [usage({ input_tokens: 0, cache_read_tokens: 1_000 })] })]);
+    expect(screen.getAllByText("100%").length).toBeGreaterThan(0);
   });
 
-  it("still says 100% when the hit rate really is 100%", () => {
+  it("shows an unavailable cache rate when no input was measured", () => {
     open([
-      makeTask({ usage: [usage({ input_tokens: 0, cache_read_tokens: 1_000 })] }),
+      makeTask({
+        usage: [usage({ input_tokens: 0, cache_read_tokens: 0, output_tokens: 20 })],
+      }),
     ]);
 
-    expect(screen.getByText(/100% hit rate/)).toBeInTheDocument();
+    expect(screen.getByText("No input tokens to measure")).toBeInTheDocument();
+  });
+
+  it("shows local token KPIs, stage, status, duration, and no currency analysis", () => {
+    open([
+      makeTask({
+        usage: [usage({ cost_usd_ticks: 50_000_000_000 })],
+      }),
+    ]);
+
+    expect(screen.getByText("Processed tokens")).toBeInTheDocument();
+    expect(screen.getByText("Input cache hit rate")).toBeInTheDocument();
+    expect(screen.getByText("Output tokens")).toBeInTheDocument();
+    expect(screen.getByText("Runs")).toBeInTheDocument();
+    expect(screen.getByText("Build")).toBeInTheDocument();
+    expect(screen.getByText("Completed")).toBeInTheDocument();
+    expect(screen.getAllByText("11m 00s").length).toBeGreaterThan(0);
+    expect(screen.queryByText("Cost")).not.toBeInTheDocument();
+    expect(screen.queryByText(/\$/)).not.toBeInTheDocument();
+  });
+
+  it("keeps historical unknown usage distinct from zero", () => {
+    open([
+      makeTask({ id: "recorded", usage: [usage()] }),
+      makeTask({ id: "unknown", usage: [] }),
+    ]);
+
+    expect(
+      screen.getByText("1 run has no recorded usage and is not counted in token totals."),
+    ).toBeInTheDocument();
   });
 
   it("keeps the full model list reachable when the cell truncates", () => {
-    // A run that spilled across models carries ids long enough to set the
-    // table's width on their own; the cell is capped, so the untruncated list
-    // has to survive somewhere.
-    const models = "claude-haiku-4-5-20251001, claude-opus-5[1m]";
+    const models = "gpt-5.6-luna, gpt-5.6-sol[1m]";
     open([
       makeTask({
         usage: [
-          usage({ model: "claude-haiku-4-5-20251001" }),
-          usage({ model: "claude-opus-5[1m]" }),
+          usage({ model: "gpt-5.6-luna" }),
+          usage({ model: "gpt-5.6-sol[1m]" }),
         ],
       }),
     ]);
@@ -94,24 +140,7 @@ describe("IssueUsageDialog", () => {
     expect(screen.getByTitle(models)).toBeInTheDocument();
   });
 
-  it("gives every terminal run a status a screen reader can read", () => {
-    // The status glyph is aria-hidden, so without the paired label a failed
-    // run and a completed one are indistinguishable to assistive tech.
-    open([
-      makeTask({ id: "t-ok", usage: [usage()] }),
-      makeTask({ id: "t-bad", status: "failed", usage: [usage()] }),
-    ]);
-
-    expect(screen.getByText("Completed")).toBeInTheDocument();
-    expect(screen.getByText("Failed")).toBeInTheDocument();
-  });
-
   it("lets the run table scroll rather than widening the dialog", () => {
-    // jsdom has no layout engine, so the overflow itself is verified in a
-    // browser. What is pinned here is the contract that produced the bug: the
-    // scroll container must be able to shrink below its content. Drop
-    // `min-w-0` and the box grows to the table's min-content width instead of
-    // clipping, which is what pushed the table outside the dialog.
     open([makeTask({ usage: [usage()] })]);
 
     const table = screen.getByRole("table");

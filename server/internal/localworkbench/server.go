@@ -105,7 +105,7 @@ func (s *Server) Router() http.Handler {
 		api.Post("/daemon/tasks/{taskID}/{action:start|complete|fail|wait-local-directory}", s.daemonTaskState)
 		api.Post("/daemon/tasks/{taskID}/progress", s.daemonTaskProgress)
 		api.Post("/daemon/tasks/{taskID}/messages", s.daemonTaskMessages)
-		api.Post("/daemon/tasks/{taskID}/usage", s.daemonTaskNoop)
+		api.Post("/daemon/tasks/{taskID}/usage", s.daemonTaskUsage)
 		api.Post("/daemon/tasks/{taskID}/session", s.daemonTaskSession)
 		api.Get("/daemon/tasks/{taskID}/status", s.daemonTaskStatus)
 
@@ -155,7 +155,7 @@ func (s *Server) Router() http.Handler {
 		api.Get("/issues/{id}/task-runs", s.listTaskRuns)
 		api.Post("/issues/{id}/tasks/{taskID}/cancel", s.cancelTask)
 		api.Post("/issues/{id}/rerun", s.rerunIssue)
-		api.Get("/issues/{id}/usage", emptyObject("total_tokens", 0, "total_cost_usd", 0))
+		api.Get("/issues/{id}/usage", s.issueUsage)
 
 		api.Get("/issue-statuses", s.listIssueStatuses)
 		api.Get("/labels", emptyObject("labels", []any{}, "total", 0))
@@ -1575,6 +1575,11 @@ func (s *Server) listTaskRuns(w http.ResponseWriter, r *http.Request) {
 		s.respondStoreError(w, err)
 		return
 	}
+	usageByTask, err := s.store.TaskRunUsageByIssue(r.Context(), ws.ID, chi.URLParam(r, "id"))
+	if err != nil {
+		s.fail(w, err)
+		return
+	}
 	rows, err := s.store.db.QueryContext(r.Context(), `SELECT tr.id, tr.issue_id, tr.status, tr.thread_id, tr.runtime, tr.handoff_note, tr.summary, tr.error, tr.started_at, tr.completed_at, tr.created_at, tr.session_id, tr.stage_id, tr.prior_task_id, tr.trigger_comment_id, tr.continuity_state, tr.continuity_reason, st.kind FROM task_runs tr LEFT JOIN issue_session_stages st ON st.id=tr.stage_id WHERE tr.issue_id=? ORDER BY tr.created_at DESC`, chi.URLParam(r, "id"))
 	if err != nil {
 		s.fail(w, err)
@@ -1590,7 +1595,11 @@ func (s *Server) listTaskRuns(w http.ResponseWriter, r *http.Request) {
 			s.fail(w, err)
 			return
 		}
-		items = append(items, map[string]any{"id": id, "agent_id": LocalAgentID, "runtime_id": nullableString(runtimeName), "issue_id": issueID, "status": status, "priority": 0, "handoff_note": nullableString(handoffNote), "dispatched_at": nil, "started_at": stringPtr(startedAt), "completed_at": stringPtr(completedAt), "result": map[string]any{"thread_id": nullableString(threadID), "summary": nullableString(summary)}, "error": stringPtr(errorText), "created_at": createdAt, "session_id": nullableString(sessionID), "stage_id": nullableString(stageID), "stage_kind": nullableString(stageKind), "prior_task_id": nullableString(priorTaskID), "trigger_comment_id": nullableString(triggerCommentID), "continuity_state": continuityState, "continuity_reason": nullableString(continuityReason)})
+		usage := usageByTask[id]
+		if usage == nil {
+			usage = []TaskRunUsage{}
+		}
+		items = append(items, map[string]any{"id": id, "agent_id": LocalAgentID, "runtime_id": nullableString(runtimeName), "issue_id": issueID, "status": status, "priority": 0, "handoff_note": nullableString(handoffNote), "dispatched_at": nil, "started_at": stringPtr(startedAt), "completed_at": stringPtr(completedAt), "result": map[string]any{"thread_id": nullableString(threadID), "summary": nullableString(summary)}, "error": stringPtr(errorText), "created_at": createdAt, "session_id": nullableString(sessionID), "stage_id": nullableString(stageID), "stage_kind": nullableString(stageKind), "prior_task_id": nullableString(priorTaskID), "trigger_comment_id": nullableString(triggerCommentID), "continuity_state": continuityState, "continuity_reason": nullableString(continuityReason), "usage": usage})
 	}
 	writeJSON(w, 200, items)
 }
@@ -1732,7 +1741,25 @@ func (s *Server) taskRun(ctx context.Context, workspaceID, issueID, taskID strin
 	if err != nil {
 		return nil, err
 	}
-	return map[string]any{"id": id, "agent_id": LocalAgentID, "runtime_id": nullableString(runtimeID), "issue_id": issueID, "status": status, "priority": 0, "handoff_note": nullableString(handoffNote), "started_at": stringPtr(startedAt), "completed_at": stringPtr(completedAt), "result": map[string]any{"thread_id": nullableString(threadID), "summary": nullableString(summary)}, "error": stringPtr(errorText), "created_at": createdAt, "session_id": nullableString(sessionID), "stage_id": nullableString(stageID), "stage_kind": nullableString(stageKind), "prior_task_id": nullableString(priorTaskID), "trigger_comment_id": nullableString(triggerCommentID), "continuity_state": continuityState, "continuity_reason": nullableString(continuityReason)}, nil
+	usage, err := s.store.TaskRunUsageForTask(ctx, workspaceID, issueID, taskID)
+	if err != nil {
+		return nil, err
+	}
+	return map[string]any{"id": id, "agent_id": LocalAgentID, "runtime_id": nullableString(runtimeID), "issue_id": issueID, "status": status, "priority": 0, "handoff_note": nullableString(handoffNote), "started_at": stringPtr(startedAt), "completed_at": stringPtr(completedAt), "result": map[string]any{"thread_id": nullableString(threadID), "summary": nullableString(summary)}, "error": stringPtr(errorText), "created_at": createdAt, "session_id": nullableString(sessionID), "stage_id": nullableString(stageID), "stage_kind": nullableString(stageKind), "prior_task_id": nullableString(priorTaskID), "trigger_comment_id": nullableString(triggerCommentID), "continuity_state": continuityState, "continuity_reason": nullableString(continuityReason), "usage": usage}, nil
+}
+
+func (s *Server) issueUsage(w http.ResponseWriter, r *http.Request) {
+	ws, err := s.workspaceFor(r)
+	if err != nil {
+		s.respondStoreError(w, err)
+		return
+	}
+	summary, err := s.store.IssueUsage(r.Context(), ws.ID, chi.URLParam(r, "id"))
+	if err != nil {
+		s.respondStoreError(w, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, summary)
 }
 
 func nullableString(v sql.NullString) string {

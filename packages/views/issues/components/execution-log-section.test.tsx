@@ -34,10 +34,9 @@ import {
   IssueUsageTotal,
 } from "./execution-log-section";
 import type { TaskUsage } from "@multica/core/types";
-import { act, within } from "@testing-library/react";
+import { within } from "@testing-library/react";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { issueKeys } from "@multica/core/issues/queries";
-import { useCustomPricingStore } from "@multica/core/runtimes/custom-pricing-store";
 
 function makeTask(overrides: Partial<AgentTask> = {}): AgentTask {
   return {
@@ -331,23 +330,19 @@ describe("execution log header geometry", () => {
     }
   });
 
-  it("drops the token figure whole rather than clipping a number", () => {
+  it("keeps tokens primary and drops the cache percentage as one narrow unit", () => {
     const { unmount } = renderSection([completed]);
     let header = within(headerOf());
 
-    // Below the tier the tokens and their separator leave together and the
-    // cost stays — never a clipped "$2.0…", which would read as a different
-    // figure than the issue actually spent.
-    const cost = header.getByText("$2.00");
-    expect(header.getByText("892K").className).toContain(
-      "@max-[14rem]/execution-log:hidden",
-    );
+    const tokens = header.getByText("892K");
+    expect(tokens.className).not.toContain("hidden");
     expect(header.getByText("·").className).toContain(
       "@max-[14rem]/execution-log:hidden",
     );
-    expect(cost.className).not.toContain("hidden");
-    // And the pill itself never truncates — that is what would clip a digit.
-    const pill = cost.closest("button");
+    expect(header.getByText("88%").className).toContain(
+      "@max-[14rem]/execution-log:hidden",
+    );
+    const pill = tokens.closest("button");
     expect(pill?.className).toContain("shrink-0");
     expect(pill?.className).not.toContain("truncate");
 
@@ -357,49 +352,25 @@ describe("execution log header geometry", () => {
     unmount();
     renderSection([completed, makeTask({ status: "running" })]);
     header = within(headerOf());
-    expect(header.getByText("892K").className).toContain(
+    expect(header.getByText("88%").className).toContain(
       "@max-[16rem]/execution-log:hidden",
     );
   });
 });
 
-describe("IssueUsageTotal pricing", () => {
-  afterEach(() => {
-    useCustomPricingStore.setState({ pricings: {} });
-  });
+describe("IssueUsageTotal", () => {
+  it("shows processed tokens and weighted cache hit without currency", () => {
+    const task = makeTask({ status: "completed", usage: [usageSlice()] });
 
-  it("recomputes when a custom model rate is saved", () => {
-    // `estimateCost` reads the custom-rate store imperatively, so nothing
-    // re-renders this on a rate change unless the component subscribes. Before
-    // that subscription existed the figure stayed stale until the task list
-    // happened to refetch.
-    const unpriced: TaskUsage = {
-      provider: "acme",
-      model: "totally-made-up-model",
-      input_tokens: 1_000_000,
-      output_tokens: 0,
-      cache_read_tokens: 0,
-      cache_write_tokens: 0,
-    };
-    const task = makeTask({ status: "completed", usage: [unpriced] });
+    renderWithI18n(<IssueUsageTotal tasks={[task]} alone onOpen={() => {}} />);
 
-    renderWithI18n(
-      <IssueUsageTotal tasks={[task]} alone onOpen={() => {}} />,
-    );
-
-    // No rate on file for this model yet.
-    expect(screen.getByText("$0.00")).toBeInTheDocument();
-
-    act(() => {
-      useCustomPricingStore.getState().setCustomPricing("acme/totally-made-up-model", {
-        input: 7,
-        output: 0,
-        cacheRead: 0,
-        cacheWrite: 0,
-      });
-    });
-
-    // 1M input tokens at $7/M, without any refetch.
-    expect(screen.getByText("$7.00")).toBeInTheDocument();
+    expect(screen.getByText("892K")).toBeInTheDocument();
+    expect(screen.getByText("88%")).toBeInTheDocument();
+    expect(screen.queryByText(/\$/)).not.toBeInTheDocument();
+    expect(
+      screen.getByRole("button", {
+        name: "Token usage for this issue — click for the per-run breakdown",
+      }),
+    ).toBeInTheDocument();
   });
 });

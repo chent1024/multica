@@ -746,6 +746,21 @@ export function summarizeTaskUsageAcross(
   return summarizeTaskUsage(runs.flatMap((u) => u ?? []));
 }
 
+/**
+ * Weighted input-cache hit percentage for already aggregated token buckets.
+ * `inputTokens` is the normalized uncached bucket, so cache reads divided by
+ * uncached + cached input measures the share of input served from cache.
+ * A zero denominator is unknown, not a fabricated 0% hit rate.
+ */
+export function inputCacheHitPercent(
+  inputTokens: number,
+  cacheReadTokens: number,
+): number | null {
+  const denominator = inputTokens + cacheReadTokens;
+  if (denominator <= 0) return null;
+  return Math.floor((cacheReadTokens / denominator) * 100);
+}
+
 // Cache savings: what cache *reads* would have cost at full input pricing
 // minus what they actually cost at the discounted cache-hit rate. This is a
 // reconstruction of "money the cache saved you", not real-world spend.

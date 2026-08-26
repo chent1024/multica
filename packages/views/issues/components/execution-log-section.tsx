@@ -6,7 +6,6 @@ import { ChevronRight, Loader2, RotateCcw, Square } from "lucide-react";
 import { toast } from "sonner";
 import { api, dispatchReasonCode } from "@multica/core/api";
 import { issueKeys } from "@multica/core/issues/queries";
-import { useCustomPricingStore } from "@multica/core/runtimes/custom-pricing-store";
 import type { AgentTask } from "@multica/core/types";
 import { useTimeAgo } from "../../i18n";
 import {
@@ -21,7 +20,7 @@ import { cancelReasonLabel, failureReasonLabel } from "../../agents/components/t
 import { useT } from "../../i18n";
 import {
   formatTokens,
-  formatUsd,
+  inputCacheHitPercent,
   summarizeTaskUsage,
   summarizeTaskUsageAcross,
 } from "../../runtimes/utils";
@@ -216,21 +215,15 @@ export function ExecutionLogSection({ issueId, identifier }: ExecutionLogSection
 
 // ─── Issue total ───────────────────────────────────────────────────────────
 
-// The issue's whole spend, as a header affordance: "2.1M · $4.92". Answers
-// "what has this issue cost" without expanding anything, and is the entry
-// point to the per-run breakdown.
+// Compact token total and weighted input-cache hit rate for the Issue. This is
+// also the entry point to the per-run breakdown.
 //
 // Renders nothing when no run on the issue has recorded usage — an issue whose
 // runs all predate usage reporting gets its old header back rather than a
-// "0 · $0.00" that would read as "this was free".
+// zero that would read as "this consumed nothing".
 //
-// Narrow sections drop the token figure and keep the cost. Something has to
-// give at the narrow end — the header's full form needs ~246px next to the
-// active-run chip and the sidebar's 260px minimum leaves 228px — and the token
-// count is the piece whose absence costs least: the cost answers "what has
-// this issue spent", and the exact token split is a click away in the dialog
-// this opens. It is a figure that yields, never a figure's digits: a clipped
-// "$31.1…" would read as a different number than the issue actually spent.
+// Narrow sections keep the primary token figure and drop the secondary cache
+// percentage as one whole unit; no numeric value is ever clipped.
 export function IssueUsageTotal({
   tasks,
   alone,
@@ -241,16 +234,13 @@ export function IssueUsageTotal({
   onOpen: () => void;
 }) {
   const { t } = useT("issues");
-  // Custom rates are read imperatively inside `estimateCost`, so a saved rate
-  // change does not re-render this on its own — subscribe and make the memo
-  // depend on the snapshot, or the header total keeps quoting the old price
-  // until the task list refetches.
-  const pricings = useCustomPricingStore((s) => s.pricings);
   const total = useMemo(
     () => summarizeTaskUsageAcross(tasks.map((task) => task.usage)),
-    [tasks, pricings],
+    [tasks],
   );
   if (!total) return null;
+
+  const cacheHitRate = inputCacheHitPercent(total.input, total.cacheRead);
 
   // Two thresholds because the header has two shapes, and the tier should cost
   // the reader a figure only where the row genuinely runs out: beside the
@@ -267,15 +257,16 @@ export function IssueUsageTotal({
     <Tooltip>
       <TooltipTrigger
         render={<button type="button" onClick={onOpen} />}
+        aria-label={t(($) => $.execution_log.usage_total_tooltip)}
         className={`flex shrink-0 items-center gap-1 rounded-md px-1.5 py-0.5 text-caption tabular-nums transition-colors hover:bg-accent/70 ${
           alone ? "ml-auto" : ""
         }`}
       >
-        <span className={`font-medium ${narrowTier}`}>
-          {formatTokens(total.tokens)}
-        </span>
+        <span className="font-medium">{formatTokens(total.tokens)}</span>
         <span className={`text-faint-foreground ${narrowTier}`}>·</span>
-        <span className="text-muted-foreground">{formatUsd(total.cost)}</span>
+        <span className={`text-muted-foreground ${narrowTier}`}>
+          {cacheHitRate == null ? "—" : `${cacheHitRate}%`}
+        </span>
       </TooltipTrigger>
       <TooltipContent>{t(($) => $.execution_log.usage_total_tooltip)}</TooltipContent>
     </Tooltip>
@@ -447,13 +438,14 @@ function PastRow({ task, issueId }: { task: AgentTask; issueId: string }) {
   const statusTitle =
     failureLabel && task.error ? `${failureLabel}: ${task.error}` : (failureLabel ?? label);
 
-  // What this run cost, in the slot the relative timestamp used to hold.
+  // How many tokens this run processed, in the slot the relative timestamp
+  // used to hold.
   //
   // The sidebar is 288px and the row already carries an avatar, the trigger
   // text, and a status mark; a third column would come straight out of the
   // trigger, which is what people scan this list for. The list is sorted
   // newest-first, so "which run came first" is already expressed by position —
-  // the exact "when" is the detail, and how much it cost is the new question.
+  // the exact "when" is the detail, and token volume is the new question.
   // The displaced timestamp moves into the row tooltip below, together with
   // the duration and model, which were previously not surfaced here at all.
   //

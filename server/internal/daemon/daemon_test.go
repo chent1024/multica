@@ -4567,6 +4567,67 @@ func TestHandleTask_ReportsUsageBeforeCancel(t *testing.T) {
 	}
 }
 
+func TestHandleTask_ReportsUsageBeforeTerminalOutcome(t *testing.T) {
+	for _, tc := range []struct {
+		name         string
+		resultStatus string
+		terminalPath string
+		usage        []TaskUsageEntry
+	}{
+		{name: "completed", resultStatus: "completed", terminalPath: "/complete", usage: []TaskUsageEntry{{Provider: "codex", Model: "gpt-5.6-sol", InputTokens: 10}}},
+		{name: "completed empty snapshot", resultStatus: "completed", terminalPath: "/complete", usage: nil},
+		{name: "failed", resultStatus: "failed", terminalPath: "/fail", usage: []TaskUsageEntry{{Provider: "codex", Model: "gpt-5.6-sol", InputTokens: 10}}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			var mu sync.Mutex
+			var order []string
+			record := func(value string) {
+				mu.Lock()
+				order = append(order, value)
+				mu.Unlock()
+			}
+			srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				switch {
+				case strings.HasSuffix(r.URL.Path, "/usage"):
+					record("usage")
+				case strings.HasSuffix(r.URL.Path, tc.terminalPath):
+					record("terminal")
+				case strings.HasSuffix(r.URL.Path, "/status"):
+					w.Header().Set("Content-Type", "application/json")
+					_, _ = w.Write([]byte(`{"status":"running"}`))
+					return
+				}
+				w.WriteHeader(http.StatusOK)
+			}))
+			t.Cleanup(srv.Close)
+
+			d := &Daemon{
+				client:             NewClient(srv.URL),
+				logger:             slog.New(slog.NewTextHandler(io.Discard, nil)),
+				workspaces:         make(map[string]*workspaceState),
+				runtimeIndex:       map[string]Runtime{"rt-1": {ID: "rt-1", Provider: "codex"}},
+				cancelPollInterval: time.Hour,
+			}
+			d.runner = taskRunnerFunc(func(context.Context, Task, string, int, *slog.Logger) (TaskResult, error) {
+				return TaskResult{
+					Status:  tc.resultStatus,
+					Comment: tc.name,
+					Usage:   tc.usage,
+				}, nil
+			})
+
+			d.handleTask(t.Context(), Task{ID: "task-" + tc.name, RuntimeID: "rt-1", IssueID: "issue-1", Agent: &AgentData{Name: "Codex"}}, 0)
+
+			mu.Lock()
+			got := append([]string(nil), order...)
+			mu.Unlock()
+			if len(got) != 2 || got[0] != "usage" || got[1] != "terminal" {
+				t.Fatalf("call order = %v, want [usage terminal]", got)
+			}
+		})
+	}
+}
+
 // TestHandleTask_ReportsUsageWhenCancelledByPoll verifies that ReportTaskUsage is
 // called even when the task is cancelled mid-execution by the poll goroutine.
 // Regression test for the cancelledByPoll early-return path that previously

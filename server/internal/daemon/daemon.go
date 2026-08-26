@@ -5005,15 +5005,12 @@ func (d *Daemon) handleTask(ctx context.Context, task Task, slot int) {
 
 	result, err := d.runner.run(runCtx, task, provider, slot, taskLog)
 
-	// Report usage before any early return — the agent accumulates tokens
-	// whether the task completes, errors, or is cancelled mid-run by the poll
-	// goroutine. Both claude.go and codex.go populate result.Usage even when
-	// runCtx is cancelled, so dropping this on the cancelled path silently
-	// under-reports billing.
-	if len(result.Usage) > 0 {
-		if usageErr := d.client.ReportTaskUsage(ctx, task.ID, result.Usage); usageErr != nil {
-			taskLog.Warn("report task usage failed", "error", usageErr)
-		}
+	// Report the complete snapshot before any early return — including an
+	// explicit empty snapshot, which clears any rows left by a repeated delivery
+	// for the same task. Agents accumulate tokens whether the task completes,
+	// errors, or is cancelled mid-run by the poll goroutine.
+	if usageErr := d.client.ReportTaskUsage(ctx, task.ID, result.Usage); usageErr != nil {
+		taskLog.Warn("report task usage failed", "error", usageErr)
 	}
 
 	// Check if we were cancelled by the polling goroutine.

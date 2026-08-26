@@ -672,6 +672,7 @@ func TestSQLiteWorkbenchScopesNestedDataToOnlyLocalWorkspace(t *testing.T) {
 		"/api/issues/" + issue.ID + "/comments",
 		"/api/issues/" + issue.ID + "/timeline",
 		"/api/issues/" + issue.ID + "/task-runs",
+		"/api/issues/" + issue.ID + "/usage",
 	} {
 		requestJSON[any](t, server.URL, http.MethodGet, path, nil, http.StatusNotFound, nil)
 	}
@@ -685,6 +686,7 @@ func TestSQLiteWorkbenchScopesNestedDataToOnlyLocalWorkspace(t *testing.T) {
 	} {
 		requestJSON[any](t, server.URL, http.MethodPost, path, map[string]any{"summary": "must not mutate"}, http.StatusNotFound, nil)
 	}
+	requestJSON[any](t, server.URL, http.MethodPost, "/api/daemon/tasks/hidden-run/usage", map[string]any{"usage": []any{}}, http.StatusNotFound, nil)
 }
 
 func TestSQLiteWorkbenchRunsAssignedIssueThroughDaemonProtocol(t *testing.T) {
@@ -1010,6 +1012,101 @@ func TestSQLiteWorkbenchUpgradesTaskRunHandoffNote(t *testing.T) {
 	var attachmentsTable string
 	if err := reopened.db.QueryRowContext(t.Context(), `SELECT name FROM sqlite_master WHERE type='table' AND name='attachments'`).Scan(&attachmentsTable); err != nil {
 		t.Fatal(err)
+	}
+	var usageTable string
+	if err := reopened.db.QueryRowContext(t.Context(), `SELECT name FROM sqlite_master WHERE type='table' AND name='task_run_usage'`).Scan(&usageTable); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func TestSQLiteWorkbenchPersistsTaskUsageSnapshots(t *testing.T) {
+	app, err := New(t.Context(), filepath.Join(t.TempDir(), "multica.db"), nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer app.Close()
+	server := httptest.NewServer(app.Router())
+	defer server.Close()
+
+	workspaces, err := app.store.ListWorkspaces(t.Context())
+	if err != nil || len(workspaces) != 1 {
+		t.Fatalf("workspaces = %#v, err = %v", workspaces, err)
+	}
+	project := mustTestProject(t, app, workspaces[0].ID)
+	issue, err := app.store.CreateIssue(t.Context(), workspaces[0].ID, CreateIssueInput{Title: "Measure usage", ProjectID: &project.ID})
+	if err != nil {
+		t.Fatal(err)
+	}
+	stamp := now()
+	if _, err := app.store.db.ExecContext(t.Context(), `INSERT INTO task_runs(id, issue_id, status, created_at, updated_at) VALUES ('run-usage', ?, 'failed', ?, ?), ('run-empty', ?, 'cancelled', ?, ?)`, issue.ID, stamp, stamp, issue.ID, stamp, stamp); err != nil {
+		t.Fatal(err)
+	}
+
+	first := map[string]any{"usage": []any{
+		map[string]any{"provider": "codex", "model": "gpt-5.6-sol", "input_tokens": 100, "output_tokens": 40, "cache_read_tokens": 300, "cache_write_tokens": 10},
+		map[string]any{"provider": "codex", "model": "gpt-5.6-luna", "input_tokens": 20, "output_tokens": 5, "cache_read_tokens": 0, "cache_write_tokens": 0, "cost_usd_ticks": 99},
+	}}
+	usagePath := "/api/daemon/tasks/run-usage/usage"
+	requestJSON[any](t, server.URL, http.MethodPost, usagePath, first, http.StatusOK, nil)
+	requestJSON[any](t, server.URL, http.MethodPost, usagePath, first, http.StatusOK, nil)
+
+	var runs []struct {
+		ID    string         `json:"id"`
+		Usage []TaskRunUsage `json:"usage"`
+	}
+	requestJSON(t, server.URL, http.MethodGet, "/api/issues/"+issue.ID+"/task-runs", nil, http.StatusOK, &runs)
+	if len(runs) != 2 || runs[0].ID != "run-usage" || len(runs[0].Usage) != 2 || runs[1].ID != "run-empty" || runs[1].Usage == nil || len(runs[1].Usage) != 0 {
+		t.Fatalf("runs = %#v", runs)
+	}
+
+	var summary IssueUsageSummary
+	requestJSON(t, server.URL, http.MethodGet, "/api/issues/"+issue.ID+"/usage", nil, http.StatusOK, &summary)
+	if summary.TotalInputTokens != 120 || summary.TotalOutputTokens != 45 || summary.TotalCacheReadTokens != 300 || summary.TotalCacheWriteTokens != 10 || summary.CostUSDTicks != 99 || summary.UncostedInputTokens != 100 || summary.TaskCount != 2 {
+		t.Fatalf("summary = %#v", summary)
+	}
+
+	replacement := map[string]any{"usage": []any{map[string]any{"provider": "codex", "model": "gpt-5.6-sol", "input_tokens": 7, "output_tokens": 3, "cache_read_tokens": 11, "cache_write_tokens": 2}}}
+	requestJSON[any](t, server.URL, http.MethodPost, usagePath, replacement, http.StatusOK, nil)
+	var count, input int64
+	if err := app.store.db.QueryRowContext(t.Context(), `SELECT COUNT(*), COALESCE(SUM(input_tokens), 0) FROM task_run_usage WHERE task_id='run-usage'`).Scan(&count, &input); err != nil {
+		t.Fatal(err)
+	}
+	if count != 1 || input != 7 {
+		t.Fatalf("replacement count=%d input=%d", count, input)
+	}
+
+	invalidBodies := []map[string]any{
+		{"usage": []any{map[string]any{"provider": "codex", "model": "gpt-5.6-sol", "input_tokens": -1}}},
+		{"usage": []any{map[string]any{"provider": "codex", "model": "gpt-5.6-sol"}, map[string]any{"provider": "codex", "model": "gpt-5.6-sol"}}},
+		{"usage": []any{map[string]any{"provider": " ", "model": "gpt-5.6-sol"}}},
+	}
+	for _, body := range invalidBodies {
+		requestJSON[any](t, server.URL, http.MethodPost, usagePath, body, http.StatusBadRequest, nil)
+	}
+	if err := app.store.db.QueryRowContext(t.Context(), `SELECT COUNT(*), COALESCE(SUM(input_tokens), 0) FROM task_run_usage WHERE task_id='run-usage'`).Scan(&count, &input); err != nil {
+		t.Fatal(err)
+	}
+	if count != 1 || input != 7 {
+		t.Fatalf("invalid snapshot changed rows: count=%d input=%d", count, input)
+	}
+
+	requestJSON[any](t, server.URL, http.MethodPost, usagePath, map[string]any{"usage": []any{}}, http.StatusOK, nil)
+	if err := app.store.db.QueryRowContext(t.Context(), `SELECT COUNT(*) FROM task_run_usage WHERE task_id='run-usage'`).Scan(&count); err != nil {
+		t.Fatal(err)
+	}
+	if count != 0 {
+		t.Fatalf("empty snapshot left %d rows", count)
+	}
+
+	requestJSON[any](t, server.URL, http.MethodPost, usagePath, replacement, http.StatusOK, nil)
+	if err := app.store.DeleteIssue(t.Context(), workspaces[0].ID, issue.ID); err != nil {
+		t.Fatal(err)
+	}
+	if err := app.store.db.QueryRowContext(t.Context(), `SELECT COUNT(*) FROM task_run_usage WHERE task_id='run-usage'`).Scan(&count); err != nil {
+		t.Fatal(err)
+	}
+	if count != 0 {
+		t.Fatalf("issue deletion left %d usage rows", count)
 	}
 }
 

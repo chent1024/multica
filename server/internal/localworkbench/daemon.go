@@ -914,3 +914,31 @@ func (s *Server) daemonTaskNoop(w http.ResponseWriter, r *http.Request) {
 	}
 	writeJSON(w, http.StatusOK, map[string]any{})
 }
+
+func (s *Server) daemonTaskUsage(w http.ResponseWriter, r *http.Request) {
+	ws, err := s.workspaceFor(r)
+	if err != nil {
+		s.respondStoreError(w, err)
+		return
+	}
+	var body struct {
+		Usage []TaskRunUsage `json:"usage"`
+	}
+	if err := decodeBody(r, &body); err != nil {
+		writeError(w, http.StatusBadRequest, err)
+		return
+	}
+	if body.Usage == nil {
+		writeError(w, http.StatusBadRequest, errors.New("usage is required"))
+		return
+	}
+	if err := s.store.ReplaceTaskRunUsage(r.Context(), ws.ID, chi.URLParam(r, "taskID"), body.Usage); err != nil {
+		if errors.Is(err, errInvalidTaskRunUsage) {
+			writeError(w, http.StatusBadRequest, err)
+			return
+		}
+		s.respondStoreError(w, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]any{})
+}

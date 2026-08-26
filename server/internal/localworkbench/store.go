@@ -342,6 +342,23 @@ func migrateLocalSchema(ctx context.Context, db *sql.DB) error {
 	if _, err := tx.ExecContext(ctx, `INSERT OR IGNORE INTO schema_version(version, applied_at) VALUES (7, ?)`, now()); err != nil {
 		return err
 	}
+	if _, err := tx.ExecContext(ctx, `CREATE TABLE IF NOT EXISTS task_run_usage (
+		task_id TEXT NOT NULL,
+		provider TEXT NOT NULL CHECK (length(trim(provider)) > 0),
+		model TEXT NOT NULL CHECK (length(trim(model)) > 0),
+		input_tokens INTEGER NOT NULL CHECK (input_tokens >= 0),
+		output_tokens INTEGER NOT NULL CHECK (output_tokens >= 0),
+		cache_read_tokens INTEGER NOT NULL CHECK (cache_read_tokens >= 0),
+		cache_write_tokens INTEGER NOT NULL CHECK (cache_write_tokens >= 0),
+		cost_usd_ticks INTEGER CHECK (cost_usd_ticks IS NULL OR cost_usd_ticks >= 0),
+		updated_at TEXT NOT NULL,
+		PRIMARY KEY(task_id, provider, model)
+	)`); err != nil {
+		return err
+	}
+	if _, err := tx.ExecContext(ctx, `INSERT OR IGNORE INTO schema_version(version, applied_at) VALUES (9, ?)`, now()); err != nil {
+		return err
+	}
 	return tx.Commit()
 }
 
@@ -866,7 +883,7 @@ func (s *Store) DeleteIssue(ctx context.Context, workspaceID, id string) error {
 	if _, err := tx.ExecContext(ctx, `DELETE FROM issue_sessions WHERE issue_id=?`, issue.ID); err != nil {
 		return err
 	}
-	for _, query := range []string{"DELETE FROM attachments WHERE issue_id=?", "DELETE FROM comments WHERE issue_id=?", "DELETE FROM activities WHERE issue_id=?", "DELETE FROM task_messages WHERE issue_id=?", "DELETE FROM task_runs WHERE issue_id=?", "DELETE FROM issues WHERE id=?"} {
+	for _, query := range []string{"DELETE FROM attachments WHERE issue_id=?", "DELETE FROM comments WHERE issue_id=?", "DELETE FROM activities WHERE issue_id=?", "DELETE FROM task_messages WHERE issue_id=?", "DELETE FROM task_run_usage WHERE task_id IN (SELECT id FROM task_runs WHERE issue_id=?)", "DELETE FROM task_runs WHERE issue_id=?", "DELETE FROM issues WHERE id=?"} {
 		if _, err := tx.ExecContext(ctx, query, issue.ID); err != nil {
 			return err
 		}

@@ -153,6 +153,19 @@ CREATE TABLE IF NOT EXISTS task_runs (
 );
 CREATE INDEX IF NOT EXISTS task_runs_issue_idx ON task_runs(issue_id, created_at DESC);
 
+CREATE TABLE IF NOT EXISTS task_run_usage (
+    task_id TEXT NOT NULL,
+    provider TEXT NOT NULL CHECK (length(trim(provider)) > 0),
+    model TEXT NOT NULL CHECK (length(trim(model)) > 0),
+    input_tokens INTEGER NOT NULL CHECK (input_tokens >= 0),
+    output_tokens INTEGER NOT NULL CHECK (output_tokens >= 0),
+    cache_read_tokens INTEGER NOT NULL CHECK (cache_read_tokens >= 0),
+    cache_write_tokens INTEGER NOT NULL CHECK (cache_write_tokens >= 0),
+    cost_usd_ticks INTEGER CHECK (cost_usd_ticks IS NULL OR cost_usd_ticks >= 0),
+    updated_at TEXT NOT NULL,
+    PRIMARY KEY(task_id, provider, model)
+);
+
 CREATE TABLE IF NOT EXISTS issue_sessions (
     id TEXT PRIMARY KEY,
     issue_id TEXT NOT NULL UNIQUE,

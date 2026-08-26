@@ -336,6 +336,72 @@ func TestPostJSONWithRetry_TransientThenSuccess(t *testing.T) {
 	}
 }
 
+func TestReportTaskUsageSendsEmptySnapshot(t *testing.T) {
+	var body struct {
+		Usage []TaskUsageEntry `json:"usage"`
+	}
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path != "/api/daemon/tasks/task-1/usage" {
+			t.Fatalf("path = %q", r.URL.Path)
+		}
+		if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+			t.Fatal(err)
+		}
+		w.WriteHeader(http.StatusOK)
+	}))
+	t.Cleanup(srv.Close)
+
+	if err := NewClient(srv.URL).ReportTaskUsage(t.Context(), "task-1", nil); err != nil {
+		t.Fatal(err)
+	}
+	if body.Usage == nil || len(body.Usage) != 0 {
+		t.Fatalf("usage = %#v, want explicit empty snapshot", body.Usage)
+	}
+}
+
+func TestReportTaskUsageRetriesTransientErrorsWithDedicatedSchedule(t *testing.T) {
+	defer noSleepRetry(t)()
+	previous := usageReportRetrySchedule
+	usageReportRetrySchedule = []time.Duration{time.Nanosecond, time.Nanosecond}
+	t.Cleanup(func() { usageReportRetrySchedule = previous })
+
+	var calls atomic.Int32
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		if calls.Add(1) < 3 {
+			w.WriteHeader(http.StatusBadGateway)
+			return
+		}
+		w.WriteHeader(http.StatusOK)
+	}))
+	t.Cleanup(srv.Close)
+
+	err := NewClient(srv.URL).ReportTaskUsage(t.Context(), "task-1", []TaskUsageEntry{{Provider: "codex", Model: "gpt-5", InputTokens: 1}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := calls.Load(); got != 3 {
+		t.Fatalf("calls = %d, want 3", got)
+	}
+}
+
+func TestReportTaskUsageStopsOnPermanentError(t *testing.T) {
+	defer noSleepRetry(t)()
+	var calls atomic.Int32
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		calls.Add(1)
+		w.WriteHeader(http.StatusBadRequest)
+	}))
+	t.Cleanup(srv.Close)
+
+	err := NewClient(srv.URL).ReportTaskUsage(t.Context(), "task-1", []TaskUsageEntry{{Provider: "codex", Model: "gpt-5", InputTokens: 1}})
+	if err == nil {
+		t.Fatal("expected permanent error")
+	}
+	if got := calls.Load(); got != 1 {
+		t.Fatalf("calls = %d, want 1", got)
+	}
+}
+
 // TestFailTask_RetriesOnTransient5xxThenSucceeds pins the callback half of
 // MUL-5305 Must-fix 1: FailTask's terminal transaction is now the sole
 // persistence point for the withheld session and continuity-gap flag, so if the
