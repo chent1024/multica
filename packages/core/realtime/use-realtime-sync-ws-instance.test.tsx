@@ -12,6 +12,7 @@ import { chatKeys } from "../chat/queries";
 import { workspaceWorkingAgentsKeys } from "../agents/queries";
 import { workspaceKeys } from "../workspace/queries";
 import { issueStatusKeys } from "../issue-statuses/queries";
+import { runtimeKeys } from "../runtimes/queries";
 import {
   markWorkspaceDeletePending,
   unmarkWorkspaceDeletePending,
@@ -260,6 +261,25 @@ describe("useRealtimeSync — ws instance change", () => {
     // connected client. (MUL-6458)
     expect(invalidateSpy).not.toHaveBeenCalledWith({
       queryKey: issueKeys.all("ws-1"),
+    });
+  });
+
+  it("refreshes runtimes and agents when the local daemon registers", async () => {
+    const ws = createMockWs();
+    renderHook(() => useRealtimeSync(ws, stores), {
+      wrapper: createWrapper(qc),
+    });
+    const onAny = vi.mocked(ws.onAny).mock.calls[0]?.[0];
+    expect(onAny).toBeDefined();
+
+    onAny!({ type: "daemon:register", payload: {} } as never);
+    await new Promise((resolve) => setTimeout(resolve, 120));
+
+    expect(invalidateSpy).toHaveBeenCalledWith({
+      queryKey: runtimeKeys.all("ws-1"),
+    });
+    expect(invalidateSpy).toHaveBeenCalledWith({
+      queryKey: workspaceKeys.agents("ws-1"),
     });
   });
 

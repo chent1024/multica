@@ -848,6 +848,35 @@ func TestSQLiteWorkbenchRunsAssignedIssueThroughDaemonProtocol(t *testing.T) {
 	}
 }
 
+func TestSQLiteWorkbenchBroadcastsDaemonRegistration(t *testing.T) {
+	app, err := New(context.Background(), filepath.Join(t.TempDir(), "multica.db"), nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer app.Close()
+	server := httptest.NewServer(app.Router())
+	defer server.Close()
+
+	wsURL := "ws" + strings.TrimPrefix(server.URL, "http") + "/ws"
+	conn, _, err := websocket.DefaultDialer.Dial(wsURL, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer conn.Close()
+
+	var workspaces []Workspace
+	requestJSON(t, server.URL, http.MethodGet, "/api/workspaces", nil, http.StatusOK, &workspaces)
+	requestJSON[any](t, server.URL, http.MethodPost, "/api/daemon/register", map[string]any{
+		"workspace_id": workspaces[0].ID,
+		"daemon_id":    "local-daemon",
+		"device_name":  "Mac",
+		"runtimes": []any{
+			map[string]any{"name": "Codex", "type": "codex", "version": "1.0", "status": "online"},
+		},
+	}, http.StatusOK, nil)
+	readWSEventKinds(t, conn, "daemon:register")
+}
+
 func TestSQLiteWorkbenchQuickCreatesWithOnlineLocalCodex(t *testing.T) {
 	app, err := New(context.Background(), filepath.Join(t.TempDir(), "multica.db"), nil)
 	if err != nil {

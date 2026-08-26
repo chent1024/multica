@@ -837,6 +837,11 @@ export function useRealtimeSync(
         const wsId = getCurrentWsId();
         if (wsId) {
           qc.invalidateQueries({ queryKey: runtimeKeys.all(wsId) });
+          // In local mode the built-in Codex agent is projected from the
+          // registered runtime. A cold agent-list query can therefore cache
+          // an empty directory before daemon:register arrives; refresh it
+          // alongside runtimes so assignees and comment authors resolve.
+          qc.invalidateQueries({ queryKey: workspaceKeys.agents(wsId) });
           // Runtime online/offline transitions move the derived status
           // for every agent that hosts on this runtime, which shifts the
           // working/idle/offline pill on the squad page.

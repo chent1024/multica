@@ -262,11 +262,14 @@ func (s *Server) daemonRegister(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	runtimes := []map[string]any{}
+	runtimeIDs := []string{}
 	for _, item := range items {
 		if item.DaemonID == input.DaemonID && item.Status == "online" {
 			runtimes = append(runtimes, map[string]any{"id": item.ID, "name": item.Name, "provider": item.Provider, "status": item.Status, "profile_id": item.ProfileID})
+			runtimeIDs = append(runtimeIDs, item.ID)
 		}
 	}
+	s.hub.broadcast("daemon:register", map[string]any{"daemon_id": input.DaemonID, "runtime_ids": runtimeIDs})
 	writeJSON(w, http.StatusOK, map[string]any{"runtimes": runtimes, "repos": []any{}, "repos_version": "local"})
 }
 
