@@ -78,7 +78,7 @@ function installDownloadSaveDialogHandler(window: BrowserWindow): void {
 // direct-launch doesn't register the .desktop entry, so GNOME has no path
 // from the running window to the hicolor icon and falls back to the
 // theme default. Consumed in createWindow() (all platforms in dev, Linux
-// in prod) and the macOS dev dock branch.
+// in prod).
 //
 // `asarUnpack: resources/**` in electron-builder.yml extracts the icon to
 // `app.asar.unpacked/`, but `__dirname` resolves into `app.asar/`. The
@@ -91,6 +91,12 @@ const BUNDLED_ICON_PATH = join(__dirname, "../../resources/icon.png").replace(
   "app.asar",
   "app.asar.unpacked",
 );
+// macOS needs additional transparent breathing room so its Dock footprint
+// matches native app icons without changing the Windows/Linux artwork.
+const BUNDLED_MACOS_ICON_PATH = join(
+  __dirname,
+  "../../resources/icon-macos.png",
+).replace("app.asar", "app.asar.unpacked");
 
 // macOS/Linux GUI launches inherit a minimal PATH from launchd that omits
 // the user's shell config (~/.zshrc, Homebrew, nvm, ~/.local/bin, etc.).
@@ -585,7 +591,7 @@ if (!gotTheLock) {
     // so the Canary dev build is visually distinct from a stock Electron
     // run. `app.dock` is macOS-only — guard the call.
     if (is.dev && process.platform === "darwin" && app.dock) {
-      const icon = nativeImage.createFromPath(BUNDLED_ICON_PATH);
+      const icon = nativeImage.createFromPath(BUNDLED_MACOS_ICON_PATH);
       if (!icon.isEmpty()) app.dock.setIcon(icon);
     }
 
