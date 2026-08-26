@@ -3,13 +3,14 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 import { ApiError } from "@multica/core/api";
 import { AppSidebar } from "./app-sidebar";
 
-const { appForeground, chatSessions, chatStore, detail, deletePin, inboxItems, navigation, pins, sidebarState, summary, workspaces } = vi.hoisted(() => ({
+const { appForeground, chatSessions, chatStore, detail, deletePin, draftState, inboxItems, navigation, pins, sidebarState, summary, workspaces } = vi.hoisted(() => ({
   appForeground: { current: true },
   sidebarState: { setOpenMobile: vi.fn() },
   chatSessions: { current: [] as { id?: string; unread_count?: number }[] },
   chatStore: { current: { activeSessionId: null as string | null, isOpen: false } },
   detail: { current: { isPending: false, isError: false, data: null as unknown, error: null as unknown } },
   deletePin: vi.fn(),
+  draftState: { current: false },
   inboxItems: { current: [] as { id: string; read: boolean }[] },
   navigation: { current: { pathname: "/acme/issues" } },
   summary: { current: [] as { workspace_id: string; count: number }[] },
@@ -164,7 +165,10 @@ vi.mock("@multica/core/issues/stores/create-mode-store", () => ({
   useCreateModeStore: { getState: () => ({ lastMode: "agent" }) },
   openCreateIssueWithPreference: vi.fn(),
 }));
-vi.mock("@multica/core/issues/stores/draft-store", () => ({ useIssueDraftStore: () => false }));
+vi.mock("@multica/core/issues/stores/draft-store", () => ({
+  useIssueDraftStore: (selector: (state: { hasDraft: () => boolean }) => unknown) =>
+    selector({ hasDraft: () => draftState.current }),
+}));
 vi.mock("@multica/core/modals", () => ({ useModalStore: { getState: () => ({ modal: null, open: vi.fn() }) } }));
 vi.mock("@multica/core/pins/mutations", () => ({ useDeletePin: () => ({ mutate: deletePin }), useReorderPins: () => ({ mutate: vi.fn() }) }));
 vi.mock("@multica/core/pins/queries", () => ({ pinListOptions: () => ({ queryKey: ["pins"] }) }));
@@ -273,7 +277,7 @@ describe("workspace-switcher unread dot", () => {
   });
 
   // The aggregate switcher dot is the only `.ring-sidebar` span in the tree
-  // (DraftDot is null when there's no draft, and there are no invitations).
+  // when there are no invitations.
   const dot = (container: HTMLElement) => container.querySelector("span.bg-brand.ring-sidebar");
 
   it("shows a dot when another workspace has unread inbox items", () => {
@@ -297,6 +301,21 @@ describe("workspace-switcher unread dot", () => {
 });
 
 describe("local mode sidebar", () => {
+  beforeEach(() => {
+    draftState.current = false;
+  });
+
+  it("keeps the new-issue icon monochrome when a draft exists", () => {
+    draftState.current = true;
+
+    const { container } = render(<AppSidebar localMode />);
+
+    const icon = container.querySelector("svg.lucide-square-pen");
+    const createIssueButton = icon?.closest("button");
+    expect(icon).toHaveAttribute("stroke", "currentColor");
+    expect(createIssueButton?.querySelector(".bg-brand")).toBeNull();
+  });
+
   it("keeps local work navigation without workspace or collaboration controls", () => {
     workspaces.current = [
       { id: "ws-1", name: "Acme", slug: "acme", avatar_url: null },
