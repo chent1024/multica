@@ -5,6 +5,7 @@ import { createJSONStorage, persist } from "zustand/middleware";
 import { createWorkspaceAwareStorage, registerForWorkspaceRehydration } from "../../platform/workspace-storage";
 import { defaultStorage } from "../../platform/storage";
 import {
+  DEFAULT_HIDDEN_STATUS_CATEGORIES,
   type IssueViewState,
   mergeViewStatePersisted,
   viewStorePersistOptions,
@@ -32,6 +33,48 @@ interface IssueSurfaceViewRegistryState {
 const basePersist = viewStorePersistOptions(ISSUE_SURFACE_VIEW_STORAGE_KEY);
 const surfaceStores = new Map<string, StoreApi<IssueViewState>>();
 const suppressSurfacePersist = new Set<string>();
+
+function migrateIssueSurfaceViewRegistry(
+  persisted: unknown,
+  version: number,
+): IssueSurfaceViewRegistryState {
+  if (version >= 1 || !persisted || typeof persisted !== "object") {
+    return persisted as IssueSurfaceViewRegistryState;
+  }
+
+  const legacy = persisted as Partial<IssueSurfaceViewRegistryState>;
+  const surfaces = legacy.surfaces ?? {};
+  return {
+    ...legacy,
+    surfaces: Object.fromEntries(
+      Object.entries(surfaces).map(([surfaceKey, entry]) => {
+        if (!entry?.state || typeof entry.state !== "object") {
+          return [surfaceKey, entry];
+        }
+        const previouslyHidden = Array.isArray(
+          entry.state.hiddenStatusCategories,
+        )
+          ? entry.state.hiddenStatusCategories
+          : [];
+        return [
+          surfaceKey,
+          {
+            ...entry,
+            state: {
+              ...entry.state,
+              hiddenStatusCategories: Array.from(
+                new Set([
+                  ...previouslyHidden,
+                  ...DEFAULT_HIDDEN_STATUS_CATEGORIES,
+                ]),
+              ),
+            },
+          },
+        ];
+      }),
+    ),
+  } as IssueSurfaceViewRegistryState;
+}
 
 function persistedIssueViewState(state: IssueViewState): PersistedIssueViewState {
   return basePersist.partialize(state);
@@ -71,7 +114,9 @@ const issueSurfaceViewRegistryStore = createStore<IssueSurfaceViewRegistryState>
     }),
     {
       name: ISSUE_SURFACE_VIEW_STORAGE_KEY,
+      version: 1,
       storage: createJSONStorage(() => createWorkspaceAwareStorage(defaultStorage)),
+      migrate: migrateIssueSurfaceViewRegistry,
       partialize: (state) => ({ surfaces: state.surfaces }),
       merge: (persisted, current) => {
         const p = (persisted ?? {}) as Partial<IssueSurfaceViewRegistryState>;

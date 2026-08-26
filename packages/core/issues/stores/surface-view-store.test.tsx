@@ -59,6 +59,64 @@ afterEach(async () => {
 });
 
 describe("issue surface view store registry", () => {
+  it("migrates every version 0 surface to the focused status-column default once", async () => {
+    localStorage.setItem(
+      `${ISSUE_SURFACE_VIEW_STORAGE_KEY}:acme`,
+      JSON.stringify({
+        state: {
+          surfaces: {
+            "workspace:all": {
+              state: { hiddenStatusCategories: [] },
+              updatedAt: "2026-08-26T10:00:00.000Z",
+            },
+            "project:a": {
+              state: { hiddenStatusCategories: ["done"] },
+              updatedAt: "2026-08-26T10:01:00.000Z",
+            },
+          },
+        },
+        version: 0,
+      }),
+    );
+
+    setCurrentWorkspace("acme", "ws_a");
+    await flush();
+
+    expect(
+      getIssueSurfaceViewStore("workspace:all").getState()
+        .hiddenStatusCategories,
+    ).toEqual(["backlog", "blocked", "cancelled"]);
+    expect(
+      getIssueSurfaceViewStore("project:a").getState().hiddenStatusCategories,
+    ).toEqual(["done", "backlog", "blocked", "cancelled"]);
+
+    const migratedRaw = localStorage.getItem(
+      `${ISSUE_SURFACE_VIEW_STORAGE_KEY}:acme`,
+    );
+    const migrated = JSON.parse(migratedRaw as string);
+    expect(migrated.version).toBe(1);
+    expect(
+      migrated.state.surfaces["workspace:all"].state.hiddenStatusCategories,
+    ).toEqual(["backlog", "blocked", "cancelled"]);
+
+    const workspace = getIssueSurfaceViewStore("workspace:all");
+    workspace.getState().showStatus("backlog");
+    expect(workspace.getState().hiddenStatusCategories).toEqual([
+      "blocked",
+      "cancelled",
+    ]);
+
+    setCurrentWorkspace("beta", "ws_b");
+    await flush();
+    setCurrentWorkspace("acme", "ws_a");
+    await flush();
+
+    expect(workspace.getState().hiddenStatusCategories).toEqual([
+      "blocked",
+      "cancelled",
+    ]);
+  });
+
   it("isolates view state by surface key inside one workspace registry", async () => {
     setCurrentWorkspace("acme", "ws_a");
     await flush();
