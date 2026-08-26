@@ -297,6 +297,7 @@ export interface AgentTask {
     | "queued"
     | "dispatched"
     | "waiting_local_directory"
+    | "waiting_previous_run"
     | "running"
     | "completed"
     | "failed"

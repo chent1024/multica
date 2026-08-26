@@ -54,7 +54,7 @@ import { STATUS_CONFIG, PRIORITY_CONFIG } from "@multica/core/issues/config";
 import { formatDateOnly, isPastDateOnly } from "@multica/core/issues/date";
 import { useUpdateIssue } from "@multica/core/issues/mutations";
 import { toast } from "sonner";
-import { errorCode } from "@multica/core/api";
+import { api, errorCode } from "@multica/core/api";
 import { StatusIcon, PriorityIcon, StatusPicker, PriorityPicker, StagePicker, StartDatePicker, DueDatePicker, AssigneePicker, LabelPicker } from ".";
 import { maxSiblingStage } from "./pickers/stage-picker";
 import { CustomPropertyValueEditor, CustomPropertyValueDisplay } from "./pickers/custom-property-picker";
@@ -78,13 +78,15 @@ import { collectThreadReplies, deriveThreadResolution } from "./thread-utils";
 import { IssueAgentHeaderChip } from "./issue-agent-header-chip";
 import { ExecutionLogSection } from "./execution-log-section";
 import { IssueSessionWorkspace } from "./issue-session-section";
+import { TranscriptButton } from "../../common/task-transcript";
 import { useQuery } from "@tanstack/react-query";
 import { useAuthStore } from "@multica/core/auth";
 import { useWorkspacePaths } from "@multica/core/paths";
 import { useActorName } from "@multica/core/workspace/hooks";
 import { useWorkspaceId } from "@multica/core/hooks";
 import { useRecentContextStore } from "@multica/core/chat";
-import { issueListOptions, issueDetailOptions, childIssuesOptions, childIssueProgressOptions, issueAttachmentsOptions } from "@multica/core/issues/queries";
+import { issueListOptions, issueDetailOptions, childIssuesOptions, childIssueProgressOptions, issueAttachmentsOptions, issueKeys } from "@multica/core/issues/queries";
+import { issueSessionOptions, useSendIssueSessionMessage } from "@multica/core/issues/session";
 import { projectDetailOptions } from "@multica/core/projects/queries";
 import { ProjectIcon } from "../../projects/components/project-icon";
 import { issueLabelsOptions } from "@multica/core/labels";
@@ -111,6 +113,7 @@ import {
 } from "../../platform";
 import { cn } from "@multica/ui/lib/utils";
 import { PAGE_GUTTER } from "../../layout/page-header";
+import { buildIssueConversationMarkers, type IssueConversationMarker } from "./issue-conversation-feed-model";
 
 import { ProgressRing } from "./progress-ring";
 import { useT } from "../../i18n";
@@ -341,11 +344,15 @@ function shallowEqualEntries(a: TimelineEntry[], b: TimelineEntry[]): boolean {
 type TimelineItem =
   | { kind: "comment"; id: string; entry: TimelineEntry }
   | { kind: "resolved-bar"; id: string; entry: TimelineEntry }
-  | { kind: "activity-group"; id: string; entries: TimelineEntry[] };
+  | { kind: "activity-group"; id: string; entries: TimelineEntry[] }
+  | { kind: "session-marker"; id: string; marker: IssueConversationMarker };
 
 type RawTimelineGroup = {
   type: "comment" | "activities";
   entries: TimelineEntry[];
+} | {
+  type: "session";
+  marker: IssueConversationMarker;
 };
 
 function flattenGroups(
@@ -354,6 +361,10 @@ function flattenGroups(
 ): TimelineItem[] {
   const out: TimelineItem[] = [];
   for (const group of groups) {
+    if (group.type === "session") {
+      out.push({ kind: "session-marker", id: group.marker.id, marker: group.marker });
+      continue;
+    }
     if (group.type === "comment") {
       const entry = group.entries[0]!;
       const isResolved = !!entry.resolved_at;
@@ -372,6 +383,37 @@ function flattenGroups(
     }
   }
   return out;
+}
+
+function SessionMarkerRow({ marker, t }: { marker: IssueConversationMarker; t: ActivityT }) {
+  const runStatus = marker.status ?? "queued";
+  const label = marker.type === "stage"
+    ? t(($) => $.issue_session.feed_stage, { stage: t(($) => $.issue_session.stages[marker.stageKind]) })
+    : t(($) => $.issue_session.feed_run, {
+        stage: t(($) => $.issue_session.stages[marker.stageKind]),
+        status: t(($) => $.issue_session.run_status[runStatus]),
+      });
+  const waiting = marker.status === "waiting_previous_run";
+  return (
+    <div className="pb-3 px-4 max-md:px-3" data-session-marker={marker.type}>
+      <div className="flex items-center gap-2 text-caption text-muted-foreground">
+        <span className="h-px flex-1 bg-border" aria-hidden="true" />
+        <span className={cn("flex items-center gap-1 rounded-full border bg-background px-2.5 py-1", waiting && "border-warning/40 bg-warning/10 text-foreground")}>
+          {label}
+          {marker.type === "run" && marker.task && (
+            <TranscriptButton
+              task={marker.task}
+              agentName="Codex"
+              isLive={["dispatched", "waiting_local_directory", "running"].includes(marker.task.status)}
+              title={t(($) => $.execution_log.transcript_tooltip)}
+              className="-my-1 -mr-1"
+            />
+          )}
+        </span>
+        <span className="h-px flex-1 bg-border" aria-hidden="true" />
+      </div>
+    </div>
+  );
 }
 
 function TimelineSkeleton() {
@@ -1260,9 +1302,32 @@ export function IssueDetail({ issueId, onDelete, onDone, defaultSidebarOpen = tr
   // Local timeline keeps comments, task progress, and execution events.
   const {
     timeline, loading: timelineLoading,
-    submitComment, submitReply,
+    submitReply,
     editComment, deleteComment, toggleResolveComment,
   } = useIssueTimeline(id, user?.id);
+  const { data: issueSession } = useQuery(issueSessionOptions(id));
+  const { data: issueSessionTasks = [] } = useQuery({
+    queryKey: issueKeys.tasks(id),
+    queryFn: () => api.listTasksByIssue(id),
+  });
+  const conversationMarkers = useMemo(
+    () => buildIssueConversationMarkers(issueSession, issueSessionTasks),
+    [issueSession, issueSessionTasks],
+  );
+  const sendSessionMessage = useSendIssueSessionMessage(wsId, id);
+  const submitSessionMessage = useCallback(async (content: string, attachmentIds?: string[]) => {
+    if (!content.trim() || !user?.id) return false;
+    try {
+      const result = await sendSessionMessage.mutateAsync({ content, attachmentIds });
+      if (result.outcome === "waiting") {
+        toast.success(t(($) => $.issue_session.follow_up_queued));
+      }
+      return result.comment.id;
+    } catch (err) {
+      toast.error(err instanceof Error && err.message ? err.message : t(($) => $.issue_session.send_failed));
+      return false;
+    }
+  }, [sendSessionMessage, t, user?.id]);
 
   // Resolve / unresolve must always clear the per-session expand entry so
   // re-resolving an already-expanded thread folds it back to the bar (the
@@ -1353,9 +1418,33 @@ export function IssueDetail({ issueId, onDelete, onDone, defaultSidebarOpen = tr
       coalesced.push(entry);
     }
 
-    // Group consecutive activities together so the connector line works
-    const groups: { type: "activities" | "comment"; entries: TimelineEntry[] }[] = [];
-    for (const entry of coalesced) {
+    // Interleave product-level stage/run markers before grouping activities;
+    // a marker intentionally breaks an activity block at its real timestamp.
+    const ordered = [
+      ...coalesced.map((entry) => ({ kind: "timeline" as const, createdAt: entry.created_at, entry })),
+      ...conversationMarkers.map((marker) => ({ kind: "session" as const, createdAt: marker.createdAt, marker })),
+    ].toSorted((left, right) => {
+      const time = Date.parse(left.createdAt) - Date.parse(right.createdAt);
+      if (time !== 0) return time;
+      if (left.kind !== right.kind) {
+        if (left.kind === "session") {
+          return left.marker.type === "stage" ? -1 : 1;
+        }
+        if (right.kind === "session") {
+          return right.marker.type === "stage" ? 1 : -1;
+        }
+      }
+      const leftID = left.kind === "session" ? left.marker.id : left.entry.id;
+      const rightID = right.kind === "session" ? right.marker.id : right.entry.id;
+      return leftID.localeCompare(rightID);
+    });
+    const groups: RawTimelineGroup[] = [];
+    for (const item of ordered) {
+      if (item.kind === "session") {
+        groups.push({ type: "session", marker: item.marker });
+        continue;
+      }
+      const entry = item.entry;
       if (entry.type === "activity") {
         const last = groups[groups.length - 1];
         if (last?.type === "activities") {
@@ -1369,7 +1458,7 @@ export function IssueDetail({ issueId, onDelete, onDone, defaultSidebarOpen = tr
     }
 
     return { threadReplies, groups };
-  }, [timeline]);
+  }, [timeline, conversationMarkers]);
 
   // Flat array consumed by <Virtuoso>. Recomputed when timelineView.groups
   // changes (timeline events) or expandedResolved flips (user toggles a
@@ -1884,7 +1973,7 @@ export function IssueDetail({ issueId, onDelete, onDone, defaultSidebarOpen = tr
       { content: issue?.description, attachments: descEditorAttachments },
     ];
     for (const item of items) {
-      if (item.kind === "activity-group") continue;
+      if (item.kind === "activity-group" || item.kind === "session-marker") continue;
       blocks.push({
         content: item.entry.content,
         attachments: item.entry.attachments,
@@ -2444,6 +2533,9 @@ export function IssueDetail({ issueId, onDelete, onDone, defaultSidebarOpen = tr
   // The wrapper `id="comment-..."` is the deep-link target — equivalent to
   // a native `<a href="#comment-...">` anchor.
   const renderItem = (_i: number, item: TimelineItem): React.ReactElement => {
+    if (item.kind === "session-marker") {
+      return <SessionMarkerRow marker={item.marker} t={t} />;
+    }
     if (item.kind === "resolved-bar") {
       return (
         <div className="pb-3" id={`comment-${item.id}`}>
@@ -3045,11 +3137,12 @@ export function IssueDetail({ issueId, onDelete, onDone, defaultSidebarOpen = tr
 
           <div className="my-8 border-t" />
 
-          {/* Activity / Comments */}
+          {/* One Issue Session conversation. Product turns and stage/run
+              markers stay here; raw execution detail remains in the sidebar. */}
           <div>
             <div className="flex items-center justify-between">
               <div className="flex items-center gap-3">
-                <h2 className="text-title-sm font-semibold">{t(($) => $.detail.activity_section)}</h2>
+                <h2 className="text-title-sm font-semibold">{t(($) => $.issue_session.conversation)}</h2>
               </div>
             </div>
 
@@ -3156,12 +3249,18 @@ export function IssueDetail({ issueId, onDelete, onDone, defaultSidebarOpen = tr
                 keeps the previous issue's in-memory content and the
                 next keystroke would flush it into the new issue's
                 draft key. */}
-            <CommentInput
-              key={id}
-              issueId={id}
-              onSubmit={submitComment}
-              onAccepted={scrollToTimelineBottom}
-            />
+            {issueBehavesAsAny(issue, ["done", "cancelled"]) ? (
+              <div className="rounded-lg border bg-muted/30 px-4 py-3 text-caption text-muted-foreground">
+                {t(($) => $.issue_session.closed_hint)}
+              </div>
+            ) : (
+              <CommentInput
+                key={id}
+                issueId={id}
+                onSubmit={submitSessionMessage}
+                onAccepted={scrollToTimelineBottom}
+              />
+            )}
           </div>
         </div>
         </div>

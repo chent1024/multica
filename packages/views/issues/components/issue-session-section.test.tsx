@@ -131,11 +131,11 @@ describe("IssueSessionWorkspace", () => {
     expect(screen.getByText("issue://parent-1")).not.toBeVisible();
   });
 
-  it("continues the conversation as the primary action and opens the returned run", async () => {
+  it("leaves continuation to the single bottom composer", async () => {
     renderWorkspace();
-    fireEvent.click(await screen.findByRole("button", { name: "Continue conversation" }));
-    expect(state.continueMutateAsync).toHaveBeenCalledOnce();
-    expect(await screen.findByRole("dialog")).toHaveTextContent("run-new");
+    await screen.findByText("Check scope and correctness");
+    expect(screen.queryByRole("button", { name: /start conversation|continue conversation|open current conversation/i })).not.toBeInTheDocument();
+    expect(state.continueMutateAsync).not.toHaveBeenCalled();
   });
 
   it("opens the latest completed stage conversation without starting another run", async () => {
@@ -169,26 +169,19 @@ describe("IssueSessionWorkspace", () => {
     expect(await screen.findByRole("alert")).toHaveTextContent("Could not change stage.");
   });
 
-  it("reports a continuation failure without changing the recorded stage", async () => {
-    state.continueError = true;
-    renderWorkspace();
-    expect(await screen.findByRole("alert")).toHaveTextContent("Could not continue this conversation.");
-    expect(state.mutate).not.toHaveBeenCalled();
-  });
-
-  it("does not offer a start action when conversation state cannot be loaded", async () => {
+  it("reports task projection failure without adding a duplicate start action", async () => {
     state.tasksError = true;
     renderWorkspace();
     expect(await screen.findByRole("alert")).toHaveTextContent("Could not load conversation state.");
-    expect(screen.getByRole("button", { name: "Start conversation" })).toBeDisabled();
+    expect(screen.queryByRole("button", { name: "Start conversation" })).not.toBeInTheDocument();
   });
 
-  it("opens an already active run without creating another one", async () => {
+  it("shows an already active run without adding another execution action", async () => {
     state.tasks = [{ ...completedTask, id: "run-active", status: "running" }];
     renderWorkspace();
-    fireEvent.click(await screen.findByRole("button", { name: "Open current conversation" }));
+    expect(await screen.findByText("Running · 1 runs")).toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: "Open current conversation" })).not.toBeInTheDocument();
     expect(state.continueMutateAsync).not.toHaveBeenCalled();
-    expect(await screen.findByRole("dialog")).toHaveTextContent("run-active");
   });
 
   it("does not offer execution for a closed issue", async () => {
@@ -201,7 +194,7 @@ describe("IssueSessionWorkspace", () => {
     state.tasks = [];
     renderWorkspace({ status: "backlog", assignee_type: null, assignee_id: null });
     expect(await screen.findByText("Starting the conversation assigns Codex and moves this issue into progress.")).toBeInTheDocument();
-    expect(screen.getByRole("button", { name: "Start conversation" })).toBeEnabled();
+    expect(screen.queryByRole("button", { name: "Start conversation" })).not.toBeInTheDocument();
   });
 
   it("keeps the issue usable with a retryable session load error", async () => {

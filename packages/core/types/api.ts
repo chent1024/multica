@@ -81,6 +81,13 @@ export interface IssueSessionContinuation {
   task: AgentTask;
 }
 
+export interface IssueSessionMessage {
+  outcome: "queued" | "waiting";
+  issue: Issue;
+  comment: import("./comment").Comment;
+  task: AgentTask;
+}
+
 export interface UpdateIssueRequest {
   /** Legacy aggregate compare-and-swap token. New text editors use field
    * baselines so unrelated issue activity does not reject their edits. */

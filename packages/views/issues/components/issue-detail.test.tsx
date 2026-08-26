@@ -301,6 +301,7 @@ const mockApiObj = vi.hoisted(() => ({
   getActiveTasksForIssue: vi.fn().mockResolvedValue({ tasks: [] }),
   listTasksByIssue: vi.fn().mockResolvedValue([]),
   getIssueSession: vi.fn(),
+  sendIssueSessionMessage: vi.fn(),
   activateIssueSessionStage: vi.fn(),
   rerunIssue: vi.fn(),
   listTaskMessages: vi.fn().mockResolvedValue([]),
@@ -722,6 +723,18 @@ describe("IssueDetail (shared)", () => {
       created_at: "2026-01-01T00:00:00Z",
       updated_at: "2026-01-01T00:00:00Z",
     });
+    mockApiObj.sendIssueSessionMessage.mockResolvedValue({
+      outcome: "queued",
+      issue: mockIssue,
+      comment: {
+        id: "comment-new", issue_id: "issue-1", content: "A new update", author_type: "member", author_id: "user-1",
+        parent_id: null, type: "comment", reactions: [], attachments: [], created_at: "2026-08-13T00:00:00Z", updated_at: "2026-08-13T00:00:00Z",
+      },
+      task: {
+        id: "run-new", agent_id: "agent-1", runtime_id: "runtime-1", issue_id: "issue-1", session_id: "session-1", stage_id: "stage-analysis", stage_kind: "analysis",
+        trigger_comment_id: "comment-new", status: "queued", priority: 0, dispatched_at: null, started_at: null, completed_at: null, result: null, error: null, created_at: "2026-08-13T00:00:00Z",
+      },
+    });
     mockApiObj.rerunIssue.mockResolvedValue({ id: "task-rerun" });
     mockApiObj.listMembers.mockResolvedValue([
       { user_id: "user-1", name: "Test User", email: "test@test.com", role: "admin" },
@@ -803,7 +816,7 @@ describe("IssueDetail (shared)", () => {
       name: "Define the problem and acceptance boundary",
     });
     const surface = workspace.closest("[data-issue-session-workspace]");
-    const activity = screen.getByRole("heading", { name: "Activity" });
+    const activity = screen.getByRole("heading", { name: "Conversation" });
 
     expect(document.querySelectorAll("[data-issue-session-workspace]")).toHaveLength(1);
     expect(surface).not.toBeNull();
@@ -1009,17 +1022,6 @@ describe("IssueDetail (shared)", () => {
   });
 
   it("realigns after Virtuoso measures the newly posted row", async () => {
-    mockApiObj.createComment.mockResolvedValue({
-      id: "comment-new",
-      issue_id: "issue-1",
-      content: "A new update",
-      author_type: "member",
-      author_id: "user-1",
-      parent_id: null,
-      type: "comment",
-      created_at: "2026-08-13T00:00:00Z",
-      updated_at: "2026-08-13T00:00:00Z",
-    });
     renderIssueDetail();
 
     await screen.findByText("Implement authentication");
@@ -1029,12 +1031,20 @@ describe("IssueDetail (shared)", () => {
     const composer = editor.closest<HTMLElement>("[aria-busy], .relative.flex.flex-col.rounded-lg")!;
     fireEvent.click(within(composer).getByRole("button", { name: "Send" }));
 
-    expect(scrollToIndexSpy).not.toHaveBeenCalled();
+    await waitFor(() => {
+      expect(mockApiObj.sendIssueSessionMessage).toHaveBeenCalledWith(
+        "issue-1",
+        "A new update",
+        undefined,
+      );
+    });
+    expect(mockApiObj.createComment).not.toHaveBeenCalled();
+
     await waitFor(() => {
       expect(scrollToIndexSpy).toHaveBeenCalledTimes(2);
     });
-    expect(scrollToIndexSpy).toHaveBeenNthCalledWith(1, { index: 2, align: "end", offset: 0 });
-    expect(scrollToIndexSpy).toHaveBeenNthCalledWith(2, { index: 2, align: "end", offset: 0 });
+    expect(scrollToIndexSpy).toHaveBeenNthCalledWith(1, { index: 3, align: "end", offset: 0 });
+    expect(scrollToIndexSpy).toHaveBeenNthCalledWith(2, { index: 3, align: "end", offset: 0 });
     expect(scrollIntoViewSpy).not.toHaveBeenCalled();
   });
 
@@ -1181,11 +1191,11 @@ describe("IssueDetail (shared)", () => {
     });
   });
 
-  it("renders Activity section header", async () => {
+  it("renders Conversation section header", async () => {
     renderIssueDetail();
 
     await waitFor(() => {
-      expect(screen.getAllByText("Activity").length).toBeGreaterThanOrEqual(1);
+      expect(screen.getAllByText("Conversation").length).toBeGreaterThanOrEqual(1);
     });
   });
 

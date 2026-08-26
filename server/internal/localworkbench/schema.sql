@@ -140,6 +140,8 @@ CREATE TABLE IF NOT EXISTS task_runs (
     stage_id TEXT,
     work_dir TEXT,
     prior_task_id TEXT,
+    trigger_comment_id TEXT,
+    request_key TEXT,
     continuity_state TEXT NOT NULL DEFAULT 'fresh',
     continuity_reason TEXT,
     summary TEXT,
@@ -258,3 +260,6 @@ VALUES (6, strftime('%Y-%m-%dT%H:%M:%fZ', 'now'));
 
 INSERT OR IGNORE INTO schema_version(version, applied_at)
 VALUES (7, strftime('%Y-%m-%dT%H:%M:%fZ', 'now'));
+
+INSERT OR IGNORE INTO schema_version(version, applied_at)
+VALUES (8, strftime('%Y-%m-%dT%H:%M:%fZ', 'now'));

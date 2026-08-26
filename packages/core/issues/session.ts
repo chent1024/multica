@@ -1,7 +1,8 @@
 import { queryOptions, useMutation, useQueryClient } from "@tanstack/react-query";
 import { api } from "../api";
-import type { IssueSession, IssueSessionStageKind } from "../types";
+import type { IssueSession, IssueSessionStageKind, TimelineEntry } from "../types";
 import { issueKeys } from "./queries";
+import { sortTimelineEntriesAsc } from "./timeline-sort";
 
 export const issueSessionKeys = {
   all: () => ["issues", "session"] as const,
@@ -69,6 +70,44 @@ export function useContinueIssueSession(workspaceId: string, issueId: string) {
     onSuccess: ({ issue, task }) => {
       queryClient.setQueryData(issueKeys.detail(workspaceId, issue.id), issue);
       queryClient.setQueryData(issueKeys.identifier(workspaceId, issue.identifier), issue);
+      queryClient.setQueryData(issueKeys.tasks(issueId), (previous: typeof task[] | undefined) => {
+        if (!previous) return [task];
+        return [task, ...previous.filter((entry) => entry.id !== task.id)];
+      });
+      void queryClient.invalidateQueries({ queryKey: issueSessionKeys.detail(issueId) });
+      void queryClient.invalidateQueries({ queryKey: issueKeys.list(workspaceId) });
+    },
+  });
+}
+
+export function useSendIssueSessionMessage(workspaceId: string, issueId: string) {
+  const queryClient = useQueryClient();
+  return useMutation({
+    mutationFn: ({ content, attachmentIds }: { content: string; attachmentIds?: string[] }) =>
+      api.sendIssueSessionMessage(issueId, content, attachmentIds),
+    onSuccess: ({ issue, comment, task }) => {
+      queryClient.setQueryData(issueKeys.detail(workspaceId, issue.id), issue);
+      queryClient.setQueryData(issueKeys.identifier(workspaceId, issue.identifier), issue);
+      queryClient.setQueryData<TimelineEntry[]>(issueKeys.timeline(issueId), (previous) => {
+        const entry: TimelineEntry = {
+          type: "comment",
+          id: comment.id,
+          actor_type: comment.author_type,
+          actor_id: comment.author_id,
+          content: comment.content,
+          parent_id: comment.parent_id,
+          comment_type: comment.type,
+          reactions: comment.reactions ?? [],
+          attachments: comment.attachments ?? [],
+          created_at: comment.created_at,
+          updated_at: comment.updated_at,
+          revision: comment.revision,
+          source_task_id: comment.source_task_id,
+        };
+        if (!previous) return [entry];
+        if (previous.some((item) => item.id === entry.id)) return previous;
+        return sortTimelineEntriesAsc([...previous, entry]);
+      });
       queryClient.setQueryData(issueKeys.tasks(issueId), (previous: typeof task[] | undefined) => {
         if (!previous) return [task];
         return [task, ...previous.filter((entry) => entry.id !== task.id)];

@@ -11,6 +11,7 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/gorilla/websocket"
 )
@@ -517,7 +518,14 @@ func TestSQLiteWorkbenchRunsAssignedIssueThroughDaemonProtocol(t *testing.T) {
 		t.Fatalf("claimed task handoff note = %#v", claim.Tasks[0]["handoff_note"])
 	}
 	taskID := claim.Tasks[0]["id"].(string)
+	wsURL := "ws" + strings.TrimPrefix(server.URL, "http") + "/ws"
+	conn, _, err := websocket.DefaultDialer.Dial(wsURL, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer conn.Close()
 	requestJSON[any](t, server.URL, http.MethodPost, "/api/daemon/tasks/"+taskID+"/start", map[string]any{}, http.StatusOK, nil)
+	readWSEventKinds(t, conn, "issue:updated", "task:running")
 	requestJSON[any](t, server.URL, http.MethodPost, "/api/daemon/tasks/"+taskID+"/session", map[string]any{"session_id": "codex-thread-1"}, http.StatusOK, nil)
 	messages := map[string]any{"messages": []any{
 		map[string]any{"seq": 2, "type": "tool_result", "tool": "Read", "output": "ok"},
@@ -526,6 +534,7 @@ func TestSQLiteWorkbenchRunsAssignedIssueThroughDaemonProtocol(t *testing.T) {
 	requestJSON[any](t, server.URL, http.MethodPost, "/api/daemon/tasks/"+taskID+"/messages", messages, http.StatusOK, nil)
 	requestJSON[any](t, server.URL, http.MethodPost, "/api/daemon/tasks/"+taskID+"/messages", messages, http.StatusOK, nil)
 	requestJSON[any](t, server.URL, http.MethodPost, "/api/daemon/tasks/"+taskID+"/complete", map[string]any{"output": "Implemented and verified", "session_id": "codex-thread-1"}, http.StatusOK, nil)
+	readWSEventKinds(t, conn, "issue:updated", "comment:created", "task:completed")
 	requestJSON[any](t, server.URL, http.MethodPost, "/api/daemon/tasks/"+taskID+"/complete", map[string]any{"output": "Implemented and verified", "session_id": "codex-thread-1"}, http.StatusOK, nil)
 
 	var runs []map[string]any
@@ -640,7 +649,10 @@ func TestSQLiteWorkbenchUpgradesTaskRunHandoffNote(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	for _, column := range []string{"handoff_note", "session_id", "stage_id", "work_dir", "prior_task_id", "continuity_state", "continuity_reason"} {
+	if _, err := store.db.ExecContext(t.Context(), `DROP INDEX task_runs_request_key_idx`); err != nil {
+		t.Fatal(err)
+	}
+	for _, column := range []string{"handoff_note", "session_id", "stage_id", "work_dir", "prior_task_id", "trigger_comment_id", "request_key", "continuity_state", "continuity_reason"} {
 		if _, err := store.db.ExecContext(t.Context(), `ALTER TABLE task_runs DROP COLUMN `+column); err != nil {
 			t.Fatal(err)
 		}
@@ -673,7 +685,7 @@ func TestSQLiteWorkbenchUpgradesTaskRunHandoffNote(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer rows.Close()
-	found := false
+	found := map[string]bool{}
 	for rows.Next() {
 		var cid, notNull, primaryKey int
 		var name, columnType string
@@ -681,17 +693,19 @@ func TestSQLiteWorkbenchUpgradesTaskRunHandoffNote(t *testing.T) {
 		if err := rows.Scan(&cid, &name, &columnType, &notNull, &defaultValue, &primaryKey); err != nil {
 			t.Fatal(err)
 		}
-		found = found || name == "handoff_note"
+		found[name] = true
 	}
-	if !found {
-		t.Fatal("handoff_note column was not restored")
+	for _, name := range []string{"handoff_note", "trigger_comment_id", "request_key"} {
+		if !found[name] {
+			t.Fatalf("%s column was not restored", name)
+		}
 	}
 	var version int
 	if err := reopened.db.QueryRowContext(t.Context(), `SELECT MAX(version) FROM schema_version`).Scan(&version); err != nil {
 		t.Fatal(err)
 	}
-	if version != 7 {
-		t.Fatalf("schema version = %d, want 7", version)
+	if version != 8 {
+		t.Fatalf("schema version = %d, want 8", version)
 	}
 	var sessionID, stageID, stageKind string
 	var migrated int
@@ -715,6 +729,26 @@ func TestSQLiteWorkbenchUpgradesTaskRunHandoffNote(t *testing.T) {
 	var attachmentsTable string
 	if err := reopened.db.QueryRowContext(t.Context(), `SELECT name FROM sqlite_master WHERE type='table' AND name='attachments'`).Scan(&attachmentsTable); err != nil {
 		t.Fatal(err)
+	}
+}
+
+func readWSEventKinds(t *testing.T, conn *websocket.Conn, kinds ...string) {
+	t.Helper()
+	wanted := make(map[string]struct{}, len(kinds))
+	for _, kind := range kinds {
+		wanted[kind] = struct{}{}
+	}
+	if err := conn.SetReadDeadline(time.Now().Add(3 * time.Second)); err != nil {
+		t.Fatal(err)
+	}
+	for len(wanted) > 0 {
+		var event struct {
+			Type string `json:"type"`
+		}
+		if err := conn.ReadJSON(&event); err != nil {
+			t.Fatalf("reading websocket events %v: %v", kinds, err)
+		}
+		delete(wanted, event.Type)
 	}
 }
 

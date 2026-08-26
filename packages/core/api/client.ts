@@ -32,6 +32,7 @@ import type {
   AgentTask,
 	IssueSession,
 	IssueSessionContinuation,
+	IssueSessionMessage,
 	IssueSessionStageKind,
   AgentActivityBucket,
   AgentRunCount,
@@ -239,6 +240,7 @@ import {
   AgentTaskListSchema,
 	IssueSessionSchema,
 	IssueSessionContinuationSchema,
+	IssueSessionMessageSchema,
   AttachmentResponseSchema,
   CancelTaskResponseSchema,
   ChatDraftRestoresResponseSchema,
@@ -1046,6 +1048,23 @@ export class ApiClient {
 			method: "POST",
 		});
 		return IssueSessionContinuationSchema.parse(raw) as IssueSessionContinuation;
+	}
+
+	async sendIssueSessionMessage(
+		issueId: string,
+		content: string,
+		attachmentIds?: string[],
+		idempotencyKey = createSafeId(),
+	): Promise<IssueSessionMessage> {
+		const raw = await this.fetch<unknown>(`/api/issues/${encodeURIComponent(issueId)}/session/messages`, {
+			method: "POST",
+			headers: { "Idempotency-Key": idempotencyKey },
+			body: JSON.stringify({
+				content,
+				...(attachmentIds?.length ? { attachment_ids: attachmentIds } : {}),
+			}),
+		});
+		return IssueSessionMessageSchema.parse(raw) as unknown as IssueSessionMessage;
 	}
 
   async createIssue(data: CreateIssueRequest): Promise<Issue> {

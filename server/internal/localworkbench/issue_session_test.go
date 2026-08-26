@@ -1,13 +1,168 @@
 package localworkbench
 
 import (
+	"bytes"
 	"database/sql"
+	"encoding/json"
 	"net/http"
 	"net/http/httptest"
 	"path/filepath"
 	"sync"
 	"testing"
 )
+
+func TestIssueSessionMessageIsAtomicIdempotentAndSerial(t *testing.T) {
+	app, err := New(t.Context(), filepath.Join(t.TempDir(), "multica.db"), nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer app.Close()
+	workspaces, err := app.store.ListWorkspaces(t.Context())
+	if err != nil || len(workspaces) != 1 {
+		t.Fatalf("workspaces = %#v, err = %v", workspaces, err)
+	}
+	stamp := now()
+	runtimeID := "session-runtime"
+	if _, err := app.store.db.ExecContext(t.Context(), `INSERT INTO runtimes(id, workspace_id, daemon_id, name, provider, version, status, created_at, updated_at) VALUES (?, ?, 'session-daemon', 'Codex', 'codex', '1', 'online', ?, ?)`, runtimeID, workspaces[0].ID, stamp, stamp); err != nil {
+		t.Fatal(err)
+	}
+	issue, err := app.store.CreateIssue(t.Context(), workspaces[0].ID, CreateIssueInput{Title: "Conversation"})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	first, err := app.store.SendIssueSessionMessage(t.Context(), workspaces[0].ID, issue.ID, "request-1", "Implement the feed", nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !first.Created || first.Outcome != "queued" || first.Comment.Content != "Implement the feed" || first.TaskID == "" {
+		t.Fatalf("first message = %#v", first)
+	}
+	repeated, err := app.store.SendIssueSessionMessage(t.Context(), workspaces[0].ID, issue.ID, "request-1", "ignored retry body", nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if repeated.TaskID != first.TaskID || repeated.Comment.ID != first.Comment.ID {
+		t.Fatalf("idempotent retry = %#v, want task=%s comment=%s", repeated, first.TaskID, first.Comment.ID)
+	}
+	if repeated.Created {
+		t.Fatal("idempotent retry was reported as newly created")
+	}
+	second, err := app.store.SendIssueSessionMessage(t.Context(), workspaces[0].ID, issue.ID, "request-2", "Then review it", nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if second.Outcome != "waiting" {
+		t.Fatalf("second message outcome = %q", second.Outcome)
+	}
+	var comments, runs int
+	if err := app.store.db.QueryRowContext(t.Context(), `SELECT COUNT(*) FROM comments WHERE issue_id=?`, issue.ID).Scan(&comments); err != nil {
+		t.Fatal(err)
+	}
+	if err := app.store.db.QueryRowContext(t.Context(), `SELECT COUNT(*) FROM task_runs WHERE issue_id=?`, issue.ID).Scan(&runs); err != nil {
+		t.Fatal(err)
+	}
+	if comments != 2 || runs != 2 {
+		t.Fatalf("idempotent counts comments=%d runs=%d", comments, runs)
+	}
+
+	claimed, err := app.claimTask(t.Context(), "session-daemon", runtimeID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if claimed["id"] != first.TaskID || claimed["trigger_comment_id"] != first.Comment.ID || claimed["trigger_comment_content"] != "Implement the feed" {
+		t.Fatalf("first claim = %#v", claimed)
+	}
+	if another, err := app.claimTask(t.Context(), "session-daemon", runtimeID); err != nil || another != nil {
+		t.Fatalf("waiting run was claimable: task=%#v err=%v", another, err)
+	}
+
+	server := httptest.NewServer(app.Router())
+	defer server.Close()
+	var empty map[string]any
+	requestJSON(t, server.URL, http.MethodPost, "/api/daemon/tasks/"+first.TaskID+"/complete", map[string]any{"session_id": "provider-thread", "work_dir": "/tmp/session-work", "output": "Implemented"}, http.StatusOK, &empty)
+	var promotedStatus, promotedPrior string
+	if err := app.store.db.QueryRowContext(t.Context(), `SELECT status, prior_task_id FROM task_runs WHERE id=?`, second.TaskID).Scan(&promotedStatus, &promotedPrior); err != nil {
+		t.Fatal(err)
+	}
+	if promotedStatus != "queued" || promotedPrior != first.TaskID {
+		t.Fatalf("promoted run status=%q prior=%q", promotedStatus, promotedPrior)
+	}
+	var sourceTaskID string
+	if err := app.store.db.QueryRowContext(t.Context(), `SELECT source_task_id FROM comments WHERE issue_id=? AND author_type='agent'`, issue.ID).Scan(&sourceTaskID); err != nil {
+		t.Fatal(err)
+	}
+	if sourceTaskID != first.TaskID {
+		t.Fatalf("agent outcome source = %q", sourceTaskID)
+	}
+	claimed, err = app.claimTask(t.Context(), "session-daemon", runtimeID)
+	if err != nil || claimed["id"] != second.TaskID || claimed["prior_session_id"] != "provider-thread" {
+		t.Fatalf("promoted claim = %#v, err=%v", claimed, err)
+	}
+	body, _ := json.Marshal(map[string]any{"content": "Ship after review"})
+	req, err := http.NewRequestWithContext(t.Context(), http.MethodPost, server.URL+"/api/issues/"+issue.ID+"/session/messages", bytes.NewReader(body))
+	if err != nil {
+		t.Fatal(err)
+	}
+	req.Header.Set("Content-Type", "application/json")
+	req.Header.Set("Idempotency-Key", "request-3")
+	response, err := http.DefaultClient.Do(req)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer response.Body.Close()
+	if response.StatusCode != http.StatusCreated {
+		t.Fatalf("session message HTTP status = %d", response.StatusCode)
+	}
+	var payload struct {
+		Outcome string `json:"outcome"`
+		Task    struct {
+			ID     string `json:"id"`
+			Status string `json:"status"`
+		} `json:"task"`
+	}
+	if err := json.NewDecoder(response.Body).Decode(&payload); err != nil {
+		t.Fatal(err)
+	}
+	if payload.Outcome != "waiting" || payload.Task.Status != "waiting_previous_run" {
+		t.Fatalf("session message HTTP payload = %#v", payload)
+	}
+	var cancelled map[string]any
+	requestJSON(t, server.URL, http.MethodPost, "/api/issues/"+issue.ID+"/tasks/"+payload.Task.ID+"/cancel", map[string]any{}, http.StatusOK, &cancelled)
+	if cancelled["status"] != "cancelled" {
+		t.Fatalf("cancelled waiting run = %#v", cancelled)
+	}
+	requestJSON(t, server.URL, http.MethodPost, "/api/daemon/tasks/"+second.TaskID+"/complete", map[string]any{"session_id": "provider-thread", "work_dir": "/tmp/session-work", "output": "Reviewed"}, http.StatusOK, &empty)
+	if another, err := app.claimTask(t.Context(), "session-daemon", runtimeID); err != nil || another != nil {
+		t.Fatalf("cancelled waiting run became claimable: task=%#v err=%v", another, err)
+	}
+}
+
+func TestIssueSessionMessageRollsBackInvalidAttachments(t *testing.T) {
+	app, err := New(t.Context(), filepath.Join(t.TempDir(), "multica.db"), nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer app.Close()
+	workspaces, _ := app.store.ListWorkspaces(t.Context())
+	stamp := now()
+	if _, err := app.store.db.ExecContext(t.Context(), `INSERT INTO runtimes(id, workspace_id, daemon_id, name, provider, status, created_at, updated_at) VALUES ('runtime', ?, 'daemon', 'Codex', 'codex', 'online', ?, ?)`, workspaces[0].ID, stamp, stamp); err != nil {
+		t.Fatal(err)
+	}
+	issue, err := app.store.CreateIssue(t.Context(), workspaces[0].ID, CreateIssueInput{Title: "Atomic"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := app.store.SendIssueSessionMessage(t.Context(), workspaces[0].ID, issue.ID, "invalid-attachment", "Must roll back", []string{"missing"}); err == nil {
+		t.Fatal("invalid attachment unexpectedly succeeded")
+	}
+	var comments, runs int
+	_ = app.store.db.QueryRowContext(t.Context(), `SELECT COUNT(*) FROM comments WHERE issue_id=?`, issue.ID).Scan(&comments)
+	_ = app.store.db.QueryRowContext(t.Context(), `SELECT COUNT(*) FROM task_runs WHERE issue_id=?`, issue.ID).Scan(&runs)
+	if comments != 0 || runs != 0 {
+		t.Fatalf("partial write comments=%d runs=%d", comments, runs)
+	}
+}
 
 func TestIssueSessionStageAndChildHandoff(t *testing.T) {
 	app, err := New(t.Context(), filepath.Join(t.TempDir(), "multica.db"), nil)

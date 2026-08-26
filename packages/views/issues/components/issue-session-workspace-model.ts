@@ -58,7 +58,7 @@ export function buildIssueSessionWorkspaceModel(
     .filter((task) => task.session_id === active.session_id)
     .toSorted((left, right) => Date.parse(right.created_at) - Date.parse(left.created_at))
     .find((task) =>
-    ["queued", "dispatched", "waiting_local_directory", "running"].includes(task.status),
+    ["queued", "dispatched", "waiting_local_directory", "waiting_previous_run", "running"].includes(task.status),
   ) ?? null;
   const taskOutcome = latestStageTask
     ? timeline

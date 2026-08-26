@@ -12,11 +12,12 @@ import (
 )
 
 const (
-	initialSessionStage = "analysis"
-	migratedRunStage    = "implementation"
-	maxHandoffItems     = 20
-	maxHandoffItemRunes = 1000
-	maxHandoffObjective = 4000
+	initialSessionStage  = "analysis"
+	migratedRunStage     = "implementation"
+	maxHandoffItems      = 20
+	maxHandoffItemRunes  = 1000
+	maxHandoffObjective  = 4000
+	maxSessionRequestKey = 200
 )
 
 var sessionStageKinds = map[string]struct{}{
@@ -30,6 +31,205 @@ var (
 	ErrIssueSessionNotRunnable        = errors.New("issue session is not runnable")
 	ErrIssueSessionRuntimeUnavailable = errors.New("local Codex runtime is not online")
 )
+
+type IssueSessionMessageResult struct {
+	Issue   Issue
+	Comment Comment
+	TaskID  string
+	Outcome string
+	Created bool
+}
+
+// SendIssueSessionMessage atomically records one user-visible turn and its
+// corresponding run. A second call with the same request key reads the first
+// result back instead of creating either half twice.
+func (s *Store) SendIssueSessionMessage(ctx context.Context, workspaceID, issueID, requestKey, content string, attachmentIDs []string) (IssueSessionMessageResult, error) {
+	requestKey, content = strings.TrimSpace(requestKey), strings.TrimSpace(content)
+	if requestKey == "" || len(requestKey) > maxSessionRequestKey {
+		return IssueSessionMessageResult{}, fmt.Errorf("%w: request key is required and bounded", ErrIssueSessionNotRunnable)
+	}
+	if content == "" {
+		return IssueSessionMessageResult{}, fmt.Errorf("%w: content is required", ErrIssueSessionNotRunnable)
+	}
+
+	tx, err := s.db.BeginTx(ctx, nil)
+	if err != nil {
+		return IssueSessionMessageResult{}, fmt.Errorf("beginning issue session message: %w", err)
+	}
+	defer func() { _ = tx.Rollback() }()
+
+	var existingTaskID, existingCommentID, existingStatus string
+	err = tx.QueryRowContext(ctx, `SELECT tr.id, tr.trigger_comment_id, tr.status FROM task_runs tr JOIN issues i ON i.id=tr.issue_id WHERE tr.request_key=? AND tr.issue_id=? AND i.workspace_id=?`, requestKey, issueID, workspaceID).Scan(&existingTaskID, &existingCommentID, &existingStatus)
+	if err == nil {
+		if err := tx.Commit(); err != nil {
+			return IssueSessionMessageResult{}, err
+		}
+		return s.readIssueSessionMessageResult(ctx, workspaceID, issueID, existingTaskID, existingCommentID, sessionMessageOutcome(existingStatus), false)
+	}
+	if !errors.Is(err, sql.ErrNoRows) {
+		return IssueSessionMessageResult{}, fmt.Errorf("checking issue session request identity: %w", err)
+	}
+
+	var statusCategory string
+	var assigneeType, assigneeID sql.NullString
+	err = tx.QueryRowContext(ctx, `SELECT COALESCE(st.category, i.status), i.assignee_type, i.assignee_id
+		FROM issues i LEFT JOIN issue_statuses st ON st.workspace_id=i.workspace_id AND st.key=i.status
+		WHERE i.workspace_id=? AND i.id=?`, workspaceID, issueID).Scan(&statusCategory, &assigneeType, &assigneeID)
+	if err != nil {
+		return IssueSessionMessageResult{}, fmt.Errorf("reading issue for session message: %w", err)
+	}
+	if statusCategory == "done" || statusCategory == "cancelled" {
+		return IssueSessionMessageResult{}, fmt.Errorf("%w: finished issue", ErrIssueSessionNotRunnable)
+	}
+	if assigneeType.Valid || assigneeID.Valid {
+		if !assigneeType.Valid || !assigneeID.Valid || assigneeType.String != "agent" || assigneeID.String != LocalAgentID {
+			return IssueSessionMessageResult{}, fmt.Errorf("%w: issue is assigned to another actor", ErrIssueSessionNotRunnable)
+		}
+	} else if statusCategory != "backlog" {
+		return IssueSessionMessageResult{}, fmt.Errorf("%w: only an unassigned backlog issue can be claimed", ErrIssueSessionNotRunnable)
+	}
+
+	var runtimeID string
+	if err := tx.QueryRowContext(ctx, `SELECT id FROM runtimes WHERE workspace_id=? AND provider='codex' AND status='online' ORDER BY updated_at DESC LIMIT 1`, workspaceID).Scan(&runtimeID); err != nil {
+		if errors.Is(err, sql.ErrNoRows) {
+			return IssueSessionMessageResult{}, ErrIssueSessionRuntimeUnavailable
+		}
+		return IssueSessionMessageResult{}, fmt.Errorf("reading Codex runtime for session message: %w", err)
+	}
+
+	var sessionID, stageID string
+	if err := tx.QueryRowContext(ctx, `SELECT id, active_stage_id FROM issue_sessions WHERE workspace_id=? AND issue_id=?`, workspaceID, issueID).Scan(&sessionID, &stageID); err != nil {
+		return IssueSessionMessageResult{}, fmt.Errorf("reading issue session for message: %w", err)
+	}
+	stamp := now()
+	if !assigneeType.Valid && !assigneeID.Valid {
+		if _, err := tx.ExecContext(ctx, `UPDATE issues SET status='in_progress', assignee_type='agent', assignee_id=?, revision=revision+1, updated_at=?, last_activity_at=? WHERE workspace_id=? AND id=?`, LocalAgentID, stamp, stamp, workspaceID, issueID); err != nil {
+			return IssueSessionMessageResult{}, fmt.Errorf("aligning parked issue for session message: %w", err)
+		}
+	}
+
+	// Recover a waiting turn left behind by a process interruption before
+	// accepting another one, then decide whether this turn can be claimed now.
+	if _, err := promoteWaitingIssueRunTx(ctx, tx, issueID, stamp); err != nil {
+		return IssueSessionMessageResult{}, fmt.Errorf("recovering waiting issue run: %w", err)
+	}
+	var activeTaskID string
+	err = tx.QueryRowContext(ctx, `SELECT id FROM task_runs WHERE issue_id=? AND status IN ('queued','dispatched','waiting_local_directory','running') ORDER BY created_at LIMIT 1`, issueID).Scan(&activeTaskID)
+	if err != nil && !errors.Is(err, sql.ErrNoRows) {
+		return IssueSessionMessageResult{}, fmt.Errorf("checking active issue run: %w", err)
+	}
+
+	var revision int64
+	if err := tx.QueryRowContext(ctx, `UPDATE issues SET revision=revision+1, updated_at=?, last_activity_at=? WHERE id=? RETURNING revision`, stamp, stamp, issueID).Scan(&revision); err != nil {
+		return IssueSessionMessageResult{}, fmt.Errorf("updating issue for session message: %w", err)
+	}
+	commentID := uuid.NewString()
+	if _, err := tx.ExecContext(ctx, `INSERT INTO comments(id, issue_id, author_type, author_id, content, type, issue_revision, created_at, updated_at) VALUES (?, ?, 'system', ?, ?, 'comment', ?, ?, ?)`, commentID, issueID, LocalActorID, content, revision, stamp, stamp); err != nil {
+		return IssueSessionMessageResult{}, fmt.Errorf("recording issue session message: %w", err)
+	}
+	if len(attachmentIDs) > 0 {
+		if err := bindAttachmentsTx(ctx, tx, workspaceID, issueID, commentID, attachmentIDs); err != nil {
+			return IssueSessionMessageResult{}, fmt.Errorf("binding issue session message attachments: %w", err)
+		}
+	}
+
+	taskID, runStatus := uuid.NewString(), "queued"
+	var priorTaskID sql.NullString
+	continuityState, continuityReason := "fresh", ""
+	if activeTaskID != "" {
+		runStatus = "waiting_previous_run"
+		continuityState = "pending"
+	} else {
+		continuityState, continuityReason, err = latestRunContinuityTx(ctx, tx, issueID, taskID, &priorTaskID)
+		if err != nil {
+			return IssueSessionMessageResult{}, err
+		}
+	}
+	if _, err := tx.ExecContext(ctx, `INSERT INTO task_runs(id, issue_id, status, runtime, session_id, stage_id, prior_task_id, trigger_comment_id, request_key, continuity_state, continuity_reason, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`, taskID, issueID, runStatus, runtimeID, sessionID, stageID, nullable(priorTaskID.String), commentID, requestKey, continuityState, nullable(continuityReason), stamp, stamp); err != nil {
+		return IssueSessionMessageResult{}, fmt.Errorf("queueing issue session message run: %w", err)
+	}
+	if runStatus == "queued" {
+		if _, err := tx.ExecContext(ctx, `UPDATE issue_sessions SET continuity_state=?, continuity_reason=?, updated_at=? WHERE id=?`, continuityState, nullable(continuityReason), stamp, sessionID); err != nil {
+			return IssueSessionMessageResult{}, fmt.Errorf("updating issue session continuity: %w", err)
+		}
+	}
+	if err := tx.Commit(); err != nil {
+		return IssueSessionMessageResult{}, fmt.Errorf("committing issue session message: %w", err)
+	}
+	return s.readIssueSessionMessageResult(ctx, workspaceID, issueID, taskID, commentID, sessionMessageOutcome(runStatus), true)
+}
+
+func sessionMessageOutcome(status string) string {
+	if status == "waiting_previous_run" {
+		return "waiting"
+	}
+	return "queued"
+}
+
+func (s *Store) readIssueSessionMessageResult(ctx context.Context, workspaceID, issueID, taskID, commentID, outcome string, created bool) (IssueSessionMessageResult, error) {
+	issue, err := s.GetIssue(ctx, workspaceID, issueID)
+	if err != nil {
+		return IssueSessionMessageResult{}, err
+	}
+	comment, err := scanComment(s.db.QueryRowContext(ctx, `SELECT id, issue_id, author_type, author_id, content, type, parent_id, created_at, updated_at, revision, issue_revision, resolved_at, resolved_by_type, resolved_by_id, source_task_id, quick_action_id FROM comments WHERE id=?`, commentID))
+	if err != nil {
+		return IssueSessionMessageResult{}, err
+	}
+	attachments, err := s.listAttachments(ctx, workspaceID, "", commentID)
+	if err != nil {
+		return IssueSessionMessageResult{}, err
+	}
+	for index := range attachments {
+		attachments[index] = attachmentWithURLs(attachments[index])
+	}
+	comment.Attachments = attachments
+	return IssueSessionMessageResult{Issue: issue, Comment: comment, TaskID: taskID, Outcome: outcome, Created: created}, nil
+}
+
+func latestRunContinuityTx(ctx context.Context, tx *sql.Tx, issueID, excludeTaskID string, priorTaskID *sql.NullString) (string, string, error) {
+	var historyCount int
+	if err := tx.QueryRowContext(ctx, `SELECT COUNT(*) FROM task_runs WHERE issue_id=? AND id<>?`, issueID, excludeTaskID).Scan(&historyCount); err != nil {
+		return "", "", fmt.Errorf("counting prior issue runs: %w", err)
+	}
+	err := tx.QueryRowContext(ctx, `SELECT id FROM task_runs WHERE issue_id=? AND id<>? AND NULLIF(TRIM(thread_id),'') IS NOT NULL AND NULLIF(TRIM(work_dir),'') IS NOT NULL ORDER BY created_at DESC LIMIT 1`, issueID, excludeTaskID).Scan(priorTaskID)
+	if err != nil && !errors.Is(err, sql.ErrNoRows) {
+		return "", "", fmt.Errorf("reading prior issue continuation pointer: %w", err)
+	}
+	if priorTaskID.Valid {
+		return "pending", "", nil
+	}
+	if historyCount > 0 {
+		return "gap", "missing_resume_pointer", nil
+	}
+	return "fresh", "", nil
+}
+
+func promoteWaitingIssueRunTx(ctx context.Context, tx *sql.Tx, issueID, stamp string) (string, error) {
+	var active int
+	if err := tx.QueryRowContext(ctx, `SELECT COUNT(*) FROM task_runs WHERE issue_id=? AND status IN ('queued','dispatched','waiting_local_directory','running')`, issueID).Scan(&active); err != nil || active > 0 {
+		return "", err
+	}
+	var taskID, sessionID string
+	err := tx.QueryRowContext(ctx, `SELECT id, session_id FROM task_runs WHERE issue_id=? AND status='waiting_previous_run' ORDER BY created_at LIMIT 1`, issueID).Scan(&taskID, &sessionID)
+	if errors.Is(err, sql.ErrNoRows) {
+		return "", nil
+	}
+	if err != nil {
+		return "", err
+	}
+	var priorTaskID sql.NullString
+	state, reason, err := latestRunContinuityTx(ctx, tx, issueID, taskID, &priorTaskID)
+	if err != nil {
+		return "", err
+	}
+	if _, err := tx.ExecContext(ctx, `UPDATE task_runs SET status='queued', prior_task_id=?, continuity_state=?, continuity_reason=?, updated_at=? WHERE id=? AND status='waiting_previous_run'`, nullable(priorTaskID.String), state, nullable(reason), stamp, taskID); err != nil {
+		return "", err
+	}
+	if _, err := tx.ExecContext(ctx, `UPDATE issue_sessions SET continuity_state=?, continuity_reason=?, updated_at=? WHERE id=?`, state, nullable(reason), stamp, sessionID); err != nil {
+		return "", err
+	}
+	return taskID, nil
+}
 
 func isSessionStageKind(kind string) bool {
 	_, ok := sessionStageKinds[kind]
@@ -106,7 +306,7 @@ func (s *Store) ContinueIssueSession(ctx context.Context, workspaceID, issueID s
 	}
 
 	var activeTaskID string
-	err = tx.QueryRowContext(ctx, `SELECT id FROM task_runs WHERE issue_id=? AND status IN ('queued','dispatched','waiting_local_directory','running') ORDER BY created_at DESC LIMIT 1`, issueID).Scan(&activeTaskID)
+	err = tx.QueryRowContext(ctx, `SELECT id FROM task_runs WHERE issue_id=? AND status IN ('queued','dispatched','waiting_local_directory','running','waiting_previous_run') ORDER BY CASE WHEN status='waiting_previous_run' THEN 1 ELSE 0 END, created_at DESC LIMIT 1`, issueID).Scan(&activeTaskID)
 	if err == nil {
 		if err := tx.Commit(); err != nil {
 			return Issue{}, "", "", fmt.Errorf("committing active issue session continuation: %w", err)

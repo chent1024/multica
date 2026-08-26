@@ -529,6 +529,7 @@ function TaskRow({
     timeMode === "active" &&
     (task.status === "queued" ||
       task.status === "dispatched" ||
+      task.status === "waiting_previous_run" ||
       task.status === "running");
 
   const handleCancel = async () => {
@@ -801,6 +802,8 @@ function taskStatusLabel(status: AgentTask["status"], t: AgentsT): string {
       return t(($) => $.tab_body.activity.status.dispatched);
     case "waiting_local_directory":
       return t(($) => $.tab_body.activity.status.waiting_local_directory);
+    case "waiting_previous_run":
+      return t(($) => $.tab_body.activity.status.waiting_previous_run);
     case "running":
       return t(($) => $.tab_body.activity.status.running);
     case "completed":

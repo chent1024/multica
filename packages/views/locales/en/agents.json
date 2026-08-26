@@ -678,6 +678,7 @@
         "queued": "Queued",
         "dispatched": "Dispatched",
         "waiting_local_directory": "Waiting for directory",
+        "waiting_previous_run": "Waiting for the current turn",
         "running": "Running",
         "completed": "Succeeded",
         "failed": "Failed",

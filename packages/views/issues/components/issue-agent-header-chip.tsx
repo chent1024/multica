@@ -69,6 +69,7 @@ export const IssueAgentHeaderChip = memo(function IssueAgentHeaderChip({
         // Daemon-parked on a busy local_directory — still active, just
         // waiting on a path lock. Belongs in the live chip, not dropped.
         task.status === "waiting_local_directory"
+        || task.status === "waiting_previous_run"
       )
         queued.push(task);
       // Terminal statuses are the execution log's story, not the live chip's.

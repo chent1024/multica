@@ -5,9 +5,9 @@ import type { ReactNode } from "react";
 import { describe, expect, it, vi } from "vitest";
 import { setApiInstance } from "../api";
 import type { ApiClient } from "../api/client";
-import type { AgentTask, Issue, IssueSession } from "../types";
+import type { AgentTask, Issue, IssueSession, TimelineEntry } from "../types";
 import { issueKeys } from "./queries";
-import { issueSessionKeys, issueSessionOptions, useActivateIssueSessionStage, useContinueIssueSession } from "./session";
+import { issueSessionKeys, issueSessionOptions, useActivateIssueSessionStage, useContinueIssueSession, useSendIssueSessionMessage } from "./session";
 
 const base: IssueSession = {
   id: "session-1", issue_id: "issue-1", workspace_id: "ws-1", active_stage_id: "stage-1",
@@ -74,5 +74,27 @@ describe("issue session queries and stage mutation", () => {
 
     expect(qc.getQueryData(issueKeys.detail("ws-1", "issue-1"))).toEqual(issue);
     expect(qc.getQueryData<AgentTask[]>(issueKeys.tasks("issue-1"))).toEqual([task]);
+  });
+
+  it("adopts an atomic user turn in issue, timeline, and run caches without duplicates", async () => {
+    const waitingTask = { ...task, id: "run-waiting", status: "waiting_previous_run" as const, trigger_comment_id: "comment-1" };
+    const comment = {
+      id: "comment-1", issue_id: "issue-1", author_type: "system", author_id: "local-user", content: "Continue",
+      type: "comment", parent_id: null, reactions: [], attachments: [], created_at: "2026-01-01T00:00:01Z", updated_at: "2026-01-01T00:00:01Z",
+      resolved_at: null, resolved_by_type: null, resolved_by_id: null,
+    };
+    setApiInstance({
+      sendIssueSessionMessage: vi.fn().mockResolvedValue({ outcome: "waiting", issue, comment, task: waitingTask }),
+    } as unknown as ApiClient);
+    const qc = new QueryClient({ defaultOptions: { queries: { retry: false }, mutations: { retry: false } } });
+    qc.setQueryData<TimelineEntry[]>(issueKeys.timeline("issue-1"), []);
+    qc.setQueryData(issueKeys.tasks("issue-1"), [waitingTask]);
+    const { result } = renderHook(() => useSendIssueSessionMessage("ws-1", "issue-1"), { wrapper: wrapper(qc) });
+
+    await act(async () => { await result.current.mutateAsync({ content: "Continue" }); });
+
+    expect(qc.getQueryData(issueKeys.detail("ws-1", "issue-1"))).toEqual(issue);
+    expect(qc.getQueryData<TimelineEntry[]>(issueKeys.timeline("issue-1"))?.map((entry) => entry.id)).toEqual(["comment-1"]);
+    expect(qc.getQueryData<AgentTask[]>(issueKeys.tasks("issue-1"))).toEqual([waitingTask]);
   });
 });

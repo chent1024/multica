@@ -666,6 +666,7 @@
         "queued": "排队中",
         "dispatched": "已派发",
         "waiting_local_directory": "等待目录",
+        "waiting_previous_run": "等待当前轮次",
         "running": "进行中",
         "completed": "成功",
         "failed": "失败",

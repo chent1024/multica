@@ -1678,6 +1678,13 @@ export const IssueSessionContinuationSchema = z.object({
 	task: AgentTaskSchema,
 });
 
+export const IssueSessionMessageSchema = z.object({
+	outcome: z.enum(["queued", "waiting"]),
+	issue: IssueSchema,
+	comment: CommentSchema,
+	task: AgentTaskSchema,
+});
+
 export const AgentTaskListSchema = z.array(AgentTaskSchema);
 
 // Task cancellation (`POST /api/tasks/:id/cancel`) is consumed directly by

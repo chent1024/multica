@@ -229,6 +229,8 @@ func migrateLocalSchema(ctx context.Context, db *sql.DB) error {
 		{name: "stage_id", sql: `ALTER TABLE task_runs ADD COLUMN stage_id TEXT`},
 		{name: "work_dir", sql: `ALTER TABLE task_runs ADD COLUMN work_dir TEXT`},
 		{name: "prior_task_id", sql: `ALTER TABLE task_runs ADD COLUMN prior_task_id TEXT`},
+		{name: "trigger_comment_id", sql: `ALTER TABLE task_runs ADD COLUMN trigger_comment_id TEXT`},
+		{name: "request_key", sql: `ALTER TABLE task_runs ADD COLUMN request_key TEXT`},
 		{name: "continuity_state", sql: `ALTER TABLE task_runs ADD COLUMN continuity_state TEXT NOT NULL DEFAULT 'fresh'`},
 		{name: "continuity_reason", sql: `ALTER TABLE task_runs ADD COLUMN continuity_reason TEXT`},
 	} {
@@ -237,6 +239,12 @@ func migrateLocalSchema(ctx context.Context, db *sql.DB) error {
 				return err
 			}
 		}
+	}
+	if _, err := tx.ExecContext(ctx, `CREATE UNIQUE INDEX IF NOT EXISTS task_runs_request_key_idx ON task_runs(issue_id, request_key) WHERE request_key IS NOT NULL`); err != nil {
+		return err
+	}
+	if _, err := tx.ExecContext(ctx, `INSERT OR IGNORE INTO schema_version(version, applied_at) VALUES (8, ?)`, now()); err != nil {
+		return err
 	}
 	if _, err := tx.ExecContext(ctx, `CREATE TABLE IF NOT EXISTS issue_sessions (
 		id TEXT PRIMARY KEY,

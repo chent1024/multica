@@ -1,6 +1,6 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { ApiClient } from "./client";
-import { AgentTaskSchema, IssueSessionContinuationSchema, IssueSessionSchema } from "./schemas";
+import { AgentTaskSchema, IssueSessionContinuationSchema, IssueSessionMessageSchema, IssueSessionSchema } from "./schemas";
 
 const session = {
   id: "session-1", issue_id: "issue-1", workspace_id: "ws-1", active_stage_id: "stage-1",
@@ -61,5 +61,30 @@ describe("issue session client contract", () => {
       expect.objectContaining({ method: "POST" }),
     );
     expect(() => IssueSessionContinuationSchema.parse({ ...payload, outcome: "unknown" })).toThrow();
+  });
+
+  it("sends one idempotent conversation turn and accepts a waiting run", async () => {
+    const comment = {
+      id: "comment-1", issue_id: "issue-1", author_type: "system", author_id: "local-user", content: "Continue",
+      type: "comment", parent_id: null, reactions: [], attachments: [], created_at: "2026-01-01T00:00:01Z", updated_at: "2026-01-01T00:00:01Z",
+    };
+    const payload = { outcome: "waiting", issue, comment, task: { ...task, status: "waiting_previous_run", trigger_comment_id: "comment-1" } };
+    const fetchMock = vi.fn().mockResolvedValue(new Response(JSON.stringify(payload), {
+      status: 201,
+      headers: { "Content-Type": "application/json" },
+    }));
+    vi.stubGlobal("fetch", fetchMock);
+
+    const client = new ApiClient("https://api.example.test");
+    await expect(client.sendIssueSessionMessage("issue-1", "Continue", ["attachment-1"], "request-1")).resolves.toEqual(payload);
+    expect(fetchMock).toHaveBeenCalledWith(
+      "https://api.example.test/api/issues/issue-1/session/messages",
+      expect.objectContaining({
+        method: "POST",
+        headers: expect.objectContaining({ "Idempotency-Key": "request-1" }),
+        body: JSON.stringify({ content: "Continue", attachment_ids: ["attachment-1"] }),
+      }),
+    );
+    expect(IssueSessionMessageSchema.parse(payload).task.status).toBe("waiting_previous_run");
   });
 });

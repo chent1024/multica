@@ -2,12 +2,12 @@
 
 import { useState } from "react";
 import { useQuery } from "@tanstack/react-query";
-import { AlertTriangle, ArrowRight, ChevronDown, Loader2, MessageSquare } from "lucide-react";
+import { AlertTriangle, ArrowRight, ChevronDown } from "lucide-react";
 import type { AgentTask, Issue, IssueSessionStageKind, TimelineEntry } from "@multica/core/types";
 import { issueStatusCategory } from "@multica/core/issues";
 import { issueKeys } from "@multica/core/issues/queries";
 import { api } from "@multica/core/api";
-import { issueSessionOptions, useActivateIssueSessionStage, useContinueIssueSession } from "@multica/core/issues/session";
+import { issueSessionOptions, useActivateIssueSessionStage } from "@multica/core/issues/session";
 import { Button } from "@multica/ui/components/ui/button";
 import {
   DropdownMenu,
@@ -28,12 +28,11 @@ export function IssueSessionWorkspace({ issue, timeline }: { issue: Issue; timel
   const { data: session, isLoading, isError, refetch } = useQuery({
     ...issueSessionOptions(issueId),
   });
-  const { data: tasks = [], isLoading: tasksLoading, isError: tasksError } = useQuery({
+  const { data: tasks = [], isError: tasksError } = useQuery({
     queryKey: issueKeys.tasks(issueId),
     queryFn: () => api.listTasksByIssue(issueId),
   });
   const activate = useActivateIssueSessionStage(issueId);
-  const continuation = useContinueIssueSession(issue.workspace_id, issueId);
   const [openTask, setOpenTask] = useState<AgentTask | null>(null);
 
   if (isLoading) {
@@ -84,25 +83,6 @@ export function IssueSessionWorkspace({ issue, timeline }: { issue: Issue; timel
   const statusCategory = issueStatusCategory(issue);
   const closed = statusCategory === "done" || statusCategory === "cancelled";
   const parked = statusCategory === "backlog";
-  const primaryLabel = model.activeTask
-    ? t(($) => $.issue_session.open_conversation)
-    : tasksLoading
-      ? t(($) => $.issue_session.loading_conversation)
-    : tasks.length > 0
-      ? t(($) => $.issue_session.continue_conversation)
-      : t(($) => $.issue_session.start_conversation);
-  const openConversation = async () => {
-    if (model.activeTask) {
-      setOpenTask(model.activeTask);
-      return;
-    }
-    try {
-      const result = await continuation.mutateAsync();
-      setOpenTask(result.task);
-    } catch {
-      // The mutation owns the error state rendered below.
-    }
-  };
   const compactHandoff = session.handoff
     ? [
         ...session.handoff.confirmed_facts,
@@ -198,17 +178,7 @@ export function IssueSessionWorkspace({ issue, timeline }: { issue: Issue; timel
         )}
 
         <div className="mt-4 flex flex-wrap items-center gap-2">
-          {!closed ? (
-            <Button
-              type="button"
-              size="sm"
-              disabled={continuation.isPending || tasksLoading || tasksError}
-              onClick={() => void openConversation()}
-            >
-              {continuation.isPending ? <Loader2 className="animate-spin" aria-hidden="true" /> : <MessageSquare aria-hidden="true" />}
-              {primaryLabel}
-            </Button>
-          ) : (
+          {closed && (
             <span className="text-caption text-muted-foreground">
               {t(($) => $.issue_session.closed_hint)}
             </span>
@@ -259,11 +229,6 @@ export function IssueSessionWorkspace({ issue, timeline }: { issue: Issue; timel
             {t(($) => $.issue_session.stage_failed)}
           </p>
         )}
-        {continuation.isError && (
-          <p role="alert" className="mt-2 text-caption text-destructive">
-            {t(($) => $.issue_session.continue_failed)}
-          </p>
-        )}
         {tasksError && (
           <p role="alert" className="mt-2 text-caption text-destructive">
             {t(($) => $.issue_session.conversation_load_failed)}
@@ -273,7 +238,7 @@ export function IssueSessionWorkspace({ issue, timeline }: { issue: Issue; timel
           <TranscriptButton
             task={openTask}
             agentName=""
-            isLive={["queued", "dispatched", "waiting_local_directory", "running"].includes(openTask.status)}
+            isLive={["queued", "dispatched", "waiting_local_directory", "waiting_previous_run", "running"].includes(openTask.status)}
             renderButton={false}
             open
             onOpenChange={(open) => { if (!open) setOpenTask(null); }}

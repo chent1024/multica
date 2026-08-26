@@ -97,6 +97,7 @@ export function ExecutionLogSection({ issueId, identifier }: ExecutionLogSection
           // (waiting on a path lock), not terminal. Surfacing it here is
           // what tells the user the agent is alive and will resume.
           t.status === "waiting_local_directory" ||
+          t.status === "waiting_previous_run" ||
           t.status === "running",
       ),
     [tasks],
@@ -292,6 +293,7 @@ const STATUS_TONE: Record<AgentTask["status"], string> = {
   // Same tone as queued/dispatched — visually "stopped" so users see the
   // task is parked, but distinguished by the status label.
   waiting_local_directory: "text-warning",
+  waiting_previous_run: "text-warning",
   running: "text-info",
   completed: "text-success",
   failed: "text-destructive",
@@ -339,7 +341,7 @@ export function ActiveTaskRow({
   // Transcript only meaningful once messages exist — pure-queued and
   // waiting_local_directory tasks haven't streamed any agent output yet.
   const showTranscript =
-    task.status !== "queued" && task.status !== "waiting_local_directory";
+    task.status !== "queued" && task.status !== "waiting_local_directory" && task.status !== "waiting_previous_run";
 
   const handleCancel = async () => {
     if (cancelling) return;
@@ -601,6 +603,7 @@ function supportsCommentCoverage(status: AgentTask["status"]): boolean {
     case "queued":
     case "dispatched":
     case "waiting_local_directory":
+    case "waiting_previous_run":
     case "running":
     case "completed":
     case "failed":

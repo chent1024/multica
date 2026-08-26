@@ -101,7 +101,7 @@ func (s *Store) enqueueAssignedIssue(ctx context.Context, workspaceID, issueID, 
 		return fmt.Errorf("reading issue session for queued run: %w", err)
 	}
 	var active int
-	if err := tx.QueryRowContext(ctx, `SELECT COUNT(*) FROM task_runs WHERE issue_id=? AND status IN ('queued','dispatched','waiting_local_directory','running')`, issueID).Scan(&active); err != nil {
+	if err := tx.QueryRowContext(ctx, `SELECT COUNT(*) FROM task_runs WHERE issue_id=? AND status IN ('queued','dispatched','waiting_local_directory','running','waiting_previous_run')`, issueID).Scan(&active); err != nil {
 		return err
 	}
 	if active > 0 {
@@ -379,8 +379,8 @@ func (s *Server) claimTask(ctx context.Context, daemonID, runtimeID string) (map
 	defer func() { _ = tx.Rollback() }()
 	stamp := now()
 	var taskID, issueID, sessionID, stageID, continuityState string
-	var handoffNote, priorTaskID sql.NullString
-	err = tx.QueryRowContext(ctx, `UPDATE task_runs SET status='dispatched', updated_at=? WHERE id=(SELECT tr.id FROM task_runs tr JOIN issues i ON i.id=tr.issue_id WHERE tr.status='queued' AND tr.runtime=? AND i.workspace_id=? ORDER BY tr.created_at LIMIT 1) RETURNING id, issue_id, handoff_note, session_id, stage_id, prior_task_id, continuity_state`, stamp, runtimeID, workspaceID).Scan(&taskID, &issueID, &handoffNote, &sessionID, &stageID, &priorTaskID, &continuityState)
+	var handoffNote, priorTaskID, triggerCommentID sql.NullString
+	err = tx.QueryRowContext(ctx, `UPDATE task_runs SET status='dispatched', updated_at=? WHERE id=(SELECT tr.id FROM task_runs tr JOIN issues i ON i.id=tr.issue_id WHERE tr.status='queued' AND tr.runtime=? AND i.workspace_id=? ORDER BY tr.created_at LIMIT 1) RETURNING id, issue_id, handoff_note, session_id, stage_id, prior_task_id, trigger_comment_id, continuity_state`, stamp, runtimeID, workspaceID).Scan(&taskID, &issueID, &handoffNote, &sessionID, &stageID, &priorTaskID, &triggerCommentID, &continuityState)
 	if errors.Is(err, sql.ErrNoRows) {
 		return nil, tx.Commit()
 	}
@@ -410,6 +410,17 @@ func (s *Server) claimTask(ctx context.Context, daemonID, runtimeID string) (map
 	}
 	if handoffNote.Valid && strings.TrimSpace(handoffNote.String) != "" {
 		task["handoff_note"] = handoffNote.String
+	}
+	if triggerCommentID.Valid && strings.TrimSpace(triggerCommentID.String) != "" {
+		var triggerContent, triggerAuthorType, triggerAuthorID string
+		if err := s.store.db.QueryRowContext(ctx, `SELECT content, author_type, author_id FROM comments WHERE id=? AND issue_id=?`, triggerCommentID.String, issueID).Scan(&triggerContent, &triggerAuthorType, &triggerAuthorID); err != nil {
+			return nil, fmt.Errorf("reading issue session trigger comment: %w", err)
+		}
+		task["trigger_comment_id"] = triggerCommentID.String
+		task["trigger_thread_id"] = triggerCommentID.String
+		task["trigger_comment_content"] = triggerContent
+		task["trigger_author_type"] = triggerAuthorType
+		task["trigger_author_name"] = triggerAuthorID
 	}
 	if priorTaskID.Valid && strings.TrimSpace(priorTaskID.String) != "" {
 		var priorSessionID, priorWorkDir sql.NullString
@@ -544,6 +555,7 @@ func (s *Server) daemonTaskState(w http.ResponseWriter, r *http.Request) {
 	sessionID, _ := body["session_id"].(string)
 	workDir, _ := body["work_dir"].(string)
 	terminal := status == "completed" || status == "failed"
+	createdCommentID := ""
 	if err := pinTaskSessionTx(r.Context(), tx, ws.ID, chi.URLParam(r, "taskID"), sessionID, workDir, terminal); err != nil && !errors.Is(err, sql.ErrNoRows) {
 		s.fail(w, err)
 		return
@@ -590,7 +602,8 @@ func (s *Server) daemonTaskState(w http.ResponseWriter, r *http.Request) {
 				s.fail(w, err)
 				return
 			}
-			if _, err := tx.ExecContext(r.Context(), `INSERT INTO comments(id, issue_id, author_type, author_id, content, type, issue_revision, created_at, updated_at) VALUES (?, ?, 'agent', ?, ?, 'comment', ?, ?, ?)`, uuid.NewString(), issueID, LocalAgentID, output, revision, stamp, stamp); err != nil {
+			createdCommentID = uuid.NewString()
+			if _, err := tx.ExecContext(r.Context(), `INSERT INTO comments(id, issue_id, author_type, author_id, content, type, issue_revision, source_task_id, created_at, updated_at) VALUES (?, ?, 'agent', ?, ?, 'comment', ?, ?, ?, ?)`, createdCommentID, issueID, LocalAgentID, output, revision, taskID, stamp, stamp); err != nil {
 				s.fail(w, err)
 				return
 			}
@@ -608,11 +621,29 @@ func (s *Server) daemonTaskState(w http.ResponseWriter, r *http.Request) {
 			s.fail(w, err)
 			return
 		}
+		if _, err := promoteWaitingIssueRunTx(r.Context(), tx, issueID, stamp); err != nil {
+			s.fail(w, err)
+			return
+		}
 	}
 	if err := tx.Commit(); err != nil {
 		s.fail(w, err)
 		return
 	}
+	if issue, err := s.store.GetIssue(r.Context(), ws.ID, issueID); err == nil {
+		s.hub.broadcast("issue:updated", map[string]any{"issue": issue})
+	}
+	if createdCommentID != "" {
+		if comment, err := scanComment(s.store.db.QueryRowContext(r.Context(), `SELECT id, issue_id, author_type, author_id, content, type, parent_id, created_at, updated_at, revision, issue_revision, resolved_at, resolved_by_type, resolved_by_id, source_task_id, quick_action_id FROM comments WHERE id=?`, createdCommentID)); err == nil {
+			s.hub.broadcast("comment:created", map[string]any{"comment": comment})
+		}
+	}
+	s.hub.broadcast("task:"+status, map[string]any{
+		"task_id":  taskID,
+		"agent_id": LocalAgentID,
+		"issue_id": issueID,
+		"status":   status,
+	})
 	writeJSON(w, http.StatusOK, map[string]any{})
 }
 
