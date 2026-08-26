@@ -1,7 +1,7 @@
 "use client";
 
 import { memo, useCallback, useEffect, useRef, useState, type ReactNode } from "react";
-import { CheckCircle2, ChevronRight, ListChevronsDownUp, Copy, Loader2, MoreHorizontal, Pencil, RotateCcw, Trash2 } from "lucide-react";
+import { CheckCircle2, ChevronRight, ListChevronsDownUp, Copy, Loader2, MoreHorizontal, Pencil, RotateCcw, Trash2, UserRound } from "lucide-react";
 import { toast } from "sonner";
 import { Card } from "@multica/ui/components/ui/card";
 import { Button } from "@multica/ui/components/ui/button";
@@ -90,6 +90,13 @@ function StickyHeaderShell({
 interface CommentCardProps {
   issueId: string;
   entry: TimelineEntry;
+  /**
+   * Top-level issue-session presentation. Replies intentionally keep their
+   * existing threaded layout; only the session root alternates left/right.
+   */
+  conversationRole?: "local" | "agent";
+  /** Agent identity for system-authored output emitted during a Codex run. */
+  conversationAgentId?: string;
   /**
    * Flat list of every nested reply under this thread root, in render order.
    * Computed once in `issue-detail.tsx`'s `timelineView` and stabilized so
@@ -833,6 +840,8 @@ function CommentRow({
 function CommentCardImpl({
   issueId,
   entry,
+  conversationRole = "agent",
+  conversationAgentId,
   replies,
   currentUserId,
   canModerate = false,
@@ -900,12 +909,23 @@ function CommentCardImpl({
   // the same offset would stack and hide one.
   const stickyHeader =
     open && !onCollapseResolved && !(replyResolutionId != null && threadExpanded);
+  const displayActorType =
+    conversationRole === "agent" && entry.actor_type === "system" && conversationAgentId
+      ? "agent"
+      : entry.actor_type;
+  const displayActorId =
+    displayActorType === "agent" && conversationAgentId
+      ? conversationAgentId
+      : entry.actor_id;
 
   return (
     // overflow-clip (not -hidden) clips the rounded corners WITHOUT creating a
     // scroll container, so the sticky collapse affordances below resolve to the
     // timeline's scroll parent instead of this card. See PR #3623.
-    <Card className="!py-0 !gap-0 overflow-clip transition-colors duration-700">
+    <Card
+      data-conversation-role={conversationRole}
+      className="!py-0 !gap-0 overflow-clip transition-colors duration-700"
+    >
       {onCollapseResolved && (
         <button
           type="button"
@@ -930,19 +950,34 @@ function CommentCardImpl({
             highlighted={isHighlighted}
             className="px-4 max-md:px-3 py-3"
           >
-            <div className="flex items-center gap-2.5">
+            <div className={cn("flex items-center gap-2.5", conversationRole === "local" && "justify-end")}>
               <button
                 type="button"
                 aria-expanded={open}
                 aria-controls={`comment-body-${entry.id}`}
                 onClick={handleToggle}
-                className="shrink-0 rounded p-0.5 text-muted-foreground hover:bg-muted hover:text-foreground transition-colors"
+                className={cn(
+                  "shrink-0 rounded p-0.5 text-muted-foreground hover:bg-muted hover:text-foreground transition-colors",
+                  conversationRole === "local" && "mr-auto",
+                )}
               >
                 <ChevronRight className={cn("h-3.5 w-3.5 transition-transform", open && "rotate-90")} />
               </button>
-              <ActorAvatar actorType={entry.actor_type} actorId={entry.actor_id} size="md" enableHoverCard showStatusDot />
+              {conversationRole === "local" ? (
+                <span
+                  data-testid="local-actor-avatar"
+                  className="order-last flex size-7 shrink-0 items-center justify-center rounded-full bg-muted text-muted-foreground"
+                  aria-hidden="true"
+                >
+                  <UserRound className="size-4" />
+                </span>
+              ) : (
+                <ActorAvatar actorType={displayActorType} actorId={displayActorId} size="md" enableHoverCard showStatusDot />
+              )}
               <span className="shrink-0 cursor-pointer text-body font-medium">
-                {getActorName(entry.actor_type, entry.actor_id)}
+                {conversationRole === "local"
+                  ? t(($) => $.issue_session.you)
+                  : getActorName(displayActorType, displayActorId)}
               </span>
               <Tooltip>
                 <TooltipTrigger
@@ -969,7 +1004,7 @@ function CommentCardImpl({
               )}
 
               {open && (
-                <div className="ml-auto flex items-center gap-0.5">
+                <div className={cn("flex items-center gap-0.5", conversationRole === "agent" && "ml-auto")}>
                   <DropdownMenu>
                     <DropdownMenuTrigger
                       render={

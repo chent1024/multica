@@ -1,6 +1,8 @@
 {
 	"issue_session": {
 		"section": "Issue 세션",
+		"you": "나",
+		"composer_placeholder": "Codex에게 다음 작업을 알려주세요…",
 		"current_work": "현재 작업",
 		"stages_label": "세션 단계",
 		"history": "단계 기록",

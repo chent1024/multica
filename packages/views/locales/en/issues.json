@@ -1,6 +1,8 @@
 {
 	"issue_session": {
 		"section": "Issue session",
+		"you": "You",
+		"composer_placeholder": "Tell Codex what to do next…",
 		"current_work": "Current work",
 		"stages_label": "Session stages",
 		"history": "History",

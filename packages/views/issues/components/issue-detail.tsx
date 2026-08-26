@@ -48,7 +48,7 @@ import { Dialog, DialogContent, DialogHeader, DialogTitle } from "@multica/ui/co
 import { ActorAvatar } from "../../common/actor-avatar";
 import { PropRow } from "../../common/prop-row";
 import { PropertyIcon } from "../../common/property-icon";
-import type { Attachment, Issue, IssueProperty, IssueStatus, IssueStatusCategory, IssuePriority, TimelineEntry, UpdateIssueRequest } from "@multica/core/types";
+import type { AgentTask, Attachment, Issue, IssueProperty, IssueStatus, IssueStatusCategory, IssuePriority, TimelineEntry, UpdateIssueRequest } from "@multica/core/types";
 import { contentReferencesAttachment } from "@multica/core/types";
 import { STATUS_CONFIG, PRIORITY_CONFIG } from "@multica/core/issues/config";
 import { formatDateOnly, isPastDateOnly } from "@multica/core/issues/date";
@@ -995,7 +995,7 @@ export function IssueDetailSkeleton({ leading }: { leading?: ReactNode } = {}) {
         <div className="flex-1 overflow-y-auto [scrollbar-gutter:stable_both-edges]">
           {/* Gutters match the loaded column exactly (see its comment), so the
               skeleton doesn't reflow sideways when real content mounts. */}
-          <div className="mx-auto w-full max-w-4xl px-3 py-6 space-y-6 md:px-8 md:py-8">
+          <div className="mx-auto w-full max-w-6xl px-3 py-6 space-y-6 md:px-8 md:py-8">
             <Skeleton className="h-8 w-3/4" />
             <div className="space-y-2">
               <Skeleton className="h-4 w-full" />
@@ -1310,6 +1310,15 @@ export function IssueDetail({ issueId, onDelete, onDone, defaultSidebarOpen = tr
     queryKey: issueKeys.tasks(id),
     queryFn: () => api.listTasksByIssue(id),
   });
+  const localSessionMessageIds = useMemo(() => {
+    const ids = new Set<string>();
+    for (const task of issueSessionTasks) {
+      if (task.trigger_comment_id) ids.add(task.trigger_comment_id);
+      for (const commentId of task.coalesced_comment_ids ?? []) ids.add(commentId);
+      for (const commentId of task.delivered_comment_ids ?? []) ids.add(commentId);
+    }
+    return ids;
+  }, [issueSessionTasks]);
   const conversationMarkers = useMemo(
     () => buildIssueConversationMarkers(issueSession, issueSessionTasks),
     [issueSession, issueSessionTasks],
@@ -2549,24 +2558,51 @@ export function IssueDetail({ issueId, onDelete, onDone, defaultSidebarOpen = tr
     }
     if (item.kind === "comment") {
       const isResolved = !!item.entry.resolved_at;
+      const createdAt = Date.parse(item.entry.created_at);
+      const isSystemOutputDuringRun =
+        item.entry.actor_type === "system" &&
+        !localSessionMessageIds.has(item.entry.id) &&
+        issueSessionTasks.some((task: AgentTask) => {
+          const startedAt = Date.parse(task.started_at ?? task.dispatched_at ?? "");
+          const completedAt = task.completed_at ? Date.parse(task.completed_at) : Number.POSITIVE_INFINITY;
+          return Number.isFinite(createdAt) && Number.isFinite(startedAt) && createdAt >= startedAt && createdAt <= completedAt;
+        });
+      const conversationRole =
+        item.entry.actor_type === "agent" || item.entry.source_task_id || isSystemOutputDuringRun
+          ? "agent"
+          : "local";
+      const conversationAgentId =
+        conversationRole === "agent" &&
+        item.entry.actor_type === "system" &&
+        issue.assignee_type === "agent"
+          ? issue.assignee_id ?? undefined
+          : undefined;
       return (
-        <div className="pb-3" id={`comment-${item.id}`}>
-          <CommentCard
-            issueId={id}
-            entry={item.entry}
-            replies={timelineView.threadReplies.get(item.id) ?? EMPTY_REPLIES}
-            currentUserId={user?.id}
-            canModerate={canModerateComments}
-            onReply={submitReply}
-            onReplyAccepted={scrollToTimelineBottom}
-            onEdit={editComment}
-            onDelete={deleteComment}
-            onResolveToggle={handleResolveToggle}
-            onCollapseResolved={isResolved ? () => toggleResolvedExpand(item.id, false) : undefined}
-            expandedResolvedIds={expandedResolved}
-            onResolvedExpandChange={toggleResolvedExpand}
-            highlightedCommentId={highlightedId}
-          />
+        <div
+          className={cn("flex pb-3", conversationRole === "local" ? "justify-end" : "justify-start")}
+          data-conversation-role={conversationRole}
+          id={`comment-${item.id}`}
+        >
+          <div className={cn("w-full", conversationRole === "local" && "max-w-[88%]")}>
+            <CommentCard
+              issueId={id}
+              entry={item.entry}
+              conversationRole={conversationRole}
+              conversationAgentId={conversationAgentId}
+              replies={timelineView.threadReplies.get(item.id) ?? EMPTY_REPLIES}
+              currentUserId={user?.id}
+              canModerate={canModerateComments}
+              onReply={submitReply}
+              onReplyAccepted={scrollToTimelineBottom}
+              onEdit={editComment}
+              onDelete={deleteComment}
+              onResolveToggle={handleResolveToggle}
+              onCollapseResolved={isResolved ? () => toggleResolvedExpand(item.id, false) : undefined}
+              expandedResolvedIds={expandedResolved}
+              onResolvedExpandChange={toggleResolvedExpand}
+              highlightedCommentId={highlightedId}
+            />
+          </div>
         </div>
       );
     }
@@ -2758,7 +2794,7 @@ export function IssueDetail({ issueId, onDelete, onDone, defaultSidebarOpen = tr
             of the scroll: below `md` the composer is not pinned (see
             `useStickyComposer`), so it lands here — right where the launcher
             floats — once the reader scrolls to the bottom. */}
-        <div className="mx-auto w-full max-w-4xl px-3 py-6 max-md:pb-chat-launcher md:px-8 md:py-8">
+        <div className="mx-auto w-full max-w-6xl px-3 py-6 max-md:pb-chat-launcher md:px-8 md:py-8">
           {titleLazy.active && (
             <div className={titleLazy.ready ? undefined : "hidden"}>
               <TitleEditor
@@ -3257,6 +3293,7 @@ export function IssueDetail({ issueId, onDelete, onDone, defaultSidebarOpen = tr
               <CommentInput
                 key={id}
                 issueId={id}
+                mode="session"
                 onSubmit={submitSessionMessage}
                 onAccepted={scrollToTimelineBottom}
               />

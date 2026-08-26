@@ -375,6 +375,24 @@ describe("comment composers", () => {
     expect(shell.className).not.toContain("h-[70vh]");
   });
 
+  it("renders issue-session copy without multi-agent trigger controls", () => {
+    const { container } = renderWithProviders(
+      <CommentInput
+        issueId="issue-1"
+        mode="session"
+        onSubmit={vi.fn().mockResolvedValue(true)}
+      />,
+    );
+
+    expect(screen.getByTestId("comment-composer-shell")).toHaveTextContent(
+      "Tell Codex what to do next…",
+    );
+    activateComposer("comment-composer-shell");
+    expect(screen.getByPlaceholderText("Tell Codex what to do next…")).toBeInTheDocument();
+    // Only attach + send remain. Agent trigger chips add their own buttons.
+    expect(container.querySelectorAll("button")).toHaveLength(2);
+  });
+
   it("renders reply composer without a manual expand control", () => {
     const { container } = renderReplyInput();
 

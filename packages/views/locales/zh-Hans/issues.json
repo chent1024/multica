@@ -1,6 +1,8 @@
 {
 	"issue_session": {
 		"section": "Issue 会话",
+		"you": "你",
+		"composer_placeholder": "继续告诉 Codex 要做什么…",
 		"current_work": "当前工作",
 		"stages_label": "会话阶段",
 		"history": "阶段历史",

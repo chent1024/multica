@@ -1,6 +1,8 @@
 {
 	"issue_session": {
 		"section": "Issue セッション",
+		"you": "あなた",
+		"composer_placeholder": "Codex に次の作業を伝える…",
 		"current_work": "現在の作業",
 		"stages_label": "セッションの段階",
 		"history": "段階の履歴",

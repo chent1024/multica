@@ -17,6 +17,8 @@ import { useStickyComposer } from "../hooks/use-sticky-composer";
 
 interface CommentInputProps {
   issueId: string;
+  /** Session mode targets the single local Codex agent, not comment mentions. */
+  mode?: "comment" | "session";
   /** Resolves true on success, false on failure. The composer keeps the text
    *  (editor locked + button spinning) until this settles, then clears only on
    *  success — a failed send must not silently discard the user's draft. */
@@ -25,10 +27,14 @@ interface CommentInputProps {
   onAccepted?: (commentId: string) => void;
 }
 
-function CommentInput({ issueId, onSubmit, onAccepted }: CommentInputProps) {
+function CommentInput({ issueId, mode = "comment", onSubmit, onAccepted }: CommentInputProps) {
   const { t } = useT("issues");
   const { t: tEditor } = useT("editor");
   const sendShortcut = useShortcut("send");
+  const sessionMode = mode === "session";
+  const placeholder = sessionMode
+    ? t(($) => $.issue_session.composer_placeholder)
+    : t(($) => $.comment.leave_comment_placeholder);
   const editorRef = useRef<ContentEditorRef>(null);
   // Sending mid-upload would strip the pending image's blob URL out of the
   // markdown and bind no attachment id — the comment posts without the file.
@@ -47,7 +53,12 @@ function CommentInput({ issueId, onSubmit, onAccepted }: CommentInputProps) {
   const [content, setContent] = useState(initialDraft ?? "");
   const [isEmpty, setIsEmpty] = useState(() => !initialDraft?.trim());
   const [suppressedAgentIds, setSuppressedAgentIds] = useState<Set<string>>(() => new Set());
-  const triggerPreview = useCommentTriggerPreview({ issueId, content });
+  const triggerPreview = useCommentTriggerPreview({
+    issueId,
+    // An issue session always targets the one local Codex agent. Avoid both
+    // the multi-agent affordance and its preview request in this mode.
+    content: sessionMode ? "" : content,
+  });
   // Uploads for this composer session (MUL-5181). Owned by the module-level
   // coordinator and persisted in the draft store, so closing/scrolling the
   // composer away no longer drops an in-flight upload — its result lands in the
@@ -220,7 +231,7 @@ function CommentInput({ issueId, onSubmit, onAccepted }: CommentInputProps) {
           ref={editorRef}
           defaultValue={initialDraft}
           onReady={lazy.onReady}
-          placeholder={t(($) => $.comment.leave_comment_placeholder)}
+          placeholder={placeholder}
           onUpdate={(md) => {
             setContent(md);
             setIsEmpty(!md.trim());
@@ -250,7 +261,7 @@ function CommentInput({ issueId, onSubmit, onAccepted }: CommentInputProps) {
           data-testid="comment-composer-shell"
           role="button"
           tabIndex={0}
-          aria-label={t(($) => $.comment.leave_comment_placeholder)}
+          aria-label={placeholder}
           className="flex-1 min-h-0 cursor-text px-3 py-2"
           onClick={() => lazy.activate()}
           onKeyDown={(e) => {
@@ -264,19 +275,21 @@ function CommentInput({ issueId, onSubmit, onAccepted }: CommentInputProps) {
               exact type metrics (line-height 1.625 from prose.css), so the
               shell→editor swap doesn't shift layout. */}
           <div className="rich-text-editor text-body">
-            <p className="text-muted-foreground">{t(($) => $.comment.leave_comment_placeholder)}</p>
+            <p className="text-muted-foreground">{placeholder}</p>
           </div>
         </div>
       )}
-      <div className="absolute bottom-1 left-2 right-28 min-w-0">
-        <CommentTriggerChips
-          agents={triggerPreview.agents}
-          blocked={triggerPreview.blocked}
-          draftContent={content}
-          suppressedAgentIds={suppressedAgentIds}
-          onToggle={toggleSuppressedAgent}
-        />
-      </div>
+      {!sessionMode && (
+        <div className="absolute bottom-1 left-2 right-28 min-w-0">
+          <CommentTriggerChips
+            agents={triggerPreview.agents}
+            blocked={triggerPreview.blocked}
+            draftContent={content}
+            suppressedAgentIds={suppressedAgentIds}
+            onToggle={toggleSuppressedAgent}
+          />
+        </div>
+      )}
       <div className="absolute bottom-1 right-1.5 flex items-center gap-1">
         <FileUploadButton
           size="sm"

@@ -770,7 +770,7 @@ describe("IssueDetail (shared)", () => {
     mockApiObj.getIssue.mockReturnValue(new Promise(() => {}));
     const loadingRender = renderIssueDetail();
     const skeletonGutters = horizontalGutters(
-      loadingRender.container.querySelector(".max-w-4xl"),
+      loadingRender.container.querySelector(".max-w-6xl"),
     );
     loadingRender.unmount();
 
@@ -783,7 +783,7 @@ describe("IssueDetail (shared)", () => {
     // Non-empty guard: without it a renamed column class passes vacuously.
     expect(skeletonGutters.length).toBeGreaterThan(0);
     expect(skeletonGutters).toEqual(
-      horizontalGutters(container.querySelector(".max-w-4xl")),
+      horizontalGutters(container.querySelector(".max-w-6xl")),
     );
   });
 
@@ -1026,7 +1026,7 @@ describe("IssueDetail (shared)", () => {
 
     await screen.findByText("Implement authentication");
     fireEvent.click(screen.getByTestId("comment-composer-shell"));
-    const editor = await screen.findByPlaceholderText("Leave a comment...");
+    const editor = await screen.findByPlaceholderText("Tell Codex what to do next…");
     fireEvent.change(editor, { target: { value: "A new update" } });
     const composer = editor.closest<HTMLElement>("[aria-busy], .relative.flex.flex-col.rounded-lg")!;
     fireEvent.click(within(composer).getByRole("button", { name: "Send" }));
@@ -1200,13 +1200,104 @@ describe("IssueDetail (shared)", () => {
   });
 
   it("renders comments from timeline", async () => {
-    renderIssueDetail();
+    const { container } = renderIssueDetail();
 
     await waitFor(() => {
       expect(screen.getByText("Started working on this")).toBeInTheDocument();
     });
 
     expect(screen.getByText("I can help with this")).toBeInTheDocument();
+
+    const localRow = container.querySelector<HTMLElement>(
+      '#comment-comment-1[data-conversation-role="local"]',
+    );
+    const agentRow = container.querySelector<HTMLElement>(
+      '#comment-comment-2[data-conversation-role="agent"]',
+    );
+    expect(localRow).toHaveClass("justify-end");
+    expect(localRow?.firstElementChild).toHaveClass("max-w-[88%]");
+    expect(agentRow).toHaveClass("justify-start");
+    expect(agentRow?.firstElementChild).not.toHaveClass("max-w-[88%]");
+
+    const localCard = localRow?.querySelector<HTMLElement>('[data-slot="card"]');
+    const agentCard = agentRow?.querySelector<HTMLElement>('[data-slot="card"]');
+    // Conversation ownership is expressed by alignment and avatar position;
+    // both sides retain the product's original neutral card surface.
+    expect(localCard).toHaveClass("bg-surface");
+    expect(agentCard).toHaveClass("bg-surface");
+    expect(localCard?.className).not.toMatch(/border-[lr]-/);
+    expect(agentCard?.className).not.toMatch(/border-[lr]-/);
+    expect(within(localRow!).getByText("You")).toBeInTheDocument();
+    expect(within(localRow!).getByTestId("local-actor-avatar")).toHaveClass("order-last");
+    expect(within(agentRow!).getByText("Claude Agent")).toBeInTheDocument();
+  });
+
+  it("uses the single-Codex session composer instead of a multi-agent comment composer", async () => {
+    renderIssueDetail();
+
+    const shell = await screen.findByTestId("comment-composer-shell");
+    expect(shell).toHaveTextContent("Tell Codex what to do next…");
+    fireEvent.click(shell);
+    expect(screen.getByPlaceholderText("Tell Codex what to do next…")).toBeInTheDocument();
+    expect(screen.queryByText("Leave a comment...")).not.toBeInTheDocument();
+  });
+
+  it("keeps a user turn on the right while attributing system output during its run to Codex", async () => {
+    mockApiObj.getIssue.mockResolvedValue({
+      ...mockIssue,
+      assignee_type: "agent",
+      assignee_id: "agent-1",
+    });
+    mockApiObj.listTimeline.mockResolvedValue([
+      {
+        type: "comment",
+        id: "comment-user-turn",
+        actor_type: "system",
+        actor_id: "local-actor",
+        content: "Please inspect the layout",
+        parent_id: null,
+        created_at: "2026-01-18T00:00:00Z",
+        updated_at: "2026-01-18T00:00:00Z",
+        comment_type: "comment",
+      },
+      {
+        type: "comment",
+        id: "comment-cli-output",
+        actor_type: "system",
+        actor_id: "local-actor",
+        content: "The layout inspection is complete",
+        parent_id: null,
+        created_at: "2026-01-18T00:01:00Z",
+        updated_at: "2026-01-18T00:01:00Z",
+        comment_type: "comment",
+      },
+    ]);
+    mockApiObj.listTasksByIssue.mockResolvedValue([{
+      id: "run-1",
+      agent_id: "agent-1",
+      runtime_id: "runtime-1",
+      issue_id: "issue-1",
+      status: "completed",
+      priority: 0,
+      trigger_comment_id: "comment-user-turn",
+      dispatched_at: "2026-01-18T00:00:01Z",
+      started_at: "2026-01-18T00:00:02Z",
+      completed_at: "2026-01-18T00:02:00Z",
+      result: null,
+      error: null,
+      created_at: "2026-01-18T00:00:01Z",
+    }]);
+
+    const { container } = renderIssueDetail();
+    await screen.findByText("The layout inspection is complete");
+
+    const localRow = container.querySelector<HTMLElement>("#comment-comment-user-turn");
+    const agentRow = container.querySelector<HTMLElement>("#comment-comment-cli-output");
+    expect(localRow).toHaveAttribute("data-conversation-role", "local");
+    expect(within(localRow!).getByText("You")).toBeInTheDocument();
+    expect(agentRow).toHaveAttribute("data-conversation-role", "agent");
+    expect(within(agentRow!).getByText("Claude Agent")).toBeInTheDocument();
+    expect(within(agentRow!).getAllByTestId("actor-avatar")[0]).toHaveTextContent("agent:agent-1");
   });
 
   it("reruns the source task from an agent failure comment", async () => {
