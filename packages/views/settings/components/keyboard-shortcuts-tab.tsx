@@ -33,6 +33,7 @@ import {
 import { isImeComposing } from "@multica/core/utils";
 import { useT } from "../../i18n";
 import { ShortcutKeycaps } from "../../common/shortcut-keycaps";
+import { LOCAL_SHORTCUT_ACTION_IDS } from "../../layout/local-navigation";
 import {
   SettingsCard,
   SettingsRow,
@@ -47,7 +48,11 @@ type CaptureError =
   | { kind: "unsafe" }
   | null;
 
-export function KeyboardShortcutsTab() {
+export function KeyboardShortcutsTab({
+  localMode = false,
+}: {
+  localMode?: boolean;
+} = {}) {
   const { t } = useT("settings");
   const [query, setQuery] = useState("");
   const [recording, setRecording] = useState<ShortcutActionId | null>(null);
@@ -60,8 +65,11 @@ export function KeyboardShortcutsTab() {
 
   const visibleActions = useMemo(() => {
     const needle = query.trim().toLocaleLowerCase();
-    if (!needle) return SHORTCUT_ACTIONS;
     return SHORTCUT_ACTIONS.filter((action) => {
+      if (localMode && !LOCAL_SHORTCUT_ACTION_IDS.has(action.id)) {
+        return false;
+      }
+      if (!needle) return true;
       const label = t(($) => $.shortcuts.actions[action.id].label);
       const description = t(
         ($) => $.shortcuts.actions[action.id].description,
@@ -70,7 +78,7 @@ export function KeyboardShortcutsTab() {
         .toLocaleLowerCase()
         .includes(needle);
     });
-  }, [query, t]);
+  }, [localMode, query, t]);
 
   const groups: readonly ShortcutCategory[] = ["general", "navigation"];
 

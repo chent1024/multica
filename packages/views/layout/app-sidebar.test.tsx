@@ -307,6 +307,9 @@ describe("local mode sidebar", () => {
 
     expect(container.querySelector('button[data-href="/acme/issues"]')).not.toBeNull();
     expect(container.querySelector('button[data-href="/acme/projects"]')).not.toBeNull();
+    expect(container.querySelector('button[data-href="/acme/agents"]')).toBeNull();
+    expect(container.querySelector('button[data-href="/acme/runtimes"]')).not.toBeNull();
+    expect(container.querySelector('button[data-href="/acme/settings"]')).not.toBeNull();
     expect(container.querySelector('button[data-href="/acme/inbox"]')).toBeNull();
     expect(container.querySelector('button[data-href="/acme/my-issues"]')).toBeNull();
     expect(screen.queryByText("Acme")).not.toBeInTheDocument();

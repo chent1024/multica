@@ -38,6 +38,17 @@ describe("KeyboardShortcutsTab", () => {
     expect(within(rightSidebarRecorder).getByTitle("/")).toHaveTextContent("/");
   });
 
+  it("hides unavailable navigation actions in local mode", () => {
+    renderWithI18n(<KeyboardShortcutsTab localMode />);
+
+    expect(screen.queryByText("Go to Agents")).not.toBeInTheDocument();
+    expect(screen.queryByText("Go to Inbox")).not.toBeInTheDocument();
+    expect(screen.queryByText("Toggle chat window")).not.toBeInTheDocument();
+    expect(screen.queryByText("Archive inbox item")).not.toBeInTheDocument();
+    expect(screen.getByText("Go to Runtimes")).toBeInTheDocument();
+    expect(screen.getByText("Go to Projects")).toBeInTheDocument();
+  });
+
   it("records a shortcut and applies it immediately", () => {
     renderWithI18n(<KeyboardShortcutsTab />);
     const recorder = screen.getByRole("button", {

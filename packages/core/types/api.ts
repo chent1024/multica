@@ -4,15 +4,13 @@ import type { Project } from "./project";
 import type { AgentTask } from "./agent";
 
 // Issue API
-export interface CreateIssueRequest {
+interface CreateIssueRequestBase {
   title: string;
   description?: string;
   status?: IssueStatus;
   priority?: IssuePriority;
   assignee_type?: IssueAssigneeType;
   assignee_id?: string;
-  parent_issue_id?: string;
-  project_id?: string;
   /** Ordered stage (>= 1) grouping this sub-issue under its parent. */
   stage?: number;
   start_date?: string;
@@ -24,6 +22,12 @@ export interface CreateIssueRequest {
 	/** Immutable context snapshot copied from the parent session. */
 	handoff?: IssueHandoffInput;
 }
+
+export type CreateIssueRequest = CreateIssueRequestBase &
+  (
+    | { project_id: string; parent_issue_id?: string }
+    | { parent_issue_id: string; project_id?: string }
+  );
 
 export type IssueSessionStageKind =
   | "analysis" | "implementation" | "review" | "test"

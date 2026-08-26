@@ -114,6 +114,10 @@ function SkipWelcome({ workspaceId, onDismiss }: SkipWelcomeProps) {
     void (async () => {
       try {
         const lang = pickContentLang(i18n.language);
+        const { projects } = await api.listProjects();
+        if (projects.length !== 1) {
+          throw new Error("welcome guide requires exactly one project");
+        }
         const installRuntime = await seedIssueDeduped(
           `${workspaceId}:install-runtime`,
           {
@@ -123,6 +127,7 @@ function SkipWelcome({ workspaceId, onDismiss }: SkipWelcomeProps) {
             priority: "high",
             assignee_type: "member",
             assignee_id: me.id,
+            project_id: projects[0]!.id,
           },
         );
         void queryClient.invalidateQueries({

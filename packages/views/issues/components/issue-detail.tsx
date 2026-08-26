@@ -2270,6 +2270,8 @@ export function IssueDetail({ issueId, onDelete, onDone, defaultSidebarOpen = tr
             <ProjectPicker
               projectId={issue.project_id}
               onUpdate={handleUpdateField}
+              required
+              disabled={issue.project_id !== null}
             />
           </PropRow>
 
@@ -2646,11 +2648,10 @@ export function IssueDetail({ issueId, onDelete, onDone, defaultSidebarOpen = tr
   };
 
   // Breadcrumb shows the single most-direct container, never a fabricated chain.
-  // project_id and parent_issue_id are orthogonal (a sub-issue can live in a
-  // different project than its parent), so we never render both: parent wins,
-  // else project, else nothing. The project is still shown in the properties
-  // panel. The workspace name is intentionally absent — "all issues" is a view,
-  // not a container.
+  // A child inherits its parent's project, but the parent remains the most
+  // direct container, so we never render both: parent wins, else project. The
+  // project is still shown in the properties panel. The workspace name is
+  // intentionally absent — "all issues" is a view, not a container.
   const breadcrumbSegments: BreadcrumbSegment[] = parentIssue
     ? [{ href: paths.issueDetail(parentIssue.id), label: parentIssue.identifier }]
     : breadcrumbProject

@@ -18,6 +18,7 @@ import { isImeComposing } from "@multica/core/utils";
 import { isFloatingChatRouteSuppressed } from "../chat/floating-chat-visibility";
 import { useNavigation } from "../navigation";
 import { useSearchStore } from "../search/search-store";
+import { LOCAL_SHORTCUT_ACTION_IDS } from "./local-navigation";
 
 const GLOBAL_ACTIONS: readonly ShortcutActionId[] = [
   "openSearch",
@@ -45,7 +46,7 @@ export function shouldIgnoreGlobalShortcutEvent(event: KeyboardEvent): boolean {
 }
 
 /** Executes configurable product-level shortcuts inside the dashboard shell. */
-export function GlobalShortcuts() {
+export function GlobalShortcuts({ localMode = false }: { localMode?: boolean } = {}) {
   const { toggleSidebar } = useSidebar();
   const navigation = useNavigation();
   const workspacePaths = useWorkspacePaths();
@@ -88,6 +89,9 @@ export function GlobalShortcuts() {
 
       const actionId = GLOBAL_ACTIONS.find((candidate) => {
         const action = SHORTCUT_ACTION_BY_ID[candidate];
+        if (localMode && !LOCAL_SHORTCUT_ACTION_IDS.has(candidate)) {
+          return false;
+        }
         if (!action.allowInEditable && isEditableShortcutTarget(event.target)) {
           return false;
         }
@@ -139,7 +143,7 @@ export function GlobalShortcuts() {
 
     document.addEventListener("keydown", handleKeyDown);
     return () => document.removeEventListener("keydown", handleKeyDown);
-  }, [navigation, overrides, toggleSidebar, workspacePaths]);
+  }, [localMode, navigation, overrides, toggleSidebar, workspacePaths]);
 
   return null;
 }

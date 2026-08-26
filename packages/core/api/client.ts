@@ -1096,7 +1096,7 @@ export class ApiClient {
     prompt: string;
     priority?: IssuePriority;
     due_date?: string;
-    project_id?: string | null;
+    project_id: string;
     parent_issue_id?: string | null;
     attachment_ids?: string[];
   }): Promise<{ task_id: string }> {

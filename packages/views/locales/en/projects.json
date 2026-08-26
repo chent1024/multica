@@ -140,12 +140,15 @@
   },
   "delete_dialog": {
     "title": "Delete project",
-    "description": "This will delete the project. Issues will not be deleted but will be unlinked.",
+    "description": "This will delete the project. A project that still has tasks cannot be deleted.",
     "confirm": "Delete",
     "cancel": "Cancel"
   },
   "picker": {
     "no_project": "No project",
+    "select_project": "Select project",
+    "required": "Select a project before creating the task",
+    "add_project": "Add project",
     "empty": "No projects yet",
     "search_placeholder": "Search projects...",
     "clear_aria": "Clear project"

@@ -87,6 +87,7 @@ import {
 } from "@multica/core/shortcuts";
 import { ShortcutKeycaps } from "../common/shortcut-keycaps";
 import { useAppForeground } from "../common/use-app-foreground";
+import { LOCAL_PAGE_KEYS } from "./local-navigation";
 
 // Top-level nav items stay active when the user is on a child route
 // (e.g. "Projects" stays lit on /:slug/projects/:id). Pinned items keep
@@ -163,14 +164,6 @@ const configureNav: { key: NavKey; labelKey: NavLabelKey }[] = [
   { key: "skills", labelKey: "skills" },
   { key: "settings", labelKey: "settings" },
 ];
-
-const LOCAL_NAV_KEYS = new Set<NavKey>([
-  "issues",
-  "projects",
-  "agents",
-  "runtimes",
-  "settings",
-]);
 
 function DraftDot() {
   const hasDraft = useIssueDraftStore((s) => s.hasDraft());
@@ -853,10 +846,12 @@ export function AppSidebar({
           )}
 
           <SidebarGroup>
-            <SidebarGroupLabel>{t(($) => $.sidebar.workspace_group)}</SidebarGroupLabel>
+            {!localMode && (
+              <SidebarGroupLabel>{t(($) => $.sidebar.workspace_group)}</SidebarGroupLabel>
+            )}
             <SidebarGroupContent>
               <SidebarMenu className="gap-0.5">
-                {workspaceNav.filter((item) => !localMode || LOCAL_NAV_KEYS.has(item.key)).map((item) => {
+                {workspaceNav.filter((item) => !localMode || LOCAL_PAGE_KEYS.has(item.key)).map((item) => {
                   const href = p[item.key]();
                   const Icon = routeIconForPath(href);
                   const isActive = !isActivePinnedRoute && isNavActive(pathname, href);
@@ -881,7 +876,7 @@ export function AppSidebar({
             <SidebarGroupLabel>{t(($) => $.sidebar.configure_group)}</SidebarGroupLabel>
             <SidebarGroupContent>
               <SidebarMenu className="gap-0.5">
-                {configureNav.filter((item) => !localMode || LOCAL_NAV_KEYS.has(item.key)).map((item) => {
+                {configureNav.filter((item) => !localMode || LOCAL_PAGE_KEYS.has(item.key)).map((item) => {
                   const href = p[item.key]();
                   const Icon = routeIconForPath(href);
                   const isActive = isNavActive(pathname, href);

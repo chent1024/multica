@@ -238,7 +238,7 @@ export function DesktopShell() {
             hasExternalTrigger
             className="flex-1 bg-app-shell [--sidebar-wrapper-fill:var(--app-shell)]"
           >
-            {slug && <GlobalShortcuts />}
+            {slug && <GlobalShortcuts localMode />}
             {slug && <WindowToolbar />}
             {slug && <AppSidebar localMode topSlot={<SidebarTopSpacer />} searchSlot={<SearchTrigger />} />}
             {/* Right side: header + content container */}

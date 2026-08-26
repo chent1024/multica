@@ -139,12 +139,15 @@
   },
   "delete_dialog": {
     "title": "删除项目",
-    "description": "将删除这个项目。任务不会被删除，只会从项目中解除关联。",
+    "description": "将删除这个项目。仍有任务的项目不能删除。",
     "confirm": "删除",
     "cancel": "取消"
   },
   "picker": {
     "no_project": "无项目",
+    "select_project": "选择项目",
+    "required": "请先选择任务所属项目",
+    "add_project": "添加项目",
     "empty": "还没有项目",
     "search_placeholder": "搜索项目...",
     "clear_aria": "清除项目"

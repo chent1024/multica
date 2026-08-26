@@ -26,7 +26,8 @@ func TestIssueSessionMessageIsAtomicIdempotentAndSerial(t *testing.T) {
 	if _, err := app.store.db.ExecContext(t.Context(), `INSERT INTO runtimes(id, workspace_id, daemon_id, name, provider, version, status, created_at, updated_at) VALUES (?, ?, 'session-daemon', 'Codex', 'codex', '1', 'online', ?, ?)`, runtimeID, workspaces[0].ID, stamp, stamp); err != nil {
 		t.Fatal(err)
 	}
-	issue, err := app.store.CreateIssue(t.Context(), workspaces[0].ID, CreateIssueInput{Title: "Conversation"})
+	project := mustTestProject(t, app, workspaces[0].ID)
+	issue, err := app.store.CreateIssue(t.Context(), workspaces[0].ID, CreateIssueInput{Title: "Conversation", ProjectID: &project.ID})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -149,7 +150,8 @@ func TestIssueSessionMessageRollsBackInvalidAttachments(t *testing.T) {
 	if _, err := app.store.db.ExecContext(t.Context(), `INSERT INTO runtimes(id, workspace_id, daemon_id, name, provider, status, created_at, updated_at) VALUES ('runtime', ?, 'daemon', 'Codex', 'codex', 'online', ?, ?)`, workspaces[0].ID, stamp, stamp); err != nil {
 		t.Fatal(err)
 	}
-	issue, err := app.store.CreateIssue(t.Context(), workspaces[0].ID, CreateIssueInput{Title: "Atomic"})
+	project := mustTestProject(t, app, workspaces[0].ID)
+	issue, err := app.store.CreateIssue(t.Context(), workspaces[0].ID, CreateIssueInput{Title: "Atomic", ProjectID: &project.ID})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -174,7 +176,9 @@ func TestIssueSessionStageAndChildHandoff(t *testing.T) {
 	defer server.Close()
 
 	var parent Issue
-	requestJSON(t, server.URL, http.MethodPost, "/api/issues", map[string]any{"title": "Parent"}, http.StatusCreated, &parent)
+	workspace, _ := app.store.ListWorkspaces(t.Context())
+	project := mustTestProject(t, app, workspace[0].ID)
+	requestJSON(t, server.URL, http.MethodPost, "/api/issues", map[string]any{"title": "Parent", "project_id": project.ID}, http.StatusCreated, &parent)
 	var initial IssueSession
 	requestJSON(t, server.URL, http.MethodGet, "/api/issues/"+parent.ID+"/session", nil, http.StatusOK, &initial)
 	if len(initial.Stages) != 1 || initial.Stages[0].Kind != "analysis" {
@@ -253,7 +257,8 @@ func TestPinTaskSessionClassifiesResumeAndGap(t *testing.T) {
 		t.Fatal(err)
 	}
 	ws := workspaces[0]
-	issue, err := app.store.CreateIssue(t.Context(), ws.ID, CreateIssueInput{Title: "Continuity"})
+	project := mustTestProject(t, app, ws.ID)
+	issue, err := app.store.CreateIssue(t.Context(), ws.ID, CreateIssueInput{Title: "Continuity", ProjectID: &project.ID})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -314,7 +319,8 @@ func TestHandoffUsesTheSourceRunsExactStage(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	parent, err := app.store.CreateIssue(t.Context(), ws[0].ID, CreateIssueInput{Title: "Parent"})
+	project := mustTestProject(t, app, ws[0].ID)
+	parent, err := app.store.CreateIssue(t.Context(), ws[0].ID, CreateIssueInput{Title: "Parent", ProjectID: &project.ID})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -364,7 +370,8 @@ func TestIssueSessionContinuationCommand(t *testing.T) {
 	}
 
 	var issue Issue
-	requestJSON(t, server.URL, http.MethodPost, "/api/issues", map[string]any{"title": "Continue me"}, http.StatusCreated, &issue)
+	project := mustTestProject(t, app, ws.ID)
+	requestJSON(t, server.URL, http.MethodPost, "/api/issues", map[string]any{"title": "Continue me", "project_id": project.ID}, http.StatusCreated, &issue)
 	var sessionBefore IssueSession
 	requestJSON(t, server.URL, http.MethodGet, "/api/issues/"+issue.ID+"/session", nil, http.StatusOK, &sessionBefore)
 	var first struct {
@@ -434,7 +441,8 @@ func TestIssueSessionContinuationIsConcurrentIdempotent(t *testing.T) {
 	if _, err := app.store.db.ExecContext(t.Context(), `INSERT INTO runtimes(id, workspace_id, daemon_id, name, provider, status, created_at, updated_at) VALUES ('runtime-concurrent', ?, 'daemon-concurrent', 'Codex', 'codex', 'online', ?, ?)`, ws.ID, stamp, stamp); err != nil {
 		t.Fatal(err)
 	}
-	issue, err := app.store.CreateIssue(t.Context(), ws.ID, CreateIssueInput{Title: "Continue concurrently"})
+	project := mustTestProject(t, app, ws.ID)
+	issue, err := app.store.CreateIssue(t.Context(), ws.ID, CreateIssueInput{Title: "Continue concurrently", ProjectID: &project.ID})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -499,6 +507,8 @@ func TestIssueSessionContinuationRejectsUnrunnableIssueWithoutPartialChange(t *t
 			if err != nil {
 				t.Fatal(err)
 			}
+			project := mustTestProject(t, app, workspaces[0].ID)
+			tc.input["project_id"] = project.ID
 			if tc.addRuntime {
 				if _, err := app.store.db.ExecContext(t.Context(), `INSERT INTO runtimes(id, workspace_id, daemon_id, name, provider, status, created_at, updated_at) VALUES ('runtime-1', ?, 'daemon-1', 'Codex', 'codex', 'online', ?, ?)`, workspaces[0].ID, now(), now()); err != nil {
 					t.Fatal(err)
@@ -538,7 +548,8 @@ func TestQueuedRunUsesLatestUsableResumePointer(t *testing.T) {
 		t.Fatal(err)
 	}
 	agentType, agentID := "agent", LocalAgentID
-	issue, err := app.store.CreateIssue(t.Context(), workspaces[0].ID, CreateIssueInput{Title: "Resume fallback", AssigneeType: &agentType, AssigneeID: &agentID})
+	project := mustTestProject(t, app, workspaces[0].ID)
+	issue, err := app.store.CreateIssue(t.Context(), workspaces[0].ID, CreateIssueInput{Title: "Resume fallback", AssigneeType: &agentType, AssigneeID: &agentID, ProjectID: &project.ID})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -574,7 +585,8 @@ func TestTerminalRunWithoutReportedSessionBecomesGap(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	issue, err := app.store.CreateIssue(t.Context(), workspaces[0].ID, CreateIssueInput{Title: "Terminal gap"})
+	project := mustTestProject(t, app, workspaces[0].ID)
+	issue, err := app.store.CreateIssue(t.Context(), workspaces[0].ID, CreateIssueInput{Title: "Terminal gap", ProjectID: &project.ID})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -626,7 +638,8 @@ func TestDaemonClaimCarriesIssueSessionContinuityAndHandoff(t *testing.T) {
 		"runtimes": []any{map[string]any{"name": "Codex", "type": "codex", "version": "1.0", "status": "online"}},
 	}, http.StatusOK, &registration)
 	var parent Issue
-	requestJSON(t, server.URL, http.MethodPost, "/api/issues", map[string]any{"title": "Parent"}, http.StatusCreated, &parent)
+	project := mustTestProject(t, app, workspaces[0].ID)
+	requestJSON(t, server.URL, http.MethodPost, "/api/issues", map[string]any{"title": "Parent", "project_id": project.ID}, http.StatusCreated, &parent)
 	var child Issue
 	requestJSON(t, server.URL, http.MethodPost, "/api/issues", map[string]any{
 		"title": "Child", "parent_issue_id": parent.ID, "assignee_type": "agent", "assignee_id": LocalAgentID,

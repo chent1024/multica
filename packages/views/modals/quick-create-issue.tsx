@@ -5,7 +5,6 @@ import {
   ArrowLeftRight,
   CalendarDays,
   Check,
-  ChevronRight,
   FolderKanban,
   Maximize2,
   Minimize2,
@@ -28,7 +27,7 @@ import { Switch } from "@multica/ui/components/ui/switch";
 import { cn } from "@multica/ui/lib/utils";
 import { api, ApiError } from "@multica/core/api";
 import { useWorkspaceId } from "@multica/core/hooks";
-import { useCurrentWorkspace, useWorkspacePaths } from "@multica/core/paths";
+import { useWorkspacePaths } from "@multica/core/paths";
 import { AppLink, resolveClickIntent } from "../navigation";
 import { agentListOptions, squadListOptions } from "@multica/core/workspace/queries";
 import { projectListOptions } from "@multica/core/projects/queries";
@@ -57,7 +56,8 @@ import {
   type Squad,
 } from "@multica/core/types";
 import { ActorAvatar } from "../common/actor-avatar";
-import { ClearablePillButton, PillButton } from "../common/pill-button";
+import { PillButton } from "../common/pill-button";
+import { useModalStore } from "@multica/core/modals";
 import { ProjectPicker } from "../projects/components/project-picker";
 import { DueDatePicker, PriorityIcon, PriorityPicker } from "../issues/components";
 import { isAgentRuntimeBound } from "@multica/core/agents";
@@ -115,7 +115,6 @@ export function AgentCreatePanel({
   const { t } = useT("modals");
   const { t: tProjects } = useT("projects");
   const sendShortcut = useShortcut("send");
-  const workspaceName = useCurrentWorkspace()?.name;
   const workspacePaths = useWorkspacePaths();
   const wsId = useWorkspaceId();
   const { data: agents = [] } = useQuery(agentListOptions(wsId));
@@ -271,19 +270,18 @@ export function AgentCreatePanel({
   const parentIssueIdentifier =
     (data?.parent_issue_identifier as string | undefined) ?? undefined;
 
-  // Stale-id sweep. Once the project list query has actually resolved
-  // (`isSuccess` — distinct from "data is the empty default during loading"),
-  // a `projectId` that isn't in the list means the project was deleted in
-  // another session. Clear local state AND the unfinished draft — the draft
-  // is the only persisted copy left, and leaving it would make the next open
-  // re-seed and submit the same dead value.
+  // Resolve persisted/caller context against the live project list. A single
+  // local project is unambiguous and can be selected automatically; multiple
+  // projects require an explicit choice so Codex never runs in the wrong repo.
   useEffect(() => {
-    if (!projectsLoaded || projectId === null) return;
-    if (projects.some((p) => p.id === projectId)) return;
-    setProjectId(null);
-    if (draft.shared.projectId === projectId) {
+    if (!projectsLoaded) return;
+    if (projectId !== null && projects.some((p) => p.id === projectId)) return;
+    if (projectId !== null && draft.shared.projectId === projectId) {
       setShared({ projectId: undefined });
     }
+    const next = projects.length === 1 ? projects[0]?.id ?? null : null;
+    setProjectId(next);
+    setShared({ projectId: next ?? undefined });
   }, [projectsLoaded, projects, projectId, draft.shared.projectId, setShared]);
 
   // Mark the persisted draft's active mode so a later reopen and any reader of
@@ -381,7 +379,7 @@ export function AgentCreatePanel({
     onSubmit: async (md): Promise<boolean> => {
       // The button already disables on !actor / versionBlocked, but the
       // ⌘+Enter path bypasses it — re-guard here and keep the draft in place.
-      if (!actor || versionBlocked) return false;
+      if (!actor || !projectId || versionBlocked) return false;
       // Flush the prompt editor's pending debounce before snapshotting — see
       // ManualCreatePanel.
       const pendingPrompt = editorRef.current?.flushPendingUpdate?.();
@@ -397,7 +395,7 @@ export function AgentCreatePanel({
             ? { agent_id: actor.id }
             : { squad_id: actor.id }),
           prompt: md,
-          project_id: projectId ?? undefined,
+          project_id: projectId,
           ...(priority !== "none" ? { priority } : {}),
           ...(dueDate ? { due_date: dueDate } : {}),
           parent_issue_id: parentIssueId,
@@ -534,9 +532,7 @@ export function AgentCreatePanel({
 
         {/* Header */}
         <div className="flex items-center justify-between px-5 pt-3 pb-2 shrink-0">
-          <div className="flex items-center gap-1.5 text-caption">
-            <span className="text-muted-foreground">{workspaceName}</span>
-            <ChevronRight className="size-3 text-faint-foreground" />
+          <div className="flex items-center text-caption">
             <span className="font-medium">{t(($) => $.create_issue.agent_breadcrumb)}</span>
           </div>
           {/* Native `title` instead of Base UI Tooltip — Tooltip opens on
@@ -640,22 +636,27 @@ export function AgentCreatePanel({
             it non-editable: changing the parent is a `Set parent` action on
             the parent itself, not a knob in the quick-create flow. */}
         <div className="flex items-center gap-1.5 px-4 pb-2 shrink-0 flex-wrap">
-          {(visibleFields.includes("project") ||
-            projectId !== null ||
-            fieldPickerOpen === "project") && (
-            <ProjectPicker
-              projectId={projectId}
-              onUpdate={(u) => commitProject(u.project_id ?? null)}
-              triggerRender={
-                <ClearablePillButton
-                  onClear={projectId !== null ? () => commitProject(null) : undefined}
-                  clearLabel={tProjects(($) => $.picker.clear_aria)}
-                />
-              }
-              align="start"
-              open={fieldPickerOpen === "project" ? true : undefined}
-              onOpenChange={(open) => setFieldPickerOpen(open ? "project" : null)}
-            />
+          <ProjectPicker
+            projectId={projectId}
+            onUpdate={(u) => commitProject(u.project_id ?? null)}
+            triggerRender={<PillButton />}
+            align="start"
+            open={fieldPickerOpen === "project" ? true : undefined}
+            onOpenChange={(open) => setFieldPickerOpen(open ? "project" : null)}
+            required
+          />
+          {projectsLoaded && projects.length === 0 && (
+            <Button
+              type="button"
+              variant="ghost"
+              size="sm"
+              onClick={() => {
+                onClose();
+                useModalStore.getState().open("create-project");
+              }}
+            >
+              {tProjects(($) => $.picker.add_project)}
+            </Button>
           )}
           {(visibleFields.includes("priority") ||
             priority !== "none" ||
@@ -798,14 +799,16 @@ export function AgentCreatePanel({
           <Button
             size="sm"
             onClick={submit}
-            disabled={!hasContent || !actor || submitting || versionBlocked || gate.uploading}
+            disabled={!hasContent || !actor || !projectId || submitting || versionBlocked || gate.uploading}
             aria-disabled={gate.uploading || undefined}
             // Sending is a busy state too, not just uploading.
             aria-busy={gate.uploading || submitting || undefined}
             title={
-              versionBlocked
-                ? t(($) => $.create_issue.agent.version_blocked_tooltip, { min: versionCheck.min })
-                : undefined
+              !projectId
+                ? tProjects(($) => $.picker.required)
+                : versionBlocked
+                  ? t(($) => $.create_issue.agent.version_blocked_tooltip, { min: versionCheck.min })
+                  : undefined
             }
             className={cn(
               "justify-self-end min-w-28",

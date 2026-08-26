@@ -12,7 +12,6 @@ import {
   CalendarClock,
   CalendarDays,
   Check,
-  ChevronRight,
   CircleUser,
   FolderKanban,
   Maximize2,
@@ -57,10 +56,11 @@ import { ShortcutKeycaps } from "../common/shortcut-keycaps";
 import { StatusIcon, StatusPicker, PriorityIcon, PriorityPicker, StagePicker, AssigneePicker, StartDatePicker, DueDatePicker, LabelPicker } from "../issues/components";
 import { maxSiblingStage } from "../issues/components/pickers/stage-picker";
 import { ProjectPicker } from "../projects/components/project-picker";
+import { projectListOptions } from "@multica/core/projects/queries";
 import { useIssueTriggerPreview } from "../issues/hooks/use-issue-trigger-preview";
 import { useActorName } from "@multica/core/workspace/hooks";
 import { agentListOptions } from "@multica/core/workspace/queries";
-import { useCurrentWorkspace, useWorkspacePaths } from "@multica/core/paths";
+import { useWorkspacePaths } from "@multica/core/paths";
 import { useWorkspaceId } from "@multica/core/hooks";
 import { useIssueStatuses } from "@multica/core/issue-statuses/hooks";
 import { useIssueDraftStore, type IssueCreateDraft } from "@multica/core/issues/stores/draft-store";
@@ -84,7 +84,7 @@ import {
   parseWithFallback,
 } from "@multica/core/api";
 import { FileUploadButton } from "@multica/ui/components/common/file-upload-button";
-import { ClearablePillButton, PillButton } from "../common/pill-button";
+import { PillButton } from "../common/pill-button";
 import { ActorAvatar } from "../common/actor-avatar";
 import { PropertyIcon } from "../common/property-icon";
 import {
@@ -93,6 +93,7 @@ import {
 } from "../issues/components/pickers/custom-property-picker";
 import { IssuePickerModal } from "./issue-picker-modal";
 import { useT } from "../i18n";
+import { useModalStore } from "@multica/core/modals";
 
 function handoffLines(value: string): string[] {
 	return value.split("\n").map((item) => item.trim()).filter(Boolean);
@@ -224,7 +225,6 @@ export function ManualCreatePanel({
   const { t: tProjects } = useT("projects");
   const router = useNavigation();
   const p = useWorkspacePaths();
-  const workspaceName = useCurrentWorkspace()?.name;
 
   const draft = useIssueDraftStore((s) => s.draft);
   const setManual = useIssueDraftStore((s) => s.setManual);
@@ -322,6 +322,9 @@ export function ManualCreatePanel({
   });
   const { categoryOf: draftStatusCategory } = useIssueStatuses(wsId);
   const { data: workspaceProperties = [] } = useQuery(propertyListOptions(wsId));
+  const { data: projects = [], isSuccess: projectsLoaded } = useQuery(
+    projectListOptions(wsId),
+  );
   const { data: parentIssue } = useQuery({
     ...issueDetailOptions(wsId, parentIssueId ?? ""),
     enabled: !!parentIssueId,
@@ -332,6 +335,20 @@ export function ManualCreatePanel({
     ...childIssuesOptions(wsId, parentIssueId ?? ""),
     enabled: !!parentIssueId,
   });
+
+  useEffect(() => {
+    if (!projectsLoaded) return;
+    const inheritedProjectId = parentIssue?.project_id ?? null;
+    if (inheritedProjectId && projectId !== inheritedProjectId) {
+      setProjectId(inheritedProjectId);
+      setShared({ projectId: inheritedProjectId });
+      return;
+    }
+    if (projectId && projects.some((project) => project.id === projectId)) return;
+    const next = projects.length === 1 ? projects[0]?.id : undefined;
+    setProjectId(next);
+    setShared({ projectId: next });
+  }, [parentIssue?.project_id, projectId, projects, projectsLoaded, setShared]);
 
   // Set the persisted draft's active mode so a later reopen (and any reader of
   // the unified draft) knows which form the user is editing in.
@@ -424,7 +441,7 @@ export function ManualCreatePanel({
     priority: manualFields.includes("priority") || priority !== "none" || fieldPickerOpen === "priority",
     assignee: manualFields.includes("assignee") || assigneeId != null || fieldPickerOpen === "assignee",
     labels: manualFields.includes("labels") || labelIds.length > 0 || fieldPickerOpen === "labels",
-    project: manualFields.includes("project") || projectId != null || fieldPickerOpen === "project",
+    project: true,
     due_date: manualFields.includes("due_date") || dueDate !== null || dueDatePickerOpen,
     start_date: manualFields.includes("start_date") || startDate !== null || startDatePickerOpen,
   };
@@ -442,7 +459,6 @@ export function ManualCreatePanel({
     setLabelIds([]);
     setPropertyValues({});
     setCustomPropertyPickerId(null);
-    setProjectId(undefined);
     setParentIssueId(undefined);
 	setHandoffObjective("");
 	setHandoffDetails(emptyHandoffDetails());
@@ -462,7 +478,7 @@ export function ManualCreatePanel({
     });
     setShared({
       priority: "none",
-      projectId: undefined,
+      projectId,
       dueDate: null,
       attachments: [],
     });
@@ -494,6 +510,7 @@ export function ManualCreatePanel({
     uploadGate: gate,
     normalize: () => title.trim(),
     onSubmit: async (): Promise<boolean> => {
+      if (!projectId) return false;
       // Flush the description editor's pending debounce into the store BEFORE
       // snapshotting, so a late flush of pre-submit typing cannot masquerade
       // as an edit made during the request.
@@ -749,6 +766,10 @@ export function ManualCreatePanel({
       titleEditorRef.current?.focus();
       return;
     }
+    if (!projectId) {
+      setFieldPickerOpen("project");
+      return;
+    }
     void composer.submit();
   };
   const submitting = composer.submitting;
@@ -804,13 +825,15 @@ export function ManualCreatePanel({
 
   // One state for the button and the keyboard paths, so a rendered affordance
   // can never disagree with what `handleSubmit` will actually do.
-  const submitState: "submitting" | "uploading" | "missing_title" | "ready" =
+  const submitState: "submitting" | "uploading" | "missing_title" | "missing_project" | "ready" =
     submitting
       ? "submitting"
       : gate.uploading
         ? "uploading"
         : !title.trim()
           ? "missing_title"
+          : !projectId
+            ? "missing_project"
           : "ready";
   const submitBusy = submitState === "submitting" || submitState === "uploading";
 
@@ -825,7 +848,7 @@ export function ManualCreatePanel({
       // keyboard and screen-reader users could never reach the tooltip that
       // explains why nothing happens. `handleSubmit` is the real gate either way.
       disabled={submitBusy}
-      aria-disabled={submitState === "missing_title" || undefined}
+      aria-disabled={submitState === "missing_title" || submitState === "missing_project" || undefined}
       aria-busy={submitBusy || undefined}
       // The Button base only dims/blocks on native `disabled`, so aria-disabled
       // would otherwise stay a fully lit, pressable-looking primary button.
@@ -863,9 +886,7 @@ export function ManualCreatePanel({
 
             {/* Header */}
             <div className="flex items-center justify-between px-5 pt-3 pb-2 shrink-0">
-              <div className="flex items-center gap-1.5 text-caption">
-                <span className="text-muted-foreground">{workspaceName}</span>
-                <ChevronRight className="size-3 text-faint-foreground" />
+              <div className="flex items-center text-caption">
                 <span className="font-medium">{t(($) => $.create_issue.manual_breadcrumb)}</span>
               </div>
               <div className="flex items-center gap-1">
@@ -1035,16 +1056,25 @@ export function ManualCreatePanel({
                 <ProjectPicker
                   projectId={projectId ?? null}
                   onUpdate={(u) => updateProject(u.project_id ?? undefined)}
-                  triggerRender={
-                    <ClearablePillButton
-                      onClear={projectId ? () => updateProject(undefined) : undefined}
-                      clearLabel={tProjects(($) => $.picker.clear_aria)}
-                    />
-                  }
+                  triggerRender={<PillButton />}
                   align="start"
                   open={fieldPickerOpen === "project" ? true : undefined}
                   onOpenChange={(open) => setFieldPickerOpen(open ? "project" : null)}
+                  required
                 />
+              )}
+              {projectsLoaded && projects.length === 0 && (
+                <Button
+                  type="button"
+                  variant="ghost"
+                  size="sm"
+                  onClick={() => {
+                    onClose();
+                    useModalStore.getState().open("create-project");
+                  }}
+                >
+                  {tProjects(($) => $.picker.add_project)}
+                </Button>
               )}
 
               {/* Stage — only relevant when creating a sub-issue under a parent */}
@@ -1378,14 +1408,18 @@ export function ManualCreatePanel({
                 />
                 {t(($) => $.create_issue.create_another)}
               </label>
-              {submitState === "missing_title" ? (
+              {submitState === "missing_title" || submitState === "missing_project" ? (
                 <TooltipProvider delay={200}>
                   <Tooltip>
                     {/* No `<span>` wrapper needed now: aria-disabled leaves the
                         button focusable and hoverable, so it can anchor its own
                         tooltip. */}
                     <TooltipTrigger render={createButton} />
-                    <TooltipContent side="top">{t(($) => $.create_issue.title_required)}</TooltipContent>
+                    <TooltipContent side="top">
+                      {submitState === "missing_project"
+                        ? tProjects(($) => $.picker.required)
+                        : t(($) => $.create_issue.title_required)}
+                    </TooltipContent>
                   </Tooltip>
                 </TooltipProvider>
               ) : (

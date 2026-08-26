@@ -108,27 +108,6 @@ function projectColumn(
   };
 }
 
-/**
- * Keep the "No project" column present as a drop target — clearing a card's
- * project by dragging has to stay possible even in a workspace where every
- * card currently has one. A board with no columns at all is left alone: that
- * is the surface's empty state, not a board missing one column.
- */
-function withNoProjectColumn(
-  columns: BoardColumnGroup[],
-  projectMap: Map<string, Project> | undefined,
-  labels: ProjectColumnLabels,
-): BoardColumnGroup[] {
-  if (columns.length === 0) return columns;
-  if (columns.some((column) => column.projectId === null)) return columns;
-  // No-project sorts first server-side, so it is always in the first page of
-  // descriptors when it exists — an absent one cannot arrive with a later page.
-  return [
-    projectColumn(projectGroupId(null), null, projectMap, labels, 0),
-    ...columns,
-  ];
-}
-
 function buildGroups(
   issues: Issue[],
   visibleStatuses: IssueStatusCategory[],
@@ -190,7 +169,7 @@ function buildGroups(
       if (b.projectId === null) return 1;
       return a.title.localeCompare(b.title);
     });
-    return withNoProjectColumn(ordered, projectMap, projectLabels);
+    return ordered;
   }
 
   const groups = new Map<string, BoardColumnGroup>();
@@ -388,7 +367,7 @@ function BoardViewImpl({
             ]
           : [],
     );
-    return withNoProjectColumn(columns, projectMap, projectColumnLabels);
+    return columns;
   }, [groupBranches, grouping, projectColumnLabels, projectMap]);
   const groupPagination = useMemo(() => {
     if (!groupBranches?.enabled) return undefined;
@@ -535,6 +514,8 @@ function BoardViewImpl({
         const overCol = findColumn(prev, overId, groupIds);
         if (!activeCol || !overCol || activeCol === overCol) return prev;
 
+        if (grouping === "project") return prev;
+
         if (sortBy !== "position") return prev;
 
         recentlyMovedRef.current = true;
@@ -546,7 +527,7 @@ function BoardViewImpl({
         return { ...prev, [activeCol]: oldIds, [overCol]: newIds };
       });
     },
-    [groupIds, sortBy, recentlyMovedRef, setColumns],
+    [groupIds, grouping, sortBy, recentlyMovedRef, setColumns],
   );
 
   const handleDragEnd = useCallback(
@@ -570,6 +551,10 @@ function BoardViewImpl({
       const activeCol = findColumn(cols, activeId, groupIds);
       const overCol = findColumn(cols, overId, groupIds);
       if (!activeCol || !overCol) {
+        resetColumns();
+        return;
+      }
+      if (grouping === "project" && activeCol !== overCol) {
         resetColumns();
         return;
       }
@@ -722,7 +707,11 @@ function BoardViewImpl({
                 projectMap={projectMap}
                 page={statusPagination?.[group.status]}
                 projectId={projectId}
-                onCreateIssue={onCreateIssue}
+                onCreateIssue={
+                  grouping === "project" && group.projectId === null
+                    ? undefined
+                    : onCreateIssue
+                }
                 sortLabel={sortLabel}
               />
             ) : (
@@ -736,7 +725,11 @@ function BoardViewImpl({
                   projectMap={projectMap}
                   page={groupPagination[group.id]!}
                   projectId={projectId}
-                  onCreateIssue={onCreateIssue}
+                  onCreateIssue={
+                    grouping === "project" && group.projectId === null
+                      ? undefined
+                      : onCreateIssue
+                  }
                   sortLabel={sortLabel}
                 />
               ) : (
@@ -748,7 +741,11 @@ function BoardViewImpl({
                   childProgressMap={childProgressMap}
                   projectMap={projectMap}
                   projectId={projectId}
-                  onCreateIssue={onCreateIssue}
+                  onCreateIssue={
+                    grouping === "project" && group.projectId === null
+                      ? undefined
+                      : onCreateIssue
+                  }
                   totalCount={group.totalCount}
                   sortLabel={sortLabel}
                 />

@@ -246,6 +246,15 @@ func migrateLocalSchema(ctx context.Context, db *sql.DB) error {
 	if _, err := tx.ExecContext(ctx, `INSERT OR IGNORE INTO schema_version(version, applied_at) VALUES (8, ?)`, now()); err != nil {
 		return err
 	}
+	if _, err := tx.ExecContext(ctx, `UPDATE issues
+		SET project_id=(SELECT p.id FROM projects p WHERE p.workspace_id=issues.workspace_id ORDER BY p.created_at, p.id LIMIT 1)
+		WHERE project_id IS NULL
+		AND 1=(SELECT COUNT(*) FROM projects p WHERE p.workspace_id=issues.workspace_id)`); err != nil {
+		return err
+	}
+	if _, err := tx.ExecContext(ctx, `INSERT OR IGNORE INTO schema_version(version, applied_at) VALUES (9, ?)`, now()); err != nil {
+		return err
+	}
 	if _, err := tx.ExecContext(ctx, `CREATE TABLE IF NOT EXISTS issue_sessions (
 		id TEXT PRIMARY KEY,
 		issue_id TEXT NOT NULL UNIQUE,
@@ -615,6 +624,13 @@ type CreateIssueInput struct {
 	Handoff       *IssueHandoffInput `json:"handoff,omitempty"`
 }
 
+var (
+	ErrIssueProjectRequired  = errors.New("issue project is required")
+	ErrIssueProjectImmutable = errors.New("issue project cannot be changed")
+	ErrIssueProjectMismatch  = errors.New("child issue project must match parent")
+	ErrProjectHasIssues      = errors.New("project still has tasks")
+)
+
 func (s *Store) CreateIssue(ctx context.Context, workspaceID string, input CreateIssueInput) (Issue, error) {
 	if input.Handoff != nil {
 		if input.ParentIssueID == nil || strings.TrimSpace(*input.ParentIssueID) == "" {
@@ -624,21 +640,38 @@ func (s *Store) CreateIssue(ctx context.Context, workspaceID string, input Creat
 			return Issue{}, err
 		}
 	}
-	if input.ProjectID != nil {
-		if _, err := s.GetProject(ctx, workspaceID, *input.ProjectID); err != nil {
-			return Issue{}, err
-		}
-	}
-	if input.ParentIssueID != nil {
-		if _, err := s.GetIssue(ctx, workspaceID, *input.ParentIssueID); err != nil {
-			return Issue{}, err
-		}
-	}
 	tx, err := s.db.BeginTx(ctx, nil)
 	if err != nil {
 		return Issue{}, err
 	}
 	defer func() { _ = tx.Rollback() }()
+
+	if input.ParentIssueID != nil {
+		var parentProjectID sql.NullString
+		if err := tx.QueryRowContext(ctx, `SELECT i.project_id
+			FROM issues i JOIN workspaces w ON w.id=i.workspace_id
+			WHERE i.workspace_id=? AND (i.id=? OR upper(w.issue_prefix || '-' || i.number)=upper(?)) LIMIT 1`, workspaceID, *input.ParentIssueID, *input.ParentIssueID).Scan(&parentProjectID); err != nil {
+			return Issue{}, err
+		}
+		if !parentProjectID.Valid || strings.TrimSpace(parentProjectID.String) == "" {
+			return Issue{}, fmt.Errorf("%w: parent task has no project", ErrIssueProjectRequired)
+		}
+		if input.ProjectID == nil || strings.TrimSpace(*input.ProjectID) == "" {
+			projectID := parentProjectID.String
+			input.ProjectID = &projectID
+		} else if strings.TrimSpace(*input.ProjectID) != parentProjectID.String {
+			return Issue{}, ErrIssueProjectMismatch
+		}
+	}
+	if input.ProjectID == nil || strings.TrimSpace(*input.ProjectID) == "" {
+		return Issue{}, ErrIssueProjectRequired
+	}
+	projectID := strings.TrimSpace(*input.ProjectID)
+	input.ProjectID = &projectID
+	var projectExists int
+	if err := tx.QueryRowContext(ctx, `SELECT 1 FROM projects WHERE workspace_id=? AND id=?`, workspaceID, projectID).Scan(&projectExists); err != nil {
+		return Issue{}, err
+	}
 	var number int64
 	if err := tx.QueryRowContext(ctx, "SELECT COALESCE(MAX(number), 0)+1 FROM issues WHERE workspace_id=?", workspaceID).Scan(&number); err != nil {
 		return Issue{}, err
@@ -685,24 +718,69 @@ func (s *Store) CreateIssue(ctx context.Context, workspaceID string, input Creat
 }
 
 func (s *Store) UpdateIssue(ctx context.Context, workspaceID, id string, updates map[string]any) (Issue, error) {
-	current, err := s.GetIssue(ctx, workspaceID, id)
+	tx, err := s.db.BeginTx(ctx, nil)
 	if err != nil {
 		return Issue{}, err
 	}
+	defer func() { _ = tx.Rollback() }()
+
+	var currentID string
+	var currentProjectID, currentParentIssueID sql.NullString
+	err = tx.QueryRowContext(ctx, `SELECT i.id, i.project_id, i.parent_issue_id
+		FROM issues i JOIN workspaces w ON w.id=i.workspace_id
+		WHERE i.workspace_id=? AND (i.id=? OR upper(w.issue_prefix || '-' || i.number)=upper(?)) LIMIT 1`, workspaceID, id, id).Scan(&currentID, &currentProjectID, &currentParentIssueID)
+	if err != nil {
+		return Issue{}, err
+	}
+	finalProjectID := strings.TrimSpace(currentProjectID.String)
+	repairingProject := false
 	set := []string{"updated_at=?", "last_activity_at=?", "revision=revision+1"}
 	stamp := now()
 	args := []any{stamp, stamp}
-	if value, ok := updates["project_id"].(string); ok && value != "" {
-		if _, err := s.GetProject(ctx, workspaceID, value); err != nil {
-			return Issue{}, err
+	if value, exists := updates["project_id"]; exists {
+		projectID, ok := value.(string)
+		projectID = strings.TrimSpace(projectID)
+		if !ok || projectID == "" {
+			return Issue{}, ErrIssueProjectRequired
+		}
+		updates["project_id"] = projectID
+		if currentProjectID.Valid {
+			if finalProjectID != projectID {
+				return Issue{}, ErrIssueProjectImmutable
+			}
+		} else {
+			var projectExists int
+			if err := tx.QueryRowContext(ctx, `SELECT 1 FROM projects WHERE workspace_id=? AND id=?`, workspaceID, projectID).Scan(&projectExists); err != nil {
+				return Issue{}, err
+			}
+			if currentParentIssueID.Valid {
+				var parentProjectID sql.NullString
+				if err := tx.QueryRowContext(ctx, `SELECT project_id FROM issues WHERE workspace_id=? AND id=?`, workspaceID, currentParentIssueID.String).Scan(&parentProjectID); err != nil {
+					return Issue{}, err
+				}
+				if !parentProjectID.Valid || strings.TrimSpace(parentProjectID.String) != projectID {
+					return Issue{}, ErrIssueProjectMismatch
+				}
+			}
+			repairingProject = true
+			finalProjectID = projectID
 		}
 	}
+	if requestsRun(updates) && finalProjectID == "" {
+		return Issue{}, ErrIssueProjectRequired
+	}
 	if value, ok := updates["parent_issue_id"].(string); ok && value != "" {
-		if value == current.ID {
+		if value == currentID {
 			return Issue{}, errors.New("issue cannot be its own parent")
 		}
-		if _, err := s.GetIssue(ctx, workspaceID, value); err != nil {
+		var parentProjectID sql.NullString
+		if err := tx.QueryRowContext(ctx, `SELECT i.project_id
+			FROM issues i JOIN workspaces w ON w.id=i.workspace_id
+			WHERE i.workspace_id=? AND (i.id=? OR upper(w.issue_prefix || '-' || i.number)=upper(?)) LIMIT 1`, workspaceID, value, value).Scan(&parentProjectID); err != nil {
 			return Issue{}, err
+		}
+		if finalProjectID == "" || !parentProjectID.Valid || finalProjectID != strings.TrimSpace(parentProjectID.String) {
+			return Issue{}, ErrIssueProjectMismatch
 		}
 	}
 	allowed := map[string]bool{"title": true, "description": true, "status": true, "priority": true, "assignee_type": true, "assignee_id": true, "project_id": true, "parent_issue_id": true, "start_date": true, "due_date": true, "position": true, "stage": true, "metadata": true, "properties": true}
@@ -717,28 +795,37 @@ func (s *Store) UpdateIssue(ctx context.Context, workspaceID, id string, updates
 		set = append(set, key+"=?")
 		args = append(args, value)
 	}
-	args = append(args, current.ID)
-	tx, err := s.db.BeginTx(ctx, nil)
+	args = append(args, currentID)
+	where := "id=?"
+	if repairingProject {
+		where += " AND project_id IS NULL"
+	}
+	result, err := tx.ExecContext(ctx, "UPDATE issues SET "+strings.Join(set, ", ")+" WHERE "+where, args...)
 	if err != nil {
 		return Issue{}, err
 	}
-	defer func() { _ = tx.Rollback() }()
-	if _, err := tx.ExecContext(ctx, "UPDATE issues SET "+strings.Join(set, ", ")+" WHERE id=?", args...); err != nil {
-		return Issue{}, err
+	if repairingProject {
+		updated, err := result.RowsAffected()
+		if err != nil {
+			return Issue{}, err
+		}
+		if updated != 1 {
+			return Issue{}, ErrIssueProjectImmutable
+		}
 	}
 	if rawIDs, ok := updates["attachment_ids"]; ok {
 		ids, err := attachmentIDs(rawIDs)
 		if err != nil {
 			return Issue{}, err
 		}
-		if err := bindAttachmentsTx(ctx, tx, workspaceID, current.ID, "", ids); err != nil {
+		if err := bindAttachmentsTx(ctx, tx, workspaceID, currentID, "", ids); err != nil {
 			return Issue{}, err
 		}
 	}
 	if err := tx.Commit(); err != nil {
 		return Issue{}, err
 	}
-	return s.GetIssue(ctx, workspaceID, current.ID)
+	return s.GetIssue(ctx, workspaceID, currentID)
 }
 
 func attachmentIDs(value any) ([]string, error) {

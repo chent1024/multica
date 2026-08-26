@@ -25,6 +25,7 @@ export function ProjectPicker({
   open: controlledOpen,
   onOpenChange,
   disabled = false,
+  required = false,
 }: {
   projectId: string | null;
   onUpdate: (updates: Partial<UpdateIssueRequest>) => void;
@@ -41,6 +42,9 @@ export function ProjectPicker({
    *  the menu locks clearing too. Callers that must freeze the selection
    *  during a transient window (an in-flight chat send) pass this. */
   disabled?: boolean;
+  /** Required ownership mode. Hides the legacy clear row while keeping the
+   *  empty trigger available for first-time assignment. */
+  required?: boolean;
 }) {
   const { t } = useT("projects");
   const wsId = useWorkspaceId();
@@ -90,25 +94,26 @@ export function ProjectPicker({
           ) : (
             <>
               <FolderKanban className="h-3.5 w-3.5 shrink-0 text-muted-foreground" />
-              <span className="truncate">{t(($) => $.picker.no_project)}</span>
+              <span className="truncate">
+                {required ? t(($) => $.picker.select_project) : t(($) => $.picker.no_project)}
+              </span>
             </>
           )
         }
       >
-        {/* "No project" — always the first row, search active or not, and the
-            only clear entry now that the pill carries no inline ×. Mirrors
-            the unassigned row in the assignee picker. */}
-        <PickerItem
-          emptyValue
-          selected={!projectId}
-          onClick={() => {
-            onUpdate({ project_id: null });
-            setOpen(false);
-          }}
-        >
-          <FolderKanban className="h-3.5 w-3.5 text-muted-foreground" />
-          <span className="text-muted-foreground">{t(($) => $.picker.no_project)}</span>
-        </PickerItem>
+        {!required && (
+          <PickerItem
+            emptyValue
+            selected={!projectId}
+            onClick={() => {
+              onUpdate({ project_id: null });
+              setOpen(false);
+            }}
+          >
+            <FolderKanban className="h-3.5 w-3.5 text-muted-foreground" />
+            <span className="text-muted-foreground">{t(($) => $.picker.no_project)}</span>
+          </PickerItem>
+        )}
 
         {filtered.map((p) => (
           <PickerItem

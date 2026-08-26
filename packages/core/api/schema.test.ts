@@ -239,7 +239,7 @@ describe("ApiClient schema fallback", () => {
     it("keeps labels undefined when the backend omits the field (older backend)", async () => {
       stubFetchJson(validIssue, 201);
       const client = new ApiClient("https://api.example.test");
-      const issue = await client.createIssue({ title: "Created" });
+      const issue = await client.createIssue({ title: "Created", project_id: "project-1" });
       expect(issue.id).toBe("issue-1");
       expect(issue.labels).toBeUndefined();
     });
@@ -247,14 +247,14 @@ describe("ApiClient schema fallback", () => {
     it("validates a well-formed labels array", async () => {
       stubFetchJson({ ...validIssue, labels: [label] }, 201);
       const client = new ApiClient("https://api.example.test");
-      const issue = await client.createIssue({ title: "Created" });
+      const issue = await client.createIssue({ title: "Created", project_id: "project-1" });
       expect(issue.labels?.map((l) => l.id)).toEqual(["label-1"]);
     });
 
     it("degrades a null labels field to undefined so the client falls back", async () => {
       stubFetchJson({ ...validIssue, labels: null }, 201);
       const client = new ApiClient("https://api.example.test");
-      const issue = await client.createIssue({ title: "Created" });
+      const issue = await client.createIssue({ title: "Created", project_id: "project-1" });
       // The issue itself still parses; only the malformed labels degrade.
       expect(issue.id).toBe("issue-1");
       expect(issue.labels).toBeUndefined();
@@ -263,7 +263,7 @@ describe("ApiClient schema fallback", () => {
     it("degrades a labels array of the wrong element shape to undefined", async () => {
       stubFetchJson({ ...validIssue, labels: [{ nope: true }] }, 201);
       const client = new ApiClient("https://api.example.test");
-      const issue = await client.createIssue({ title: "Created" });
+      const issue = await client.createIssue({ title: "Created", project_id: "project-1" });
       expect(issue.id).toBe("issue-1");
       expect(issue.labels).toBeUndefined();
     });
@@ -271,13 +271,13 @@ describe("ApiClient schema fallback", () => {
     it("rejects when the whole response body is not a usable issue (no fake success)", async () => {
       stubFetchJson({ not: "an issue" }, 201);
       const client = new ApiClient("https://api.example.test");
-      await expect(client.createIssue({ title: "Created" })).rejects.toThrow();
+      await expect(client.createIssue({ title: "Created", project_id: "project-1" })).rejects.toThrow();
     });
 
     it("rejects when the created issue has an empty id", async () => {
       stubFetchJson({ ...validIssue, id: "" }, 201);
       const client = new ApiClient("https://api.example.test");
-      await expect(client.createIssue({ title: "Created" })).rejects.toThrow();
+      await expect(client.createIssue({ title: "Created", project_id: "project-1" })).rejects.toThrow();
     });
   });
 

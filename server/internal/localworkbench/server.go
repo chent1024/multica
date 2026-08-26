@@ -466,8 +466,13 @@ func (s *Server) deleteProject(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	defer func() { _ = tx.Rollback() }()
-	if _, err := tx.ExecContext(r.Context(), "UPDATE issues SET project_id=NULL WHERE workspace_id=? AND project_id=?", ws.ID, id); err != nil {
+	var issueCount int
+	if err := tx.QueryRowContext(r.Context(), "SELECT COUNT(*) FROM issues WHERE workspace_id=? AND project_id=?", ws.ID, id).Scan(&issueCount); err != nil {
 		s.fail(w, err)
+		return
+	}
+	if issueCount > 0 {
+		s.respondStoreError(w, ErrProjectHasIssues)
 		return
 	}
 	if _, err := tx.ExecContext(r.Context(), "DELETE FROM project_resources WHERE workspace_id=? AND project_id=?", ws.ID, id); err != nil {
@@ -1040,11 +1045,11 @@ func (s *Server) createIssue(w http.ResponseWriter, r *http.Request) {
 			writeError(w, http.StatusBadRequest, err)
 			return
 		}
-		s.fail(w, err)
+		s.respondStoreError(w, err)
 		return
 	}
 	if err := s.store.enqueueAssignedIssue(r.Context(), ws.ID, item.ID, ""); err != nil {
-		s.fail(w, err)
+		s.respondStoreError(w, err)
 		return
 	}
 	s.hub.broadcast("issue:created", map[string]any{"issue": item})
@@ -1206,7 +1211,7 @@ func (s *Server) quickCreateIssue(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if err := s.store.enqueueAssignedIssue(r.Context(), ws.ID, item.ID, ""); err != nil {
-		s.fail(w, err)
+		s.respondStoreError(w, err)
 		return
 	}
 	s.hub.broadcast("issue:created", map[string]any{"issue": item})
@@ -1247,7 +1252,7 @@ func (s *Server) updateIssue(w http.ResponseWriter, r *http.Request) {
 	}
 	if !suppressRun && requestsRun(input) {
 		if err := s.store.enqueueAssignedIssue(r.Context(), ws.ID, item.ID, handoffNote); err != nil {
-			s.fail(w, err)
+			s.respondStoreError(w, err)
 			return
 		}
 	}
@@ -1320,7 +1325,7 @@ func (s *Server) moveIssue(w http.ResponseWriter, r *http.Request) {
 	}
 	if requestsRun(updates) {
 		if err := s.store.enqueueAssignedIssue(r.Context(), ws.ID, item.ID, ""); err != nil {
-			s.fail(w, err)
+			s.respondStoreError(w, err)
 			return
 		}
 	}
@@ -1403,7 +1408,7 @@ func (s *Server) batchUpdateIssues(w http.ResponseWriter, r *http.Request) {
 		}
 		if !suppressRun && requestsRun(input.Updates) {
 			if err := s.store.enqueueAssignedIssue(r.Context(), ws.ID, item.ID, handoffNote); err != nil {
-				s.fail(w, err)
+				s.respondStoreError(w, err)
 				return
 			}
 		}
@@ -1740,6 +1745,14 @@ func nullableString(v sql.NullString) string {
 func (s *Server) respondStoreError(w http.ResponseWriter, err error) {
 	if IsNotFound(err) {
 		writeError(w, 404, errors.New("not found"))
+		return
+	}
+	if errors.Is(err, ErrIssueProjectRequired) || errors.Is(err, ErrIssueProjectMismatch) {
+		writeError(w, http.StatusBadRequest, err)
+		return
+	}
+	if errors.Is(err, ErrIssueProjectImmutable) || errors.Is(err, ErrProjectHasIssues) {
+		writeError(w, http.StatusConflict, err)
 		return
 	}
 	s.fail(w, err)

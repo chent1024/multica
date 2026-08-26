@@ -86,7 +86,7 @@ export function LocalSettingsPage({
       <div className="min-w-0 flex-1 md:overflow-y-auto">
         <div className="mx-auto w-full max-w-3xl p-4 sm:p-6 md:p-8">
           <TabsContent value="preferences"><PreferencesTab localMode /></TabsContent>
-          <TabsContent value="shortcuts"><KeyboardShortcutsTab /></TabsContent>
+          <TabsContent value="shortcuts"><KeyboardShortcutsTab localMode /></TabsContent>
           <TabsContent value="issue"><IssueTab /></TabsContent>
           {extraTabs?.map((tab) => (
             <TabsContent key={tab.value} value={tab.value}>{tab.content}</TabsContent>

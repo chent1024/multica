@@ -3,7 +3,10 @@ package localworkbench
 import (
 	"bytes"
 	"context"
+	"database/sql"
 	"encoding/json"
+	"errors"
+	"fmt"
 	"io"
 	"mime/multipart"
 	"net/http"
@@ -15,6 +18,173 @@ import (
 
 	"github.com/gorilla/websocket"
 )
+
+func mustTestProject(t *testing.T, app *Server, workspaceID string) Project {
+	t.Helper()
+	projects, err := app.store.ListProjects(t.Context(), workspaceID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(projects) > 0 {
+		return projects[0]
+	}
+	project, err := app.store.CreateProject(t.Context(), workspaceID, "Test project", "", "", "planned", "none", nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return project
+}
+
+func TestIssueProjectOwnershipIsRequiredImmutableAndInherited(t *testing.T) {
+	app, err := New(t.Context(), filepath.Join(t.TempDir(), "multica.db"), nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer app.Close()
+	workspaces, _ := app.store.ListWorkspaces(t.Context())
+	first := mustTestProject(t, app, workspaces[0].ID)
+	second, err := app.store.CreateProject(t.Context(), workspaces[0].ID, "Second", "", "", "planned", "none", nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	if _, err := app.store.CreateIssue(t.Context(), workspaces[0].ID, CreateIssueInput{Title: "Missing"}); !errors.Is(err, ErrIssueProjectRequired) {
+		t.Fatalf("missing project error = %v", err)
+	}
+	unknownProjectID := "missing-project"
+	if _, err := app.store.CreateIssue(t.Context(), workspaces[0].ID, CreateIssueInput{Title: "Unknown", ProjectID: &unknownProjectID}); !errors.Is(err, sql.ErrNoRows) {
+		t.Fatalf("unknown project error = %v", err)
+	}
+	parent, err := app.store.CreateIssue(t.Context(), workspaces[0].ID, CreateIssueInput{Title: "Parent", ProjectID: &first.ID})
+	if err != nil {
+		t.Fatal(err)
+	}
+	child, err := app.store.CreateIssue(t.Context(), workspaces[0].ID, CreateIssueInput{Title: "Child", ParentIssueID: &parent.ID})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if child.ProjectID == nil || *child.ProjectID != first.ID {
+		t.Fatalf("child project = %#v, want %s", child.ProjectID, first.ID)
+	}
+	if _, err := app.store.CreateIssue(t.Context(), workspaces[0].ID, CreateIssueInput{Title: "Wrong child", ParentIssueID: &parent.ID, ProjectID: &second.ID}); !errors.Is(err, ErrIssueProjectMismatch) {
+		t.Fatalf("cross-project child error = %v", err)
+	}
+	if _, err := app.store.UpdateIssue(t.Context(), workspaces[0].ID, parent.ID, map[string]any{"project_id": second.ID}); !errors.Is(err, ErrIssueProjectImmutable) {
+		t.Fatalf("project move error = %v", err)
+	}
+	if _, err := app.store.UpdateIssue(t.Context(), workspaces[0].ID, parent.ID, map[string]any{"project_id": nil}); !errors.Is(err, ErrIssueProjectRequired) {
+		t.Fatalf("project clear error = %v", err)
+	}
+	unchanged, err := app.store.UpdateIssue(t.Context(), workspaces[0].ID, parent.ID, map[string]any{"project_id": " " + first.ID + " "})
+	if err != nil || unchanged.ProjectID == nil || *unchanged.ProjectID != first.ID {
+		t.Fatalf("canonical project update = %#v, err = %v", unchanged.ProjectID, err)
+	}
+
+	server := httptest.NewServer(app.Router())
+	defer server.Close()
+	requestJSON[any](t, server.URL, http.MethodDelete, "/api/projects/"+first.ID, nil, http.StatusConflict, nil)
+	if _, err := app.store.GetProject(t.Context(), workspaces[0].ID, first.ID); err != nil {
+		t.Fatalf("project was deleted: %v", err)
+	}
+}
+
+func TestLegacyProjectlessIssueBackfillAndRepair(t *testing.T) {
+	for _, tc := range []struct {
+		name         string
+		projectCount int
+		wantAssigned bool
+	}{
+		{name: "one project is unambiguous", projectCount: 1, wantAssigned: true},
+		{name: "multiple projects require repair", projectCount: 2, wantAssigned: false},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			path := filepath.Join(t.TempDir(), "legacy.db")
+			db, err := sql.Open("sqlite", path)
+			if err != nil {
+				t.Fatal(err)
+			}
+			legacySchema := strings.Replace(schemaSQL, "parent_issue_id TEXT,\n    project_id TEXT NOT NULL,\n    position", "parent_issue_id TEXT,\n    project_id TEXT,\n    position", 1)
+			if _, err := db.ExecContext(t.Context(), legacySchema); err != nil {
+				t.Fatal(err)
+			}
+			stamp := now()
+			if _, err := db.ExecContext(t.Context(), `INSERT INTO workspaces(id,name,slug,settings,repos,issue_prefix,created_at,updated_at) VALUES ('ws','Local','local','{}','[]','LOCAL',?,?)`, stamp, stamp); err != nil {
+				t.Fatal(err)
+			}
+			for index := range tc.projectCount {
+				if _, err := db.ExecContext(t.Context(), `INSERT INTO projects(id,workspace_id,title,status,priority,created_at,updated_at) VALUES (?,?,?,'planned','none',?,?)`, fmt.Sprintf("project-%d", index+1), "ws", fmt.Sprintf("Project %d", index+1), stamp, stamp); err != nil {
+					t.Fatal(err)
+				}
+			}
+			if _, err := db.ExecContext(t.Context(), `INSERT INTO issues(id,workspace_id,number,title,status,priority,creator_type,creator_id,position,metadata,properties,revision,created_at,updated_at) VALUES ('legacy-issue','ws',1,'Legacy','backlog','none','system','local',0,'{}','{}',1,?,?)`, stamp, stamp); err != nil {
+				t.Fatal(err)
+			}
+			if tc.projectCount == 2 {
+				if _, err := db.ExecContext(t.Context(), `INSERT INTO issues(id,workspace_id,number,title,status,priority,creator_type,creator_id,project_id,position,metadata,properties,revision,created_at,updated_at) VALUES ('legacy-parent','ws',2,'Parent','backlog','none','system','local','project-1',0,'{}','{}',1,?,?)`, stamp, stamp); err != nil {
+					t.Fatal(err)
+				}
+				if _, err := db.ExecContext(t.Context(), `UPDATE issues SET parent_issue_id='legacy-parent' WHERE id='legacy-issue'`); err != nil {
+					t.Fatal(err)
+				}
+			}
+			if err := db.Close(); err != nil {
+				t.Fatal(err)
+			}
+
+			app, err := New(t.Context(), path, nil)
+			if err != nil {
+				t.Fatal(err)
+			}
+			defer app.Close()
+			issue, err := app.store.GetIssue(t.Context(), "ws", "legacy-issue")
+			if err != nil {
+				t.Fatal(err)
+			}
+			if tc.wantAssigned {
+				if issue.ProjectID == nil || *issue.ProjectID != "project-1" {
+					t.Fatalf("backfilled project = %#v", issue.ProjectID)
+				}
+				return
+			}
+			if issue.ProjectID != nil {
+				t.Fatalf("ambiguous project was guessed: %q", *issue.ProjectID)
+			}
+			server := httptest.NewServer(app.Router())
+			defer server.Close()
+			requestJSON[any](t, server.URL, http.MethodPut, "/api/issues/"+issue.ID, map[string]any{"status": "in_progress"}, http.StatusBadRequest, nil)
+			unchanged, err := app.store.GetIssue(t.Context(), "ws", issue.ID)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if unchanged.Status != "backlog" || unchanged.Revision != issue.Revision {
+				t.Fatalf("failed run request changed issue: status=%q revision=%d", unchanged.Status, unchanged.Revision)
+			}
+			var runCount int
+			if err := app.store.db.QueryRowContext(t.Context(), `SELECT COUNT(*) FROM task_runs WHERE issue_id=?`, issue.ID).Scan(&runCount); err != nil {
+				t.Fatal(err)
+			}
+			if runCount != 0 {
+				t.Fatalf("failed run request persisted %d runs", runCount)
+			}
+			if _, _, _, err := app.store.ContinueIssueSession(t.Context(), "ws", issue.ID); !errors.Is(err, ErrIssueProjectRequired) {
+				t.Fatalf("projectless continuation error = %v", err)
+			}
+			if err := app.store.enqueueAssignedIssue(t.Context(), "ws", issue.ID, ""); !errors.Is(err, ErrIssueProjectRequired) {
+				t.Fatalf("projectless run error = %v", err)
+			}
+			if _, err := app.store.UpdateIssue(t.Context(), "ws", issue.ID, map[string]any{"project_id": "project-2"}); !errors.Is(err, ErrIssueProjectMismatch) {
+				t.Fatalf("cross-project legacy repair error = %v", err)
+			}
+			repaired, err := app.store.UpdateIssue(t.Context(), "ws", issue.ID, map[string]any{"project_id": "project-1"})
+			if err != nil || repaired.ProjectID == nil || *repaired.ProjectID != "project-1" {
+				t.Fatalf("legacy repair = %#v, err = %v", repaired.ProjectID, err)
+			}
+			if _, err := app.store.UpdateIssue(t.Context(), "ws", issue.ID, map[string]any{"project_id": "project-2"}); !errors.Is(err, ErrIssueProjectImmutable) {
+				t.Fatalf("second legacy repair error = %v", err)
+			}
+		})
+	}
+}
 
 func TestLocalAttachmentUploadAndCommentBinding(t *testing.T) {
 	databasePath := filepath.Join(t.TempDir(), "multica.db")
@@ -28,8 +198,9 @@ func TestLocalAttachmentUploadAndCommentBinding(t *testing.T) {
 
 	var workspaces []Workspace
 	requestJSON(t, server.URL, http.MethodGet, "/api/workspaces", nil, http.StatusOK, &workspaces)
+	project := mustTestProject(t, app, workspaces[0].ID)
 	var issue Issue
-	requestJSON(t, server.URL, http.MethodPost, "/api/issues", map[string]any{"title": "Paste screenshot"}, http.StatusCreated, &issue)
+	requestJSON(t, server.URL, http.MethodPost, "/api/issues", map[string]any{"title": "Paste screenshot", "project_id": project.ID}, http.StatusCreated, &issue)
 
 	png := []byte("\x89PNG\r\n\x1a\nlocal screenshot")
 	var form bytes.Buffer
@@ -295,12 +466,15 @@ func TestIssueTableStatusFacetIncludesHiddenAndUnselectedStatuses(t *testing.T) 
 	defer app.Close()
 	server := httptest.NewServer(app.Router())
 	defer server.Close()
+	workspaces, _ := app.store.ListWorkspaces(t.Context())
+	project := mustTestProject(t, app, workspaces[0].ID)
 
 	for _, input := range []map[string]any{
 		{"title": "Todo", "status": "todo"},
 		{"title": "Blocked", "status": "blocked"},
 		{"title": "Cancelled", "status": "cancelled"},
 	} {
+		input["project_id"] = project.ID
 		requestJSON[Issue](t, server.URL, http.MethodPost, "/api/issues", input, http.StatusCreated, nil)
 	}
 
@@ -406,8 +580,9 @@ func TestSQLiteWorkbenchServesLocalIssuePageDependencies(t *testing.T) {
 
 	var workspaces []Workspace
 	requestJSON(t, server.URL, http.MethodGet, "/api/workspaces", nil, http.StatusOK, &workspaces)
+	project := mustTestProject(t, app, workspaces[0].ID)
 	var issue Issue
-	requestJSON(t, server.URL, http.MethodPost, "/api/issues", map[string]any{"title": "Dependencies"}, http.StatusCreated, &issue)
+	requestJSON(t, server.URL, http.MethodPost, "/api/issues", map[string]any{"title": "Dependencies", "project_id": project.ID}, http.StatusCreated, &issue)
 	paths := []string{
 		"/api/runtimes?workspace_id=" + workspaces[0].ID,
 		"/api/properties",
@@ -545,8 +720,9 @@ func TestSQLiteWorkbenchRunsAssignedIssueThroughDaemonProtocol(t *testing.T) {
 	}
 
 	var issue Issue
+	project := mustTestProject(t, app, workspaces[0].ID)
 	requestJSON(t, server.URL, http.MethodPost, "/api/issues", map[string]any{
-		"title": "Run locally", "status": "todo",
+		"title": "Run locally", "status": "todo", "project_id": project.ID,
 	}, http.StatusCreated, &issue)
 	requestJSON(t, server.URL, http.MethodPut, "/api/issues/"+issue.ID, map[string]any{
 		"assignee_type": "agent", "assignee_id": LocalAgentID, "handoff_note": "Verify the local execution chain",
@@ -654,7 +830,7 @@ func TestSQLiteWorkbenchRunsAssignedIssueThroughDaemonProtocol(t *testing.T) {
 
 	var suppressed Issue
 	requestJSON(t, server.URL, http.MethodPost, "/api/issues", map[string]any{
-		"title": "Assign without starting", "status": "todo",
+		"title": "Assign without starting", "status": "todo", "project_id": project.ID,
 	}, http.StatusCreated, &suppressed)
 	requestJSON(t, server.URL, http.MethodPut, "/api/issues/"+suppressed.ID, map[string]any{
 		"assignee_type": "agent", "assignee_id": LocalAgentID, "suppress_run": true,
@@ -699,8 +875,9 @@ func TestSQLiteWorkbenchQuickCreatesWithOnlineLocalCodex(t *testing.T) {
 	}
 
 	var issue Issue
+	project := mustTestProject(t, app, workspaces[0].ID)
 	requestJSON(t, server.URL, http.MethodPost, "/api/issues/quick-create", map[string]any{
-		"agent_id": LocalAgentID, "prompt": "Inspect the local chain\nand report the result", "priority": "high",
+		"agent_id": LocalAgentID, "prompt": "Inspect the local chain\nand report the result", "priority": "high", "project_id": project.ID,
 	}, http.StatusCreated, &issue)
 	if issue.Title != "Inspect the local chain" || issue.Description == nil || *issue.Description != "Inspect the local chain\nand report the result" || issue.AssigneeID == nil || *issue.AssigneeID != LocalAgentID {
 		t.Fatalf("quick-created issue = %#v", issue)
@@ -732,7 +909,11 @@ func TestSQLiteWorkbenchUpgradesTaskRunHandoffNote(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	legacyIssue, err := store.CreateIssue(t.Context(), workspaces[0].ID, CreateIssueInput{Title: "Legacy issue"})
+	project, err := store.CreateProject(t.Context(), workspaces[0].ID, "Legacy project", "", "", "planned", "none", nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	legacyIssue, err := store.CreateIssue(t.Context(), workspaces[0].ID, CreateIssueInput{Title: "Legacy issue", ProjectID: &project.ID})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -775,8 +956,8 @@ func TestSQLiteWorkbenchUpgradesTaskRunHandoffNote(t *testing.T) {
 	if err := reopened.db.QueryRowContext(t.Context(), `SELECT MAX(version) FROM schema_version`).Scan(&version); err != nil {
 		t.Fatal(err)
 	}
-	if version != 8 {
-		t.Fatalf("schema version = %d, want 8", version)
+	if version != 9 {
+		t.Fatalf("schema version = %d, want 9", version)
 	}
 	var sessionID, stageID, stageKind string
 	var migrated int

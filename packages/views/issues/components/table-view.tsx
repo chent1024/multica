@@ -1203,6 +1203,8 @@ function IssueTableBodyCell({
           <ProjectPicker
             projectId={issue.project_id}
             onUpdate={onUpdate}
+            required
+            disabled={issue.project_id !== null}
             open={editorOpen}
             onOpenChange={setEditorOpen}
             triggerRender={

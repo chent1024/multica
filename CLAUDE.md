@@ -5,11 +5,12 @@ This repository builds one local Electron product. It has no accounts, authentic
 ## Product model
 
 - Project is a local Git project.
-- Issue is a user task.
+- Issue is a user task and belongs to exactly one Project.
 - Task/Run is one Codex execution.
 - Comment/Event is timeline progress, a commit, verification, or release record.
 - Codex `thread_id` identifies the related Codex session.
 - Historical `workspace` names are a compatibility boundary for one fixed local data space. The UI and API must never expose create, switch, member, invitation, or tenant operations.
+- New Issues require a Project. A single available Project is selected automatically; multiple Projects require an explicit choice. Project assignment is immutable, child Issues inherit the parent Project, and Projects with Issues cannot be deleted.
 
 ## Architecture
 

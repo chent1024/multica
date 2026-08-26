@@ -82,7 +82,7 @@ const mockCreateSettingsStore = {
 // "loaded as empty" (the deleted-project case) and "still loading" without
 // re-mocking the whole module.
 const mockProjectsQuery = vi.hoisted(() => ({
-  data: [] as Array<{ id: string; title: string; icon: string | null }>,
+  data: [{ id: "proj-1", title: "Web", icon: null }] as Array<{ id: string; title: string; icon: string | null }>,
   isSuccess: true,
 }));
 
@@ -466,7 +466,7 @@ describe("AgentCreatePanel", () => {
     mockClearDraft.mockImplementation(() => {
       mockIssueDraftStore.draft = emptyIssueDraft();
     });
-    mockProjectsQuery.data = [];
+    mockProjectsQuery.data = [{ id: "proj-1", title: "Web", icon: null }];
     mockProjectsQuery.isSuccess = true;
     mockSquadsData.list = [];
     mockQuickCreateIssue.mockResolvedValue(undefined);
@@ -564,7 +564,7 @@ describe("AgentCreatePanel", () => {
       expect(mockQuickCreateIssue).toHaveBeenCalledWith({
         agent_id: "agent-1",
         prompt: "New agent prompt",
-        project_id: undefined,
+        project_id: "proj-1",
       });
     });
 
@@ -753,7 +753,7 @@ describe("AgentCreatePanel", () => {
       expect(mockQuickCreateIssue).toHaveBeenCalledWith({
         agent_id: "agent-1",
         prompt: "Create issue with ![image](/api/attachments/019ec09d-6222-722b-bdfa-427b105d80be/download)",
-        project_id: undefined,
+        project_id: "proj-1",
         parent_issue_id: undefined,
         attachment_ids: ["019ec09d-6222-722b-bdfa-427b105d80be"],
       });
@@ -789,7 +789,7 @@ describe("AgentCreatePanel", () => {
       expect(mockQuickCreateIssue).toHaveBeenCalledWith({
         squad_id: "squad-1",
         prompt: "Investigate the regression",
-        project_id: undefined,
+        project_id: "proj-1",
       });
     });
     expect(mockSetLastActor).toHaveBeenCalledWith("squad", "squad-1");
@@ -821,9 +821,9 @@ describe("AgentCreatePanel", () => {
 
       renderPanel({ onClose: vi.fn(), isExpanded: false, setIsExpanded: vi.fn() });
 
-      // Seeding from it is exactly the removed behavior — the pill must be
-      // empty, and with no value there is nothing to clear.
-      expect(screen.getByTestId("project-picker")).toHaveTextContent("Project none");
+      // The obsolete preference remains ignored; the sole current project is
+      // selected from live project data instead.
+      expect(screen.getByTestId("project-picker")).toHaveTextContent("Project proj-1");
       expect(screen.queryByRole("button", { name: "Clear project" })).not.toBeInTheDocument();
     });
 
@@ -876,34 +876,32 @@ describe("AgentCreatePanel", () => {
     expect(screen.getByTestId("project-picker")).toHaveTextContent("Project none");
   });
 
-  // Dropping a project used to cost two clicks — open the popover, hit
-  // "No project" — because the pill had no clear affordance of its own
-  // (MUL-5862). The × is part of the pill, so it only exists once the field
-  // has a value to drop.
-  describe("project pill quick-clear", () => {
-    it("has no × while no project is selected", () => {
-      renderPanel({ onClose: vi.fn(), isExpanded: false, setIsExpanded: vi.fn() });
+  it("does not offer a clear action for the required project", () => {
+    renderPanel({ onClose: vi.fn(), isExpanded: false, setIsExpanded: vi.fn() });
 
-      expect(screen.getByTestId("project-picker")).toHaveTextContent("Project none");
-      expect(screen.queryByRole("button", { name: "Clear project" })).not.toBeInTheDocument();
-    });
+    expect(screen.getByTestId("project-picker")).toHaveTextContent("Project proj-1");
+    expect(screen.queryByRole("button", { name: "Clear project" })).not.toBeInTheDocument();
+  });
 
-    it("clears local state and the shared draft in one click", async () => {
-      const user = userEvent.setup();
-      mockIssueDraftStore.draft.shared.projectId = "proj-1";
-      mockProjectsQuery.data = [{ id: "proj-1", title: "Web", icon: null }];
-      mockProjectsQuery.isSuccess = true;
+  it("requires an explicit project choice when several projects exist", () => {
+    mockProjectsQuery.data = [
+      { id: "proj-1", title: "Web", icon: null },
+      { id: "proj-2", title: "Desktop", icon: null },
+    ];
 
-      renderPanel({ onClose: vi.fn(), isExpanded: false, setIsExpanded: vi.fn() });
-      expect(screen.getByTestId("project-picker")).toHaveTextContent("Project proj-1");
+    renderPanel({ onClose: vi.fn(), isExpanded: false, setIsExpanded: vi.fn() });
 
-      await user.click(screen.getByRole("button", { name: "Clear project" }));
+    expect(screen.getByTestId("project-picker")).toHaveTextContent("Project none");
+    expect(screen.getByRole("button", { name: /^Create$/i })).toBeDisabled();
+  });
 
-      expect(screen.getByTestId("project-picker")).toHaveTextContent("Project none");
-      expect(mockSetShared).toHaveBeenCalledWith({ projectId: undefined });
-      // The × retires with the value it cleared.
-      expect(screen.queryByRole("button", { name: "Clear project" })).not.toBeInTheDocument();
-    });
+  it("offers project creation when no project exists", () => {
+    mockProjectsQuery.data = [];
+
+    renderPanel({ onClose: vi.fn(), isExpanded: false, setIsExpanded: vi.fn() });
+
+    expect(screen.getByRole("button", { name: /add project/i })).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: /^Create$/i })).toBeDisabled();
   });
 
   // Mirror case: while the query is still loading, we must NOT preemptively
@@ -955,7 +953,7 @@ describe("AgentCreatePanel", () => {
       expect(mockQuickCreateIssue).toHaveBeenCalledWith({
         agent_id: "agent-1",
         prompt: "Investigate the regression",
-        project_id: undefined,
+        project_id: "proj-1",
         parent_issue_id: "parent-uuid-1",
       });
     });

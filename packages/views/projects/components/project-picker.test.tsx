@@ -110,6 +110,19 @@ describe("ProjectPicker", () => {
     expect(screen.getByRole("button", { name: /mobile web/i })).toBeInTheDocument();
   });
 
+  it("omits the empty row when a project is required", async () => {
+    const user = userEvent.setup();
+    const onUpdate = vi.fn();
+
+    renderPicker({ projectId: null, required: true, onUpdate });
+
+    await user.click(screen.getByRole("button", { name: /select project/i }));
+    expect(screen.queryByRole("button", { name: /no project/i })).not.toBeInTheDocument();
+
+    await user.click(screen.getByRole("button", { name: /mobile web/i }));
+    expect(onUpdate).toHaveBeenCalledWith({ project_id: "project-2" });
+  });
+
   it("locks every mutation path when disabled", async () => {
     // Regression (MUL-5150): a keyboard user could Tab to the inline clear
     // button and detach the project while a chat send was in flight,

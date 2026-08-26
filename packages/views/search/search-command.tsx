@@ -72,6 +72,7 @@ import { useT } from "../i18n";
 import { matchesPinyin } from "../editor/extensions/pinyin-match";
 import { HighlightText } from "./highlight-text";
 import { useSearchStore } from "./search-store";
+import { LOCAL_PAGE_KEYS } from "../layout/local-navigation";
 
 // The palette's Pages group is generated from WORKSPACE_PAGES, the same
 // registry the sidebar nav and the desktop tab bar read. It used to be a
@@ -103,14 +104,6 @@ const PAGE_KEYWORDS: Record<WorkspacePageKey, string[]> = {
 };
 
 const NAV_PAGE_KEYS = Object.keys(WORKSPACE_PAGES) as WorkspacePageKey[];
-const LOCAL_NAV_PAGE_KEYS = new Set<WorkspacePageKey>([
-  "issues",
-  "projects",
-  "agents",
-  "runtimes",
-  "settings",
-]);
-
 // No `icon` field: like the sidebar nav, a page's icon is derived from its
 // destination path via routeIconForPath, so all navigation surfaces show the
 // same icon for the same route.
@@ -323,7 +316,7 @@ export function SearchCommand({
   const navPages = useMemo<NavPage[]>(
     () =>
       NAV_PAGE_KEYS.filter(
-        (key) => !localMode || LOCAL_NAV_PAGE_KEYS.has(key),
+        (key) => !localMode || LOCAL_PAGE_KEYS.has(key),
       ).map(
         (key) => ({
           key,

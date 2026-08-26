@@ -81,6 +81,9 @@ func (s *Store) enqueueAssignedIssue(ctx context.Context, workspaceID, issueID, 
 	if err != nil {
 		return err
 	}
+	if issue.ProjectID == nil || strings.TrimSpace(*issue.ProjectID) == "" {
+		return ErrIssueProjectRequired
+	}
 	if issue.AssigneeType == nil || issue.AssigneeID == nil || *issue.AssigneeType != "agent" || *issue.AssigneeID != LocalAgentID || issue.Status == "done" || issue.Status == "cancelled" {
 		return nil
 	}

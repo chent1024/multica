@@ -238,17 +238,13 @@ describe("Board grouped by project", () => {
     expect(screen.queryByText(GHOST_ID)).toBeNull();
   });
 
-  it("keeps a No project column when the server returns no such group", () => {
-    // Clearing a card's project by dragging has to stay possible in a workspace
-    // where every card currently has one, so this column is not derived from
-    // the result set like the others.
+  it("omits the legacy No project column when the server returns no such group", () => {
     render({
       descriptors: PROJECT_DESCRIPTORS,
       issues: ISSUES.filter((issue) => issue.project_id !== null),
     });
 
-    const header = screen.getByText("No project").parentElement!;
-    expect(header.textContent).toContain("0");
+    expect(screen.queryByText("No project")).toBeNull();
   });
 
   it("keeps exactly one No project column when the server does return it", () => {

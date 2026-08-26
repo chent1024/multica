@@ -17,12 +17,14 @@ Multica connects Git projects, user tasks, Codex runs, and their progress timeli
 ## Local model
 
 - Project = a local Git project.
-- Issue = a task you want Codex to complete.
+- Issue = a task you want Codex to complete; every Issue belongs to one Project.
 - Task/Run = one Codex execution.
 - Comment/Event = progress, commits, verification, and release records.
 - `thread_id` = the related Codex session.
 
 The API listens on loopback and stores data in one SQLite file. The historical `workspace` identifier is a compatibility name for the single local data space; it is not a tenant and cannot be added or switched.
+
+New tasks require a Project. With one Project it is selected automatically; with several Projects the user chooses explicitly. A task keeps its Project for its lifetime, child tasks inherit their parent Project, and a Project that still owns tasks cannot be deleted.
 
 ## Task workflow
 

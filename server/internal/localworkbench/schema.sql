@@ -82,7 +82,7 @@ CREATE TABLE IF NOT EXISTS issues (
     creator_type TEXT NOT NULL DEFAULT 'system',
     creator_id TEXT NOT NULL,
     parent_issue_id TEXT,
-    project_id TEXT,
+    project_id TEXT NOT NULL,
     position REAL NOT NULL DEFAULT 0,
     stage INTEGER,
     start_date TEXT,
@@ -263,3 +263,6 @@ VALUES (7, strftime('%Y-%m-%dT%H:%M:%fZ', 'now'));
 
 INSERT OR IGNORE INTO schema_version(version, applied_at)
 VALUES (8, strftime('%Y-%m-%dT%H:%M:%fZ', 'now'));
+
+INSERT OR IGNORE INTO schema_version(version, applied_at)
+VALUES (9, strftime('%Y-%m-%dT%H:%M:%fZ', 'now'));

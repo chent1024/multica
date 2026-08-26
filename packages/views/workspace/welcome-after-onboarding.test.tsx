@@ -40,6 +40,7 @@ vi.mock("@multica/core/auth", () => ({
 
 const mockCreateIssue = vi.fn();
 const mockGetWorkspace = vi.fn();
+const mockListProjects = vi.fn();
 
 vi.mock("@multica/core/paths", async () => {
   const actual = await vi.importActual<typeof import("@multica/core/paths")>(
@@ -59,6 +60,7 @@ vi.mock("@multica/core/api", () => ({
   api: {
     createIssue: (...args: unknown[]) => mockCreateIssue(...args),
     getWorkspace: (...args: unknown[]) => mockGetWorkspace(...args),
+    listProjects: (...args: unknown[]) => mockListProjects(...args),
   },
 }));
 
@@ -104,6 +106,10 @@ function renderWelcome() {
 beforeEach(() => {
   mockCreateIssue.mockReset();
   mockGetWorkspace.mockReset();
+  mockListProjects.mockReset();
+  mockListProjects.mockResolvedValue({
+    projects: [{ id: "project-1", title: "Test project" }],
+  });
   mockPush.mockReset();
   useWelcomeStore.getState().reset();
 });
@@ -150,6 +156,7 @@ describe("WelcomeAfterOnboarding", () => {
       status: "in_progress",
       assignee_type: "member",
       assignee_id: "user-1",
+      project_id: "project-1",
     });
     expect(mockCreateIssue.mock.calls[0]![0].description).toContain(
       "Start with Mika",
@@ -177,6 +184,26 @@ describe("WelcomeAfterOnboarding", () => {
       await screen.findByRole("button", { name: /try again/i }),
     ).toBeInTheDocument();
     expect(useWelcomeStore.getState().dismissed).toBe(false);
+  });
+
+  it("does not guess a project for the guide when ownership is ambiguous", async () => {
+    mockListProjects.mockResolvedValueOnce({
+      projects: [
+        { id: "project-1", title: "Web" },
+        { id: "project-2", title: "Desktop" },
+      ],
+    });
+    useWelcomeStore.getState().set({
+      workspaceId: "ws-1",
+      choice: "skip",
+    });
+
+    renderWelcome();
+
+    expect(
+      await screen.findByRole("button", { name: /try again/i }),
+    ).toBeInTheDocument();
+    expect(mockCreateIssue).not.toHaveBeenCalled();
   });
 
   it("provisions the guide issue when the member retries", async () => {

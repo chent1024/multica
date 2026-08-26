@@ -1,6 +1,10 @@
 import { render } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { configureShortcutPlatform } from "@multica/core/shortcuts";
+import {
+  configureShortcutPlatform,
+  createShortcutChord,
+  useShortcutStore,
+} from "@multica/core/shortcuts";
 import { NavigationProvider, type NavigationAdapter } from "../navigation";
 import { GlobalShortcuts } from "./global-shortcuts";
 
@@ -43,10 +47,10 @@ function makeAdapter(overrides: Partial<NavigationAdapter> = {}): NavigationAdap
   };
 }
 
-function renderShortcuts(adapter: NavigationAdapter) {
+function renderShortcuts(adapter: NavigationAdapter, localMode = false) {
   return render(
     <NavigationProvider value={adapter}>
-      <GlobalShortcuts />
+      <GlobalShortcuts localMode={localMode} />
     </NavigationProvider>,
   );
 }
@@ -67,10 +71,12 @@ describe("GlobalShortcuts history navigation", () => {
     // Pin the platform so Cmd (metaKey) maps to the primary modifier, matching
     // the Mod+[ / Mod+] defaults regardless of the host running the test.
     configureShortcutPlatform("macos");
+    useShortcutStore.getState().resetAll();
   });
 
   afterEach(() => {
     configureShortcutPlatform(null);
+    useShortcutStore.getState().resetAll();
   });
 
   it("steps back through history on Mod+[", () => {
@@ -119,6 +125,26 @@ describe("GlobalShortcuts history navigation", () => {
 
     expect(adapter.back).not.toHaveBeenCalled();
     input.remove();
+    unmount();
+  });
+
+  it("does not execute hidden navigation actions in local mode", () => {
+    useShortcutStore
+      .getState()
+      .setShortcut("goAgents", createShortcutChord("A", { primary: true }));
+    const adapter = makeAdapter();
+    const { unmount } = renderShortcuts(adapter, true);
+
+    const event = new KeyboardEvent("keydown", {
+      key: "a",
+      metaKey: true,
+      bubbles: true,
+      cancelable: true,
+    });
+    document.dispatchEvent(event);
+
+    expect(adapter.push).not.toHaveBeenCalled();
+    expect(event.defaultPrevented).toBe(false);
     unmount();
   });
 });

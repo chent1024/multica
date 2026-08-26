@@ -139,12 +139,15 @@
   },
   "delete_dialog": {
     "title": "プロジェクトを削除",
-    "description": "プロジェクトが削除されます。タスクは削除されませんが、リンクが解除されます。",
+    "description": "このプロジェクトを削除します。タスクが残っているプロジェクトは削除できません。",
     "confirm": "削除",
     "cancel": "キャンセル"
   },
   "picker": {
     "no_project": "プロジェクトなし",
+    "select_project": "プロジェクトを選択",
+    "required": "タスクを作成する前にプロジェクトを選択してください",
+    "add_project": "プロジェクトを追加",
     "empty": "プロジェクトはまだありません",
     "search_placeholder": "プロジェクトを検索...",
     "clear_aria": "プロジェクトをクリア"

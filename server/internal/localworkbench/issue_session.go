@@ -71,12 +71,15 @@ func (s *Store) SendIssueSessionMessage(ctx context.Context, workspaceID, issueI
 	}
 
 	var statusCategory string
-	var assigneeType, assigneeID sql.NullString
-	err = tx.QueryRowContext(ctx, `SELECT COALESCE(st.category, i.status), i.assignee_type, i.assignee_id
+	var assigneeType, assigneeID, projectID sql.NullString
+	err = tx.QueryRowContext(ctx, `SELECT COALESCE(st.category, i.status), i.assignee_type, i.assignee_id, i.project_id
 		FROM issues i LEFT JOIN issue_statuses st ON st.workspace_id=i.workspace_id AND st.key=i.status
-		WHERE i.workspace_id=? AND i.id=?`, workspaceID, issueID).Scan(&statusCategory, &assigneeType, &assigneeID)
+		WHERE i.workspace_id=? AND i.id=?`, workspaceID, issueID).Scan(&statusCategory, &assigneeType, &assigneeID, &projectID)
 	if err != nil {
 		return IssueSessionMessageResult{}, fmt.Errorf("reading issue for session message: %w", err)
+	}
+	if !projectID.Valid || strings.TrimSpace(projectID.String) == "" {
+		return IssueSessionMessageResult{}, ErrIssueProjectRequired
 	}
 	if statusCategory == "done" || statusCategory == "cancelled" {
 		return IssueSessionMessageResult{}, fmt.Errorf("%w: finished issue", ErrIssueSessionNotRunnable)
@@ -287,12 +290,15 @@ func (s *Store) ContinueIssueSession(ctx context.Context, workspaceID, issueID s
 	defer func() { _ = tx.Rollback() }()
 
 	var status, statusCategory string
-	var assigneeType, assigneeID sql.NullString
-	err = tx.QueryRowContext(ctx, `SELECT i.status, COALESCE(st.category, i.status), i.assignee_type, i.assignee_id
+	var assigneeType, assigneeID, projectID sql.NullString
+	err = tx.QueryRowContext(ctx, `SELECT i.status, COALESCE(st.category, i.status), i.assignee_type, i.assignee_id, i.project_id
 		FROM issues i LEFT JOIN issue_statuses st ON st.workspace_id=i.workspace_id AND st.key=i.status
-		WHERE i.workspace_id=? AND i.id=?`, workspaceID, issueID).Scan(&status, &statusCategory, &assigneeType, &assigneeID)
+		WHERE i.workspace_id=? AND i.id=?`, workspaceID, issueID).Scan(&status, &statusCategory, &assigneeType, &assigneeID, &projectID)
 	if err != nil {
 		return Issue{}, "", "", fmt.Errorf("reading issue for session continuation: %w", err)
+	}
+	if !projectID.Valid || strings.TrimSpace(projectID.String) == "" {
+		return Issue{}, "", "", ErrIssueProjectRequired
 	}
 	if statusCategory == "done" || statusCategory == "cancelled" {
 		return Issue{}, "", "", fmt.Errorf("%w: finished issue", ErrIssueSessionNotRunnable)

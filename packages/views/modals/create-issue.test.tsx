@@ -34,6 +34,7 @@ const mockCreateIssue = vi.hoisted(() => vi.fn());
 const mockAttachLabel = vi.hoisted(() => vi.fn());
 const mockListProperties = vi.hoisted(() => vi.fn());
 const mockListAgents = vi.hoisted(() => vi.fn());
+const mockListProjects = vi.hoisted(() => vi.fn());
 const mockSetIssueProperty = vi.hoisted(() => vi.fn());
 const mockSetShared = vi.hoisted(() => vi.fn());
 const mockSetManual = vi.hoisted(() => vi.fn());
@@ -170,6 +171,14 @@ vi.mock("@multica/core/workspace/queries", () => ({
   agentListOptions: (wsId: string) => ({
     queryKey: ["workspaces", wsId, "agents"],
     queryFn: mockListAgents,
+  }),
+}));
+
+vi.mock("@multica/core/projects/queries", () => ({
+  projectListOptions: (wsId: string) => ({
+    queryKey: ["projects", wsId],
+    queryFn: mockListProjects,
+    initialData: [{ id: "proj-1", title: "Web", icon: null }],
   }),
 }));
 
@@ -588,6 +597,9 @@ describe("CreateIssueModal", () => {
     mockQuickCreateStore.keepOpen = false;
     mockCreateSettingsStore.manualCreateFields = DEFAULT_MANUAL_FIELDS;
     mockListAgents.mockResolvedValue([]);
+    mockListProjects.mockResolvedValue([
+      { id: "proj-1", title: "Web", icon: null },
+    ]);
     mockSetKeepOpen.mockImplementation((v: boolean) => {
       mockQuickCreateStore.keepOpen = v;
     });
@@ -685,8 +697,8 @@ describe("CreateIssueModal", () => {
         due_date: undefined,
         attachment_ids: undefined,
         parent_issue_id: undefined,
-		handoff: undefined,
-        project_id: undefined,
+        handoff: undefined,
+        project_id: "proj-1",
       });
     });
 
@@ -857,7 +869,7 @@ describe("CreateIssueModal", () => {
         attachment_ids: undefined,
         parent_issue_id: undefined,
 		handoff: undefined,
-        project_id: undefined,
+        project_id: "proj-1",
       });
     });
 
@@ -876,7 +888,7 @@ describe("CreateIssueModal", () => {
     });
     expect(mockSetShared).toHaveBeenCalledWith({
       priority: "none",
-      projectId: undefined,
+      projectId: "proj-1",
       dueDate: null,
       attachments: [],
     });
@@ -1216,7 +1228,7 @@ describe("CreateIssueModal", () => {
     const user = userEvent.setup();
 
     const firstOpen = renderModal(<CreateIssueModal onClose={vi.fn()} />);
-    expect(screen.getByTestId("project-picker")).toHaveAttribute("data-project-id", "none");
+    expect(screen.getByTestId("project-picker")).toHaveAttribute("data-project-id", "proj-1");
 
     await user.click(screen.getByTestId("project-picker"));
     expect(mockSetShared).toHaveBeenCalledWith({ projectId: "proj-1" });

@@ -531,7 +531,7 @@ describe("SearchCommand", () => {
     expect(useSearchStore.getState().open).toBe(false);
   });
 
-  it("omits Inbox and member results in local mode", async () => {
+  it("omits cloud and agent-management destinations in local mode", async () => {
     const user = userEvent.setup();
     mockMembers.current = [
       {
@@ -554,6 +554,14 @@ describe("SearchCommand", () => {
     await user.clear(input);
     await user.type(input, "inbox");
     expect(screen.queryByText("Inbox")).not.toBeInTheDocument();
+
+    await user.clear(input);
+    await user.type(input, "agents");
+    expect(screen.queryByText("Agents")).not.toBeInTheDocument();
+
+    await user.clear(input);
+    await user.type(input, "runtimes");
+    expect(screen.getByText("Runtimes")).toBeInTheDocument();
   });
 
   it("renders recent issues from query cache joined with store visit records", () => {

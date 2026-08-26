@@ -1361,7 +1361,7 @@ describe("SwimLaneView", () => {
     expect(screen.getByText("Issue C")).toBeInTheDocument();
   });
 
-  it("emits project_id when a card is dropped into a project lane", () => {
+  it("does not move a task between project lanes", () => {
     mockViewState.swimlaneGrouping = "project";
     const mockOnMoveIssue = vi.fn();
 
@@ -1378,14 +1378,10 @@ describe("SwimLaneView", () => {
       lastOnDragEnd({ active: { id: "issue-c" }, over: { id: target } });
     });
 
-    expect(mockOnMoveIssue).toHaveBeenCalledWith(
-      "issue-c",
-      expect.objectContaining({ project_id: "proj-1", status: "todo" }),
-      expect.any(Function),
-    );
+    expect(mockOnMoveIssue).not.toHaveBeenCalled();
   });
 
-  it("emits null project_id when a card is dropped into the 'No project' lane", () => {
+  it("does not clear project ownership by dropping into the legacy lane", () => {
     mockViewState.swimlaneGrouping = "project";
     const mockOnMoveIssue = vi.fn();
 
@@ -1401,11 +1397,7 @@ describe("SwimLaneView", () => {
       lastOnDragEnd({ active: { id: "issue-a" }, over: { id: target } });
     });
 
-    expect(mockOnMoveIssue).toHaveBeenCalledWith(
-      "issue-a",
-      expect.objectContaining({ project_id: null, status: "in_review" }),
-      expect.any(Function),
-    );
+    expect(mockOnMoveIssue).not.toHaveBeenCalled();
   });
 
   // ------------------------------------------------------------------

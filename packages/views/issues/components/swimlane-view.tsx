@@ -1082,6 +1082,12 @@ function SwimLaneViewImpl({
         ) {
           return prev;
         }
+        if (
+          swimlaneGrouping === "project" &&
+          activeCell.laneKey !== overCell.laneKey
+        ) {
+          return prev;
+        }
 
         // Self-parent guard — see handleDragEnd for rationale.
         const overLane = laneByKey.get(overCell.laneKey);
@@ -1139,7 +1145,7 @@ function SwimLaneViewImpl({
         };
       });
     },
-    [cellSet, laneByKey],
+    [cellSet, laneByKey, swimlaneGrouping],
   );
 
   const handleDragEnd = useCallback(
@@ -1212,6 +1218,13 @@ function SwimLaneViewImpl({
       if (
         laneByKey.get(activeCell.laneKey)?.isOrphan ||
         laneByKey.get(overCell.laneKey)?.isOrphan
+      ) {
+        reset();
+        return;
+      }
+      if (
+        swimlaneGrouping === "project" &&
+        activeCell.laneKey !== overCell.laneKey
       ) {
         reset();
         return;
@@ -1688,7 +1701,10 @@ function DraggableSwimLane({
                 lane={lane}
                 projectId={projectId}
                 onCreateIssue={onCreateIssue}
-                readOnly={lane.isOrphan}
+                readOnly={
+                  lane.isOrphan ||
+                  (grouping === "project" && lane.rawId === NONE_LANE_ID)
+                }
                 page={
                   lane.serverCellKeys?.[status]
                     ? groupPagination?.[lane.serverCellKeys[status]!]

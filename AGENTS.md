@@ -14,6 +14,8 @@ This file provides guidance to AI agents when working with code in this reposito
 
 One local Electron product backed by a loopback Go API, with pnpm workspaces and shared packages.
 
+Every task belongs to exactly one local Git project. New tasks require a project, child tasks inherit it, assignment is immutable, and projects with tasks cannot be deleted. Historical workspace identity remains internal compatibility state and is not a user-facing concept.
+
 - `server/cmd/server/` - loopback-only Go API
 - `server/internal/localworkbench/` - SQLite schema, store, and local business handlers
 - `server/internal/daemon/` - local Codex execution
