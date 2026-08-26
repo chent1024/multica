@@ -88,10 +88,10 @@
     "move_failed": "タスクを移動できませんでした"
   },
   "status": {
-    "backlog": "バックログ",
+    "backlog": "候補",
     "todo": "未着手",
     "in_progress": "進行中",
-    "in_review": "レビュー中",
+    "in_review": "検収待ち",
     "done": "完了",
     "blocked": "ブロック中",
     "cancelled": "キャンセル済み"
@@ -310,6 +310,7 @@
   },
   "board": {
     "hidden_columns_label": "非表示の列",
+    "hidden_columns_count": "非表示の列 · {{count}}",
     "hide_column": "列を非表示",
     "show_column": "列を表示",
     "add_issue_tooltip": "タスクを追加",

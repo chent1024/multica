@@ -100,6 +100,17 @@ export interface IssueDateFilter {
 
 export const SWIMLANE_GROUPINGS: SwimlaneGrouping[] = ["parent", "project", "assignee"];
 
+/**
+ * Keep the default board focused on the normal delivery flow. These categories
+ * remain available through the hidden-columns menu and status filters; this is
+ * presentation state only and never changes an issue's lifecycle status.
+ */
+export const DEFAULT_HIDDEN_STATUS_CATEGORIES: readonly IssueStatusCategory[] = [
+  "backlog",
+  "blocked",
+  "cancelled",
+];
+
 export interface CardProperties {
   priority: boolean;
   description: boolean;
@@ -317,7 +328,7 @@ export const viewStoreSlice = (set: StoreApi<IssueViewState>["setState"]): Issue
   cardPropertyIds: [],
   showSubIssues: true,
   listCollapsedStatuses: [],
-  hiddenStatusCategories: [],
+  hiddenStatusCategories: [...DEFAULT_HIDDEN_STATUS_CATEGORIES],
   ganttZoom: "week",
   ganttShowCompleted: false,
   swimlaneGrouping: "assignee",
@@ -426,9 +437,9 @@ export const viewStoreSlice = (set: StoreApi<IssueViewState>["setState"]): Issue
       propertyFilters: {},
       dateFilter: null,
       agentRunningFilter: false,
-      // Reset restores every column, matching what it did when hiding a column
-      // was expressed as a status filter.
-      hiddenStatusCategories: [],
+      // Reset returns the board to its focused default rather than expanding
+      // exception and terminal categories back into the main workflow.
+      hiddenStatusCategories: [...DEFAULT_HIDDEN_STATUS_CATEGORIES],
     }),
   resetFiltersTo: (snapshot) => set({ ...snapshot }),
   clearFilterDimension: (dimension) =>
@@ -544,7 +555,29 @@ export const viewStoreSlice = (set: StoreApi<IssueViewState>["setState"]): Issue
 
 export const viewStorePersistOptions = (name: string) => ({
   name,
+  version: 1,
   storage: createJSONStorage(() => createWorkspaceAwareStorage(defaultStorage)),
+  migrate: (persisted: unknown, version: number) => {
+    if (version >= 1 || !persisted || typeof persisted !== "object") {
+      return persisted as IssueViewState;
+    }
+    const legacy = persisted as Partial<IssueViewState>;
+    const previouslyHidden = Array.isArray(legacy.hiddenStatusCategories)
+      ? legacy.hiddenStatusCategories
+      : [];
+    return {
+      ...legacy,
+      // Apply the new focused-board default once to existing workspaces while
+      // preserving every category they had already hidden. Subsequent manual
+      // show/hide choices persist at v1 and are not reapplied.
+      hiddenStatusCategories: Array.from(
+        new Set([
+          ...previouslyHidden,
+          ...DEFAULT_HIDDEN_STATUS_CATEGORIES,
+        ]),
+      ),
+    } as IssueViewState;
+  },
   partialize: (state: IssueViewState) => ({
     // NOTE: `agentRunningFilter` is intentionally NOT persisted — running
     // state changes second-to-second, and a stored toggle would let users

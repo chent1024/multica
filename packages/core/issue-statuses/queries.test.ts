@@ -28,7 +28,7 @@ describe("buildIssueStatusCatalog", () => {
     for (const key of ["backlog", "todo", "in_progress", "in_review", "done", "blocked", "cancelled"]) {
       expect(c.categoryOf(key)).toBe(key);
     }
-    expect(c.labelOf("in_review")).toBe("In Review");
+    expect(c.labelOf("in_review")).toBe("Awaiting Acceptance");
   });
 
   it("maps a custom status to its category and name", () => {

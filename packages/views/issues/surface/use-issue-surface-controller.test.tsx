@@ -317,7 +317,7 @@ describe("useIssueSurfaceController", () => {
     });
     expect(listIssueTableRows).toHaveBeenCalledWith(
       expect.objectContaining({
-        group_key: "status:backlog",
+        group_key: "status:todo",
         page: { limit: 50, cursor: null },
       }),
     );
@@ -1234,7 +1234,7 @@ describe("useIssueSurfaceController", () => {
     getWorkspaceWorkingAgents.mockResolvedValue(agents);
   }
 
-  it("fetches and surfaces the cancelled bucket as a default status", async () => {
+  it("fetches only the focused workflow columns by default", async () => {
     const { result } = renderHook(
       () =>
         useIssueSurfaceController({
@@ -1246,20 +1246,22 @@ describe("useIssueSurfaceController", () => {
 
     await waitFor(() => expect(listIssues).toHaveBeenCalled());
 
-    // The fetch layer requests the cancelled status page like any other.
-    expect(listIssues).toHaveBeenCalledWith(
-      expect.objectContaining({ status: "cancelled", limit: 50, offset: 0 }),
-    );
-    // …and with no status filter it is a visible column, ordered last.
-    expect(result.current.visibleStatuses).toContain("cancelled");
-    expect(result.current.visibleStatuses.at(-1)).toBe("cancelled");
+    expect(result.current.visibleStatuses).toEqual([
+      "todo",
+      "in_progress",
+      "in_review",
+      "done",
+    ]);
   });
 
-  it("includes cancelled issues in the default surface and visible statuses", async () => {
+  it("fetches and surfaces cancelled issues after the user shows that column", async () => {
     mockListByStatus({
       todo: [makeIssue({ id: "todo-1", status: "todo" })],
       cancelled: [makeIssue({ id: "cancelled-1", status: "cancelled" })],
     });
+
+    const store = getIssueSurfaceViewStore("project:p1");
+    act(() => store.getState().showStatus("cancelled"));
 
     const { result } = renderHook(
       () =>

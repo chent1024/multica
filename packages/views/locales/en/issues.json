@@ -88,10 +88,10 @@
     "move_failed": "Failed to move issue"
   },
   "status": {
-    "backlog": "Backlog",
+    "backlog": "Candidate",
     "todo": "Todo",
     "in_progress": "In Progress",
-    "in_review": "In Review",
+    "in_review": "Awaiting Acceptance",
     "done": "Done",
     "blocked": "Blocked",
     "cancelled": "Cancelled"
@@ -312,6 +312,7 @@
   },
   "board": {
     "hidden_columns_label": "Hidden columns",
+    "hidden_columns_count": "Hidden columns · {{count}}",
     "hide_column": "Hide column",
     "show_column": "Show column",
     "add_issue_tooltip": "Add issue",

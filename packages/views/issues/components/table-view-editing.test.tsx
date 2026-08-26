@@ -261,7 +261,7 @@ describe("TableView cell editors under data refresh", () => {
 
     await screen.findByText("MUL-c");
     const row = screen.getByText("MUL-c").closest("tr")!;
-    await user.click(within(row).getByRole("button", { name: /Backlog/ }));
+    await user.click(within(row).getByRole("button", { name: /Candidate/ }));
     await user.click(screen.getByRole("button", { name: /^Todo$/ }));
 
     const { modal, data } = useModalStore.getState();
@@ -353,8 +353,8 @@ describe("TableView cell editors under data refresh", () => {
     // Open the status picker on row A: its cell trigger shows "Todo".
     const rowA = screen.getByText("MUL-a").closest("tr")!;
     await user.click(within(rowA).getByRole("button", { name: /Todo/ }));
-    // Base UI portals the popup; "Backlog" only exists while it is open.
-    expect(screen.getByRole("button", { name: /Backlog/ })).toBeTruthy();
+    // Base UI portals the popup; "Candidate" only exists while it is open.
+    expect(screen.getByRole("button", { name: /Candidate/ })).toBeTruthy();
 
     // A realtime refresh lands: new array identities, rows reordered, new
     // childProgressMap. The popup must stay open and the structure must hold
@@ -388,15 +388,15 @@ describe("TableView cell editors under data refresh", () => {
     });
 
     await waitFor(() => {
-      expect(screen.getByRole("button", { name: /Backlog/ })).toBeTruthy();
+      expect(screen.getByRole("button", { name: /Candidate/ })).toBeTruthy();
       expect(identifiers()).toEqual(["MUL-a", "MUL-b"]);
       // …while the VALUES inside the frozen rows keep tracking live data.
       expect(screen.getByText("Alpha task (updated)")).toBeTruthy();
     });
 
     // Selecting a value closes the editor; the deferred live order applies.
-    await user.click(screen.getByRole("button", { name: /Backlog/ }));
-    expect(screen.queryByRole("button", { name: /Backlog/ })).toBeNull();
+    await user.click(screen.getByRole("button", { name: /Candidate/ }));
+    expect(screen.queryByRole("button", { name: /Candidate/ })).toBeNull();
     expect(identifiers()).toEqual(["MUL-b", "MUL-a"]);
   }, 60_000);
 

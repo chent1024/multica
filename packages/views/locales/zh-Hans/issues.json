@@ -88,10 +88,10 @@
     "move_failed": "移动任务失败"
   },
   "status": {
-    "backlog": "待规划",
+    "backlog": "候选",
     "todo": "待办",
     "in_progress": "进行中",
-    "in_review": "审核中",
+    "in_review": "待验收",
     "done": "已完成",
     "blocked": "已阻塞",
     "cancelled": "已取消"
@@ -310,6 +310,7 @@
   },
   "board": {
     "hidden_columns_label": "隐藏的列",
+    "hidden_columns_count": "隐藏列 · {{count}}",
     "hide_column": "隐藏列",
     "show_column": "显示列",
     "add_issue_tooltip": "新建任务",

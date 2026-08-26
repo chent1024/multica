@@ -44,7 +44,7 @@ function entry(overrides: Partial<IssueStatusEntry>): IssueStatusEntry {
 const IN_REVIEW = entry({
   id: "in_review",
   key: "in_review",
-  name: "In Review",
+  name: "Awaiting Acceptance",
   is_system: true,
   position: 0,
 });
@@ -85,7 +85,7 @@ describe("StatusPicker trigger color", () => {
     );
 
     const trigger = iconOf(container);
-    const row = iconOf(optionRow("In Review"));
+    const row = iconOf(optionRow("Awaiting Acceptance"));
 
     // No inline color on either: an inline color is precisely what overrides
     // the token and produces the two-greens mismatch.

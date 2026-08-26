@@ -12,6 +12,7 @@ import (
 	"net/http"
 	"os"
 	"path/filepath"
+	"sort"
 	"strconv"
 	"strings"
 	"sync"
@@ -691,6 +692,9 @@ type tableRequest struct {
 	Group struct {
 		Kind string `json:"kind"`
 	} `json:"group"`
+	Facets []struct {
+		Kind string `json:"kind"`
+	} `json:"facets"`
 	GroupKey *string `json:"group_key"`
 	ParentID *string `json:"parent_id"`
 }
@@ -818,7 +822,37 @@ func (s *Server) listIssueTableFacets(w http.ResponseWriter, r *http.Request) {
 		s.respondStoreError(w, err)
 		return
 	}
-	writeJSON(w, 200, map[string]any{"query_fingerprint": "local", "total": len(items), "facets": []any{}})
+	facets := []any{}
+	for _, facet := range input.Facets {
+		if facet.Kind != "status" {
+			continue
+		}
+		// Status facets are disjunctive: keep every other filter but drop the
+		// selected statuses so hidden categories and unselected filter options
+		// still report the count they would reveal.
+		facetInput := input
+		facetInput.Query.Filters.Statuses = nil
+		facetItems, err := s.tableIssues(r, facetInput)
+		if err != nil {
+			s.respondStoreError(w, err)
+			return
+		}
+		counts := map[string]int{}
+		for _, item := range facetItems {
+			counts[item.Status]++
+		}
+		keys := make([]string, 0, len(counts))
+		for key := range counts {
+			keys = append(keys, key)
+		}
+		sort.Strings(keys)
+		values := make([]any, 0, len(keys))
+		for _, key := range keys {
+			values = append(values, map[string]any{"key": key, "count": counts[key]})
+		}
+		facets = append(facets, map[string]any{"kind": "status", "values": values})
+	}
+	writeJSON(w, 200, map[string]any{"query_fingerprint": "local", "total": len(items), "facets": facets})
 }
 
 func (s *Server) searchIssues(w http.ResponseWriter, r *http.Request) {

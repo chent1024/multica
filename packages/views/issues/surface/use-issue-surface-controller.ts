@@ -354,11 +354,11 @@ export function useIssueSurfaceController({
    */
   const statusFilterUnresolved = statusFilterPending || statusFilterError;
 
-  // Columns are CATEGORIES. Two independent things narrow them, and conflating
-  // them is what let "hide the Backlog column" also drop every custom status in
-  // other categories: `hiddenStatusCategories` is display state, `statusFilters`
-  // is a filter over concrete status KEYS which we map back to the columns those
-  // keys land in. (MUL-6243)
+  // Columns are CATEGORIES. `hiddenStatusCategories` controls the unfiltered
+  // default surface; an explicit status filter overrides that presentation
+  // preference so selecting a normally hidden category never produces a
+  // mysteriously empty board. Filters still use concrete status KEYS, mapped
+  // back to the categories those keys land in. (MUL-6243)
   const serverStatuses = useMemo<IssueStatusCategory[]>(
     () => {
       const selected =
@@ -367,8 +367,9 @@ export function useIssueSurfaceController({
           : null;
       const visible = ALL_STATUSES.filter(
         (category) =>
-          !hiddenStatusCategories.includes(category) &&
-          (selected === null || selected.has(category)),
+          selected === null
+            ? !hiddenStatusCategories.includes(category)
+            : selected.has(category),
       );
       return effectiveViewMode === "list"
         ? visible.filter((status) => !listCollapsedStatuses.includes(status))

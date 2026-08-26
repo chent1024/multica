@@ -286,6 +286,55 @@ func TestSQLiteWorkbenchPersistsCoreLifecycle(t *testing.T) {
 	}
 }
 
+func TestIssueTableStatusFacetIncludesHiddenAndUnselectedStatuses(t *testing.T) {
+	databasePath := filepath.Join(t.TempDir(), "multica.db")
+	app, err := New(t.Context(), databasePath, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer app.Close()
+	server := httptest.NewServer(app.Router())
+	defer server.Close()
+
+	for _, input := range []map[string]any{
+		{"title": "Todo", "status": "todo"},
+		{"title": "Blocked", "status": "blocked"},
+		{"title": "Cancelled", "status": "cancelled"},
+	} {
+		requestJSON[Issue](t, server.URL, http.MethodPost, "/api/issues", input, http.StatusCreated, nil)
+	}
+
+	var response struct {
+		Total  int `json:"total"`
+		Facets []struct {
+			Kind   string `json:"kind"`
+			Values []struct {
+				Key   string `json:"key"`
+				Count int    `json:"count"`
+			} `json:"values"`
+		} `json:"facets"`
+	}
+	requestJSON(t, server.URL, http.MethodPost, "/api/issues/table/facets", map[string]any{
+		"query": map[string]any{
+			"scope":   map[string]any{"kind": "workspace"},
+			"filters": map[string]any{"statuses": []string{"todo"}},
+		},
+		"facets":        []map[string]any{{"kind": "status"}},
+		"include_total": true,
+	}, http.StatusOK, &response)
+
+	if response.Total != 1 || len(response.Facets) != 1 || response.Facets[0].Kind != "status" {
+		t.Fatalf("facet response = %#v", response)
+	}
+	counts := map[string]int{}
+	for _, value := range response.Facets[0].Values {
+		counts[value.Key] = value.Count
+	}
+	if counts["todo"] != 1 || counts["blocked"] != 1 || counts["cancelled"] != 1 {
+		t.Fatalf("status facet counts = %#v", counts)
+	}
+}
+
 func TestSQLiteWorkbenchHasNoAuthOrCloudRoutes(t *testing.T) {
 	app, err := New(context.Background(), filepath.Join(t.TempDir(), "multica.db"), nil)
 	if err != nil {

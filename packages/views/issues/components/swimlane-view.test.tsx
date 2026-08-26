@@ -1,5 +1,5 @@
 import { describe, it, expect, vi, beforeEach } from "vitest";
-import { render, screen, fireEvent, act, waitFor } from "@testing-library/react";
+import { render, screen, fireEvent, act, waitFor, within } from "@testing-library/react";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { SwimLaneView } from "./swimlane-view";
 import { IssueContextMenuProvider } from "../actions";
@@ -105,10 +105,10 @@ vi.mock("@multica/core/issues/config", () => ({
   ALL_STATUSES: ["backlog", "todo", "in_progress", "in_review", "done", "blocked", "cancelled"],
   STATUS_ORDER: ["backlog", "todo", "in_progress", "in_review", "done", "blocked", "cancelled"],
   STATUS_CONFIG: {
-    backlog: { label: "Backlog", iconColor: "text-muted-foreground", hoverBg: "hover:bg-accent" },
+    backlog: { label: "Candidate", iconColor: "text-muted-foreground", hoverBg: "hover:bg-accent" },
     todo: { label: "Todo", iconColor: "text-muted-foreground", hoverBg: "hover:bg-accent" },
     in_progress: { label: "In Progress", iconColor: "text-warning", hoverBg: "hover:bg-warning/10" },
-    in_review: { label: "In Review", iconColor: "text-success", hoverBg: "hover:bg-success/10" },
+    in_review: { label: "Awaiting Acceptance", iconColor: "text-success", hoverBg: "hover:bg-success/10" },
     done: { label: "Done", iconColor: "text-info", hoverBg: "hover:bg-info/10" },
     blocked: { label: "Blocked", iconColor: "text-destructive", hoverBg: "hover:bg-destructive/10" },
     cancelled: { label: "Cancelled", iconColor: "text-muted-foreground", hoverBg: "hover:bg-accent" },
@@ -412,7 +412,7 @@ describe("SwimLaneView", () => {
       />,
     );
 
-    expect(screen.getByText("Backlog")).toBeInTheDocument();
+    expect(screen.getByText("Candidate")).toBeInTheDocument();
     expect(screen.getByText("Todo")).toBeInTheDocument();
     expect(screen.getByText("In Progress")).toBeInTheDocument();
   });
@@ -843,7 +843,9 @@ describe("SwimLaneView", () => {
         onMoveIssue={vi.fn()}
       />,
     );
-    expect(screen.queryByText("Hidden columns")).not.toBeInTheDocument();
+    expect(
+      screen.queryByRole("button", { name: "Hidden columns · 1" }),
+    ).not.toBeInTheDocument();
     unmount();
 
     renderWithI18n(
@@ -854,8 +856,15 @@ describe("SwimLaneView", () => {
         onMoveIssue={vi.fn()}
       />,
     );
-    expect(screen.getByText("Hidden columns")).toBeInTheDocument();
-    expect(screen.getByText("Blocked")).toBeInTheDocument();
+    fireEvent.click(
+      screen.getByRole("button", { name: "Hidden columns · 1" }),
+    );
+    expect(screen.getByRole("menuitem", { name: "Show column: Blocked" })).toBeInTheDocument();
+
+    fireEvent.click(
+      screen.getByRole("menuitem", { name: "Show column: Blocked" }),
+    );
+    expect(mockViewState.showStatus).toHaveBeenCalledWith("blocked");
   });
 
   it("calls onMoveIssue on drag-and-drop end", () => {
@@ -975,11 +984,14 @@ describe("SwimLaneView", () => {
       />,
     );
 
-    const panel = screen.getByText("Hidden columns").parentElement!.parentElement!;
-    expect(panel).toHaveTextContent("Backlog");
-    expect(panel).toHaveTextContent("Blocked");
-    expect(panel).toHaveTextContent("1");
-    expect(panel).toHaveTextContent("0");
+    fireEvent.click(
+      screen.getByRole("button", { name: "Hidden columns · 2" }),
+    );
+    const menu = screen.getByRole("menu");
+    expect(menu).toHaveTextContent("Candidate");
+    expect(menu).toHaveTextContent("Blocked");
+    expect(within(menu).getByRole("menuitem", { name: "Show column: Candidate" })).toHaveTextContent("1");
+    expect(within(menu).getByRole("menuitem", { name: "Show column: Blocked" })).toHaveTextContent("0");
   });
 
   it("hidden-column totals come from unfilteredIssues when provided", () => {
@@ -1005,11 +1017,12 @@ describe("SwimLaneView", () => {
       />,
     );
 
-    const panel = screen.getByText("Hidden columns").parentElement!.parentElement!;
-    expect(panel).toHaveTextContent("Backlog");
-    expect(panel).toHaveTextContent("Blocked");
-    const counts = [...panel.querySelectorAll("span")].map((el) => el.textContent);
-    expect(counts.filter((c) => c === "1").length).toBeGreaterThanOrEqual(2);
+    fireEvent.click(
+      screen.getByRole("button", { name: "Hidden columns · 2" }),
+    );
+    const menu = screen.getByRole("menu");
+    expect(within(menu).getByRole("menuitem", { name: "Show column: Candidate" })).toHaveTextContent("1");
+    expect(within(menu).getByRole("menuitem", { name: "Show column: Blocked" })).toHaveTextContent("1");
   });
 
   const multiParentIssues: Issue[] = [

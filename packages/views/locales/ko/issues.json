@@ -88,10 +88,10 @@
     "move_failed": "태스크를 이동하지 못했습니다"
   },
   "status": {
-    "backlog": "백로그",
+    "backlog": "후보",
     "todo": "할 일",
     "in_progress": "진행 중",
-    "in_review": "리뷰 중",
+    "in_review": "검수 대기",
     "done": "완료",
     "blocked": "막힘",
     "cancelled": "취소됨"
@@ -310,6 +310,7 @@
   },
   "board": {
     "hidden_columns_label": "숨긴 열",
+    "hidden_columns_count": "숨긴 열 · {{count}}",
     "hide_column": "열 숨기기",
     "show_column": "열 표시",
     "add_issue_tooltip": "태스크 추가",

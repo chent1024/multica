@@ -341,10 +341,10 @@ vi.mock("@multica/core/issues/config", () => ({
   ALL_STATUSES: ["backlog", "todo", "in_progress", "in_review", "done", "blocked", "cancelled"],
   STATUS_ORDER: ["backlog", "todo", "in_progress", "in_review", "done", "blocked", "cancelled"],
   STATUS_CONFIG: {
-    backlog: { label: "Backlog", iconColor: "text-muted-foreground", hoverBg: "hover:bg-accent" },
+    backlog: { label: "Candidate", iconColor: "text-muted-foreground", hoverBg: "hover:bg-accent" },
     todo: { label: "Todo", iconColor: "text-muted-foreground", hoverBg: "hover:bg-accent" },
     in_progress: { label: "In Progress", iconColor: "text-warning", hoverBg: "hover:bg-warning/10" },
-    in_review: { label: "In Review", iconColor: "text-success", hoverBg: "hover:bg-success/10" },
+    in_review: { label: "Awaiting Acceptance", iconColor: "text-success", hoverBg: "hover:bg-success/10" },
     done: { label: "Done", iconColor: "text-info", hoverBg: "hover:bg-info/10" },
     blocked: { label: "Blocked", iconColor: "text-destructive", hoverBg: "hover:bg-destructive/10" },
     cancelled: { label: "Cancelled", iconColor: "text-muted-foreground", hoverBg: "hover:bg-accent" },
@@ -1534,7 +1534,7 @@ describe("IssueDetail (shared)", () => {
 
   // -------------------------------------------------------------------------
   // MUL-6413 — the activity glyph is per CATEGORY, so a move into a custom
-  // status drew the icon of the built-in it sits beside: "In Review → Awaiting
+  // status drew the icon of the built-in it sits beside: "Awaiting Acceptance → Awaiting
   // Response" repainted identically and read as though nothing had moved.
   // Colour is what carries a custom status's own identity.
   // -------------------------------------------------------------------------
@@ -1543,7 +1543,7 @@ describe("IssueDetail (shared)", () => {
     id: "in_review",
     workspace_id: "ws-1",
     key: "in_review",
-    name: "In Review",
+    name: "Awaiting Acceptance",
     description: "",
     category: "in_review",
     color: "#8b5cf6",
@@ -1590,7 +1590,7 @@ describe("IssueDetail (shared)", () => {
 
     await waitFor(() => {
       expect(
-        screen.getByText(/from In Review to Awaiting Response/i),
+        screen.getByText(/from Awaiting Acceptance to Awaiting Response/i),
       ).toBeInTheDocument();
     });
     expect(statusChangeIcon("Awaiting Response").style.color).toBe("rgb(255, 0, 0)");
@@ -1615,9 +1615,9 @@ describe("IssueDetail (shared)", () => {
     renderIssueDetailWithStatusCatalog([IN_REVIEW_BUILT_IN, AWAITING_RESPONSE]);
 
     await waitFor(() => {
-      expect(screen.getByText(/from In Progress to In Review/i)).toBeInTheDocument();
+      expect(screen.getByText(/from In Progress to Awaiting Acceptance/i)).toBeInTheDocument();
     });
-    const icon = statusChangeIcon("In Review");
+    const icon = statusChangeIcon("Awaiting Acceptance");
     expect(icon.style.color).toBe("");
     expect(icon.getAttribute("class")).toContain("text-success");
   });
@@ -1654,7 +1654,7 @@ describe("IssueDetail (shared)", () => {
 
     // Only the 8 most recent entries (act-3..act-10) are rendered by default.
     // act-1 and act-2 are folded behind the show-more line.
-    expect(screen.getByText(/from In Progress to In Review/i)).toBeInTheDocument(); // act-3
+    expect(screen.getByText(/from In Progress to Awaiting Acceptance/i)).toBeInTheDocument(); // act-3
     expect(screen.getByText(/set due date to/i)).toBeInTheDocument(); // act-10
     expect(screen.queryByText(/from Todo to In Progress/i)).not.toBeInTheDocument(); // act-1
     expect(screen.queryByText(/from Low to Medium/i)).not.toBeInTheDocument(); // act-2
@@ -1694,9 +1694,9 @@ describe("IssueDetail (shared)", () => {
     // exactly within the limit, so no "Show N more activities" line appears.
     expect(screen.getByText(/from Todo to In Progress/i)).toBeInTheDocument();
     expect(screen.getByText(/from Low to High/i)).toBeInTheDocument();
-    expect(screen.getByText(/from In Progress to In Review/i)).toBeInTheDocument();
+    expect(screen.getByText(/from In Progress to Awaiting Acceptance/i)).toBeInTheDocument();
     expect(screen.getByText(/from High to Urgent/i)).toBeInTheDocument();
-    expect(screen.getByText(/from In Review to Done/i)).toBeInTheDocument();
+    expect(screen.getByText(/from Awaiting Acceptance to Done/i)).toBeInTheDocument();
     expect(screen.getByText(/from Urgent to Low/i)).toBeInTheDocument();
     expect(screen.getByText(/from Done to Blocked/i)).toBeInTheDocument();
     expect(screen.getByText(/set due date to/i)).toBeInTheDocument();
@@ -1736,7 +1736,7 @@ describe("IssueDetail (shared)", () => {
       expect(screen.getByText("10 activities")).toBeInTheDocument();
     });
     // None of the older entries are rendered before expansion.
-    expect(screen.queryByText(/from Backlog to Todo/i)).not.toBeInTheDocument();
+    expect(screen.queryByText(/from Candidate to Todo/i)).not.toBeInTheDocument();
 
     // Expand the older block by clicking its summary line.
     fireEvent.click(screen.getByText("10 activities"));
@@ -1745,14 +1745,14 @@ describe("IssueDetail (shared)", () => {
     // block has more than 8 entries, the truncate-to-8 rule does not apply
     // to non-trailing blocks, so no "Show N more activities" line appears.
     await waitFor(() => {
-      expect(screen.getByText(/from Backlog to Todo/i)).toBeInTheDocument();
+      expect(screen.getByText(/from Candidate to Todo/i)).toBeInTheDocument();
     });
     expect(screen.getByText(/from No priority to Low/i)).toBeInTheDocument();
     expect(screen.getByText(/from Todo to In Progress/i)).toBeInTheDocument();
     expect(screen.getByText(/from Low to Medium/i)).toBeInTheDocument();
-    expect(screen.getByText(/from In Progress to In Review/i)).toBeInTheDocument();
+    expect(screen.getByText(/from In Progress to Awaiting Acceptance/i)).toBeInTheDocument();
     expect(screen.getByText(/from Medium to High/i)).toBeInTheDocument();
-    expect(screen.getByText(/from In Review to Done/i)).toBeInTheDocument();
+    expect(screen.getByText(/from Awaiting Acceptance to Done/i)).toBeInTheDocument();
     expect(screen.getByText(/from High to Urgent/i)).toBeInTheDocument();
     expect(screen.getByText(/from Done to Blocked/i)).toBeInTheDocument();
     expect(screen.getByText(/from Urgent to Low/i)).toBeInTheDocument();
