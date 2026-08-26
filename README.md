@@ -24,6 +24,16 @@ Multica connects Git projects, user tasks, Codex runs, and their progress timeli
 
 The API listens on loopback and stores data in one SQLite file. The historical `workspace` identifier is a compatibility name for the single local data space; it is not a tenant and cannot be added or switched.
 
+## Task workflow
+
+An Issue detail is the working surface for one task:
+
+- The header keeps the task definition and local Git project visible.
+- The state strip distinguishes Issue status from the current work stage and shows the latest Run state for that stage.
+- The conversation keeps user instructions and Codex responses in one chronological thread. Stage separators appear only after a real stage transition; routine execution events stay out of the reading flow, while failures remain visible.
+- The composer continues the same Issue Session and queues one Codex Run. Recording a stage is a separate progress action and never commits, pushes, or releases by itself.
+- Complete Run history, transcripts, and diagnostics remain in the execution log.
+
 ## Development
 
 Prerequisites: Node.js 22, pnpm 10.28.2, and Go 1.26.6. Docker is not required.
@@ -44,6 +54,8 @@ make check          # typecheck, tests, and packaged desktop build
 ```
 
 The desktop package bundles both `multica-server` (the loopback SQLite API) and `multica` (the local execution CLI).
+
+For a repository-source setup, including worktree commands and verification, see [CLI_INSTALL.md](CLI_INSTALL.md).
 
 ## Architecture
 

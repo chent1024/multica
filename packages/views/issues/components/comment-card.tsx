@@ -95,6 +95,9 @@ interface CommentCardProps {
    * existing threaded layout; only the session root alternates left/right.
    */
   conversationRole?: "local" | "agent";
+  /** Keep issue-session turns fully visible even if an older local collapse
+   * preference exists. A task conversation reads as chat, not a log index. */
+  conversationExpanded?: boolean;
   /** Agent identity for system-authored output emitted during a Codex run. */
   conversationAgentId?: string;
   /**
@@ -841,6 +844,7 @@ function CommentCardImpl({
   issueId,
   entry,
   conversationRole = "agent",
+  conversationExpanded = false,
   conversationAgentId,
   replies,
   currentUserId,
@@ -861,7 +865,7 @@ function CommentCardImpl({
   const { getActorName } = useActorName();
   const isCollapsed = useCommentCollapseStore((s) => s.isCollapsed(issueId, entry.id));
   const toggleCollapse = useCommentCollapseStore((s) => s.toggle);
-  const open = !isCollapsed;
+  const open = conversationExpanded || !isCollapsed;
   const handleToggle = useCallback(
     () => toggleCollapse(issueId, entry.id),
     [toggleCollapse, issueId, entry.id],
@@ -951,18 +955,20 @@ function CommentCardImpl({
             className="px-4 max-md:px-3 py-3"
           >
             <div className={cn("flex items-center gap-2.5", conversationRole === "local" && "justify-end")}>
-              <button
-                type="button"
-                aria-expanded={open}
-                aria-controls={`comment-body-${entry.id}`}
-                onClick={handleToggle}
-                className={cn(
-                  "shrink-0 rounded p-0.5 text-muted-foreground hover:bg-muted hover:text-foreground transition-colors",
-                  conversationRole === "local" && "mr-auto",
-                )}
-              >
-                <ChevronRight className={cn("h-3.5 w-3.5 transition-transform", open && "rotate-90")} />
-              </button>
+              {!conversationExpanded && (
+                <button
+                  type="button"
+                  aria-expanded={open}
+                  aria-controls={`comment-body-${entry.id}`}
+                  onClick={handleToggle}
+                  className={cn(
+                    "shrink-0 rounded p-0.5 text-muted-foreground hover:bg-muted hover:text-foreground transition-colors",
+                    conversationRole === "local" && "mr-auto",
+                  )}
+                >
+                  <ChevronRight className={cn("h-3.5 w-3.5 transition-transform", open && "rotate-90")} />
+                </button>
+              )}
               {conversationRole === "local" ? (
                 <span
                   data-testid="local-actor-avatar"
@@ -1260,20 +1266,25 @@ function CommentCardImpl({
                 </div>
               ))}
 
-              {/* Reply input */}
-              <div className="border-t border-border/50 px-4 max-md:px-3 py-2.5">
-                <ReplyInput
-                  issueId={issueId}
-                  parentId={entry.id}
-                  placeholder={t(($) => $.reply.placeholder)}
-                  size="sm"
-                  avatarType="member"
-                  avatarId={currentUserId ?? ""}
-                  draftKey={`reply:${issueId}:${entry.id}`}
-                  onSubmit={(content, attachmentIds, suppressAgentIds) => onReply(entry.id, content, attachmentIds, suppressAgentIds)}
-                  onAccepted={onReplyAccepted}
-                />
-              </div>
+              {/* A task session has one composer at the bottom of the
+                  conversation. Per-message reply boxes would create competing
+                  execution entry points, so they remain available only on
+                  ordinary discussion cards. Existing replies still render. */}
+              {!conversationExpanded && (
+                <div className="border-t border-border/50 px-4 max-md:px-3 py-2.5">
+                  <ReplyInput
+                    issueId={issueId}
+                    parentId={entry.id}
+                    placeholder={t(($) => $.reply.placeholder)}
+                    size="sm"
+                    avatarType="member"
+                    avatarId={currentUserId ?? ""}
+                    draftKey={`reply:${issueId}:${entry.id}`}
+                    onSubmit={(content, attachmentIds, suppressAgentIds) => onReply(entry.id, content, attachmentIds, suppressAgentIds)}
+                    onAccepted={onReplyAccepted}
+                  />
+                </div>
+              )}
             </>
           )}
           </>

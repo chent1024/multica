@@ -16,6 +16,7 @@ import enIssues from "../../locales/en/issues.json";
 const TEST_RESOURCES = { en: { common: enCommon, issues: enIssues } };
 
 const mockViewport = vi.hoisted(() => ({ isMobile: false }));
+const mockCommentCollapse = vi.hoisted(() => ({ collapsed: false }));
 
 // Counts MockContentEditor mounts. This pins the description to exactly one
 // eager editor per issue and catches stale editor reuse across issue switches.
@@ -395,7 +396,7 @@ vi.mock("@multica/core/issues/stores", async () => ({
   useCommentCollapseStore: (selector?: any) => {
     const state = {
       collapsedByIssue: {},
-      isCollapsed: () => false,
+      isCollapsed: () => mockCommentCollapse.collapsed,
       toggle: () => {},
     };
     return selector ? selector(state) : state;
@@ -688,6 +689,7 @@ describe("IssueDetail (shared)", () => {
     vi.clearAllMocks();
     contentEditorMounts.count = 0;
     mockViewport.isMobile = false;
+    mockCommentCollapse.collapsed = false;
     // Default: issue loads successfully
     mockApiObj.getIssue.mockResolvedValue(mockIssue);
     // /timeline returns the entries flat in chronological order (oldest first).
@@ -797,6 +799,16 @@ describe("IssueDetail (shared)", () => {
     ).toBeNull();
   });
 
+  it("keeps session turns expanded despite an older collapse preference", async () => {
+    mockCommentCollapse.collapsed = true;
+    const { container } = renderIssueDetail();
+
+    expect(await screen.findByText("Started working on this")).toBeVisible();
+    expect(container.querySelector("button[aria-controls^='comment-body-']")).toBeNull();
+    expect(screen.queryByRole("button", { name: "Reply…" })).not.toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Tell Codex what to do next…" })).toBeVisible();
+  });
+
   it("renders issue title and description after loading", async () => {
     renderIssueDetail();
 
@@ -810,12 +822,10 @@ describe("IssueDetail (shared)", () => {
     expect(contentEditorMounts.count).toBe(1);
   });
 
-  it("places one current-work focus inside the conversation across wide and narrow layouts", async () => {
+  it("places one compact session status inside the conversation across wide and narrow layouts", async () => {
     const desktop = renderIssueDetail();
-    const workspace = await screen.findByRole("heading", {
-      name: "Define the problem and acceptance boundary",
-    });
-    const surface = workspace.closest("[data-issue-session-workspace]");
+    await screen.findByText("Define the problem and acceptance boundary");
+    const surface = document.querySelector("[data-issue-session-workspace]");
     const activity = screen.getByRole("heading", { name: "Conversation" });
 
     expect(document.querySelectorAll("[data-issue-session-workspace]")).toHaveLength(1);
@@ -826,7 +836,7 @@ describe("IssueDetail (shared)", () => {
     mockViewport.isMobile = true;
     renderIssueDetail();
 
-    expect(await screen.findByText("Current work")).toBeVisible();
+    expect(await screen.findByText("Define the problem and acceptance boundary")).toBeVisible();
     expect(document.querySelectorAll("[data-issue-session-workspace]")).toHaveLength(1);
   });
 
@@ -1043,8 +1053,8 @@ describe("IssueDetail (shared)", () => {
     await waitFor(() => {
       expect(scrollToIndexSpy).toHaveBeenCalledTimes(2);
     });
-    expect(scrollToIndexSpy).toHaveBeenNthCalledWith(1, { index: 3, align: "end", offset: 0 });
-    expect(scrollToIndexSpy).toHaveBeenNthCalledWith(2, { index: 3, align: "end", offset: 0 });
+    expect(scrollToIndexSpy).toHaveBeenNthCalledWith(1, { index: 2, align: "end", offset: 0 });
+    expect(scrollToIndexSpy).toHaveBeenNthCalledWith(2, { index: 2, align: "end", offset: 0 });
     expect(scrollIntoViewSpy).not.toHaveBeenCalled();
   });
 
@@ -1394,7 +1404,47 @@ describe("IssueDetail (shared)", () => {
     expect(screen.queryByRole("button", { name: "Retry task" })).not.toBeInTheDocument();
   });
 
+  it("keeps normal events out of the session conversation but shows run failures", async () => {
+    mockApiObj.listTimeline.mockResolvedValue([
+      ...mockTimeline,
+      {
+        type: "activity",
+        id: "issue-created",
+        actor_type: "system",
+        actor_id: null,
+        action: "created",
+        details: {},
+        created_at: "2026-01-17T12:00:00Z",
+      },
+      {
+        type: "activity",
+        id: "task-completed",
+        actor_type: "agent",
+        actor_id: "agent-1",
+        action: "task_completed",
+        details: { task_id: "run-1" },
+        created_at: "2026-01-18T00:00:00Z",
+      },
+      {
+        type: "activity",
+        id: "task-failed",
+        actor_type: "agent",
+        actor_id: "agent-1",
+        action: "task_failed",
+        details: { task_id: "run-2" },
+        created_at: "2026-01-19T00:00:00Z",
+      },
+    ] as TimelineEntry[]);
+
+    renderIssueDetail();
+
+    expect(await screen.findByText(/task failed/i)).toBeInTheDocument();
+    expect(screen.queryByText(/created this issue/i)).not.toBeInTheDocument();
+    expect(screen.queryByText(/completed the task/i)).not.toBeInTheDocument();
+  });
+
   it("collapses non-trailing activity blocks and expands the last one by default", async () => {
+    mockApiObj.getIssueSession.mockResolvedValue(null);
     // Timeline shape:
     //   [activities: status_changed, priority_changed] ← block A (older)
     //   [comment-1]
@@ -1462,6 +1512,7 @@ describe("IssueDetail (shared)", () => {
   });
 
   it("renders activity rows with unknown status values without crashing", async () => {
+    mockApiObj.getIssueSession.mockResolvedValue(null);
     mockApiObj.listTimeline.mockResolvedValue([
       {
         type: "activity",
@@ -1522,6 +1573,7 @@ describe("IssueDetail (shared)", () => {
   }
 
   it("paints a status-change activity in the custom status's own colour", async () => {
+    mockApiObj.getIssueSession.mockResolvedValue(null);
     mockApiObj.listTimeline.mockResolvedValue([
       {
         type: "activity",
@@ -1545,6 +1597,7 @@ describe("IssueDetail (shared)", () => {
   });
 
   it("leaves a built-in status-change activity on its semantic token colour", async () => {
+    mockApiObj.getIssueSession.mockResolvedValue(null);
     // The catalog seeds a colour for the built-ins too, but those are theme
     // tokens in the UI — painting the seeded hex would hard-code one theme.
     mockApiObj.listTimeline.mockResolvedValue([
@@ -1570,6 +1623,7 @@ describe("IssueDetail (shared)", () => {
   });
 
   it("truncates the trailing activity block to the most recent 8 entries with a show-more toggle", async () => {
+    mockApiObj.getIssueSession.mockResolvedValue(null);
     // 10 activities, all in the trailing block (no comment after them, so it's
     // the trailing block by definition). Alternating action types so the
     // 2-minute coalesce window never merges consecutive entries — we end up
@@ -1618,6 +1672,7 @@ describe("IssueDetail (shared)", () => {
   });
 
   it("does not show the show-more toggle when the trailing block has 8 or fewer entries", async () => {
+    mockApiObj.getIssueSession.mockResolvedValue(null);
     const trailingBlock: TimelineEntry[] = [
       { type: "activity", id: "act-1", actor_type: "member", actor_id: "user-1", action: "status_changed", details: { from: "todo", to: "in_progress" }, created_at: "2026-01-18T00:00:00Z" },
       { type: "activity", id: "act-2", actor_type: "member", actor_id: "user-1", action: "priority_changed", details: { from: "low", to: "high" }, created_at: "2026-01-18T00:01:00Z" },
@@ -1649,6 +1704,7 @@ describe("IssueDetail (shared)", () => {
   });
 
   it("expanding a non-trailing block shows every entry — only the trailing block truncates older ones", async () => {
+    mockApiObj.getIssueSession.mockResolvedValue(null);
     // Non-trailing block (10 activities) + comment + trailing block (1 activity).
     // Manually expanding the older block must reveal all 10 entries — the
     // truncate-to-8 rule applies only to the trailing block.

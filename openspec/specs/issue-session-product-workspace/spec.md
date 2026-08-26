@@ -5,12 +5,12 @@ Give users a coherent Issue-centered journey from analysis through release by pr
 ## Requirements
 ### Requirement: Current work is part of the Issue narrative
 
-The product SHALL show the active Issue Session stage in the Electron Issue detail main content after the task definition. The same main column SHALL present one chronological conversation feed across all Runs and stage occurrences, followed by one continuation composer. Human requests and agent responses SHALL remain primary content; compact stage and Run-state markers MAY separate turns without turning the surface into an operations panel. The properties sidebar SHALL NOT duplicate these controls.
+The product SHALL show a compact state strip in the Electron Issue detail main content after the task definition. The strip SHALL distinguish Issue status from the active Issue Session stage and SHALL show the latest real Run state and Run count for that stage. The same main column SHALL present one chronological conversation feed across all Runs and stage occurrences, followed by one continuation composer. Human requests and agent responses SHALL remain primary content; compact stage separators SHALL appear only after a real stage transition. The properties sidebar SHALL NOT duplicate these controls.
 
 #### Scenario: User opens an Issue on desktop
 
 - **WHEN** the Issue, timeline, Runs, and Issue Session load
-- **THEN** the main content shows current-work guidance and one continuous conversation before the continuation composer
+- **THEN** the main content shows the task status, current stage, current-stage Run summary, guidance, and one continuous conversation before the continuation composer
 - **AND** prior Run conversations do not require opening separate dialogs to read their user-visible requests and outcomes
 
 #### Scenario: User narrows the desktop window
@@ -20,7 +20,7 @@ The product SHALL show the active Issue Session stage in the Electron Issue deta
 
 ### Requirement: Every active stage explains its product meaning
 
-For analysis, implementation, review, test, commit, push, and release, the product SHALL show a localized stage name, one user goal, and concrete evidence expected in the existing Issue description or timeline. When Runs exist for the active stage occurrence, the product SHALL also show the latest real Run state and its recorded outcome from existing Run and Issue timeline data. It SHALL distinguish an absent outcome from a successful outcome and SHALL NOT create client-derived completion state.
+For analysis, implementation, review, test, commit, push, and release, the product SHALL show a localized stage name, one user goal, and concrete expected evidence. When Runs exist for the active stage occurrence, the state strip SHALL show the latest real Run state and Run count from existing Run data. Recorded outcomes SHALL remain readable in the conversation and complete Run history SHALL remain available in the execution log. The product SHALL NOT create client-derived completion or outcome state.
 
 #### Scenario: User views the review stage
 
@@ -31,13 +31,13 @@ For analysis, implementation, review, test, commit, push, and release, the produ
 #### Scenario: Active stage has a completed Run
 
 - **WHEN** the active stage occurrence has a completed Run with a recorded outcome
-- **THEN** the surface shows that real outcome and provides access to the Run conversation
-- **AND** it does not replace the outcome with generic expected-evidence copy
+- **THEN** the state strip identifies the stage as completed and the Run count remains truthful
+- **AND** the recorded outcome remains readable in the conversation while technical details remain available in the execution log
 
 #### Scenario: Active stage has no Run
 
 - **WHEN** no Run belongs to the active stage occurrence
-- **THEN** the surface says that no result has been recorded for this stage
+- **THEN** the state strip says that the stage has no Run
 - **AND** it does not imply that the stage is complete
 
 #### Scenario: User changes locale
@@ -52,7 +52,7 @@ The product SHALL make sending a message through the Issue conversation composer
 #### Scenario: User opens an active conversation
 
 - **WHEN** the Issue has an active Run and the user opens its detail
-- **THEN** the active turn and Run state are already visible in the conversation feed
+- **THEN** the active turn remains visible in the conversation and the latest Run state is visible in the state strip or execution log
 - **AND** no new Run or stage occurrence is created until the user sends another message
 
 #### Scenario: User continues completed work
@@ -64,7 +64,7 @@ The product SHALL make sending a message through the Issue conversation composer
 #### Scenario: User sends while work is active
 
 - **WHEN** a Run is active and the user submits another message
-- **THEN** the accepted user turn appears in the feed with an explicit waiting state
+- **THEN** the accepted user turn appears in the feed and its waiting Run remains observable in the state strip or execution log
 - **AND** the product does not imply that two Runs are executing concurrently
 
 #### Scenario: User advances from analysis
@@ -161,32 +161,33 @@ The product SHALL label Issue status and Issue Session stage as distinct concept
 
 ### Requirement: Current work remains a product surface rather than an operations panel
 
-The current-work surface SHALL prioritize the current goal, the real latest outcome, the conversation action, and the next decision. Detailed Run lists, token usage, raw identifiers, and provider diagnostics SHALL remain in existing secondary inspectors.
+The current-work surface SHALL prioritize Issue status, the current stage, the latest Run state, the conversation action, and the next decision. Detailed Run lists, outcomes duplicated from the conversation, token usage, raw identifiers, and provider diagnostics SHALL remain in the conversation or existing secondary inspectors as appropriate.
 
 #### Scenario: Multiple historical Runs exist
 
 - **WHEN** the user opens an Issue with several historical Runs
-- **THEN** current work shows only the latest outcome for the active stage occurrence
+- **THEN** the state strip shows only the latest Run state and Run count for the active stage occurrence
 - **AND** the existing execution log retains the complete technical history
 
 ### Requirement: Conversation feed preserves product and technical hierarchy
 
-The default conversation feed SHALL show top-level human comments, their replies, agent final responses, stage transitions, Run waiting/active/completed/failed state, and continuity recovery warnings from authoritative Issue Session, timeline, and Run data. Raw tool calls, full transcripts, token usage, provider identifiers, and diagnostics SHALL remain in existing secondary inspectors. Loading and failure of session or Run projections SHALL NOT hide already loaded comments or disable ordinary comment replies.
+The default conversation feed SHALL show top-level human comments, their existing replies, agent final responses, and stage transitions from authoritative Issue Session and comment data. It SHALL omit the initial stage separator because the state strip already names that stage. Routine task activities, successful completion events, raw tool calls, full transcripts, token usage, provider identifiers, and diagnostics SHALL remain outside the default reading flow; task failures SHALL remain visible as interruptions. Continuity recovery warnings SHALL appear in the current-work section. Loading and failure of session or Run projections SHALL NOT hide already loaded comments or disable the single continuation composer when the Issue is otherwise runnable.
 
 #### Scenario: Multiple Runs span multiple stages
 
 - **WHEN** an Issue contains user turns and agent responses across analysis and implementation
 - **THEN** the feed preserves chronological reading order and labels the relevant stage boundaries
+- **AND** no separator repeats the initial analysis stage before a transition occurs
 - **AND** the user-visible content is readable without opening the execution log
 
 #### Scenario: User needs technical detail
 
-- **WHEN** a Run marker or agent response has an associated Run
-- **THEN** the user can open the existing technical transcript or execution inspector
+- **WHEN** a user needs the Run associated with an agent response
+- **THEN** the user can open the existing execution log and technical transcript
 - **AND** raw tool traffic is not expanded in the default feed
 
 #### Scenario: Run projection fails after comments load
 
 - **WHEN** comments are available but Run or session metadata fails to load
-- **THEN** comments and replies remain readable and usable
+- **THEN** comments and existing replies remain readable and the continuation composer remains usable when the Issue is otherwise runnable
 - **AND** the missing metadata is reported as a bounded retryable state

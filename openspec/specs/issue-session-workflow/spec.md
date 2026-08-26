@@ -59,11 +59,11 @@ Activating commit, push, or release SHALL only record the session's current stag
 - **THEN** the stage is recorded and no deployment command is executed
 
 ### Requirement: Issue detail exposes session workflow
-The issue detail surface SHALL show the stable Issue Session, current stage, ordered stage history, each run's stage, and continuity state. Loading, empty, and failed session reads SHALL remain distinguishable.
+The issue detail surface SHALL expose the stable Issue Session across the main state strip, progressive stage details, conversation stage separators, and execution log. It SHALL show the current stage, retain ordered stage history, preserve each Run's stage, and expose continuity gaps without making healthy continuity telemetry primary. The initial stage SHALL NOT require a conversation separator because the state strip already identifies it. Loading, empty, and failed session reads SHALL remain distinguishable.
 
 #### Scenario: Review a multi-stage issue
 - **WHEN** a user opens an issue whose session contains analysis, implementation, and review runs
-- **THEN** the page identifies review as current and retains the earlier stage and run history
+- **THEN** the state strip identifies review as current, the conversation labels later stage transitions, and the execution log retains the earlier Run history
 
 ### Requirement: User can explicitly continue the Issue Session
 

@@ -78,7 +78,6 @@ import { collectThreadReplies, deriveThreadResolution } from "./thread-utils";
 import { IssueAgentHeaderChip } from "./issue-agent-header-chip";
 import { ExecutionLogSection } from "./execution-log-section";
 import { IssueSessionWorkspace } from "./issue-session-section";
-import { TranscriptButton } from "../../common/task-transcript";
 import { useQuery } from "@tanstack/react-query";
 import { useAuthStore } from "@multica/core/auth";
 import { useWorkspacePaths } from "@multica/core/paths";
@@ -386,69 +385,24 @@ function flattenGroups(
 }
 
 function SessionMarkerRow({ marker, t }: { marker: IssueConversationMarker; t: ActivityT }) {
-  const runStatus = marker.status ?? "queued";
-  if (marker.type === "stage") {
-    const completed = marker.stageStatus === "completed";
-    const label = completed
-      ? t(($) => $.issue_session.feed_stage_completed, {
-          stage: t(($) => $.issue_session.stages[marker.stageKind]),
-        })
-      : t(($) => $.issue_session.feed_stage_active, {
-          stage: t(($) => $.issue_session.stages[marker.stageKind]),
-        });
-    return (
-      <div className="pb-4 px-4 max-md:px-3" data-session-marker="stage">
-        <div
-          className={cn(
-            "border-y border-border/70 px-1 py-3",
-            !completed && "bg-primary/[0.035]",
-          )}
-        >
-          <div className="flex items-center gap-2.5">
-            {completed ? (
-              <CircleCheck className="size-4 shrink-0 text-success" aria-hidden="true" />
-            ) : (
-              <Milestone className="size-4 shrink-0 text-primary" aria-hidden="true" />
-            )}
-            <span className="text-caption font-semibold text-foreground">{label}</span>
-            {!!marker.runCount && (
-              <span className="ml-auto text-micro tabular-nums text-muted-foreground">
-                {t(($) => $.issue_session.stage_run_count, { count: marker.runCount })}
-              </span>
-            )}
-          </div>
-          {completed && marker.latestOutcome && (
-            <p className="mt-1.5 line-clamp-2 pl-[26px] text-caption leading-relaxed text-muted-foreground">
-              {marker.latestOutcome}
-            </p>
-          )}
-        </div>
-      </div>
-    );
-  }
-
-  const label = t(($) => $.issue_session.feed_run, {
+  const completed = marker.stageStatus === "completed";
+  const label = completed
+    ? t(($) => $.issue_session.feed_stage_completed, {
         stage: t(($) => $.issue_session.stages[marker.stageKind]),
-        status: t(($) => $.issue_session.run_status[runStatus]),
+      })
+    : t(($) => $.issue_session.feed_stage_active, {
+        stage: t(($) => $.issue_session.stages[marker.stageKind]),
       });
-  const waiting = marker.status === "waiting_previous_run";
   return (
-    <div className="pb-3 px-4 max-md:px-3" data-session-marker={marker.type}>
+    <div className="pb-4 pt-1" data-session-marker="stage">
       <div className="flex items-center gap-2 text-caption text-muted-foreground">
-        <span className="h-px flex-1 bg-border" aria-hidden="true" />
-        <span className={cn("flex items-center gap-1 rounded-full border bg-background px-2.5 py-1", waiting && "border-warning/40 bg-warning/10 text-foreground")}>
+        <span className="h-px flex-1 bg-border/70" aria-hidden="true" />
+        <span className="flex items-center gap-1.5 rounded-full bg-muted/50 px-2.5 py-1 text-micro font-medium text-foreground">
+          {completed ? <CircleCheck className="size-3 text-success" aria-hidden="true" /> : <Milestone className="size-3 text-primary" aria-hidden="true" />}
           {label}
-          {marker.type === "run" && marker.task && (
-            <TranscriptButton
-              task={marker.task}
-              agentName="Codex"
-              isLive={["dispatched", "waiting_local_directory", "running"].includes(marker.task.status)}
-              title={t(($) => $.execution_log.transcript_tooltip)}
-              className="-my-1 -mr-1"
-            />
-          )}
+          {!!marker.runCount && <span className="text-muted-foreground">· {t(($) => $.issue_session.stage_run_count, { count: marker.runCount })}</span>}
         </span>
-        <span className="h-px flex-1 bg-border" aria-hidden="true" />
+        <span className="h-px flex-1 bg-border/70" aria-hidden="true" />
       </div>
     </div>
   );
@@ -1209,6 +1163,18 @@ export function IssueDetail({ issueId, onDelete, onDone, defaultSidebarOpen = tr
   // User preference: pin the bottom comment bar to the scroll viewport. Off
   // below `md` regardless of the preference — see the hook.
   const stickyComposer = useStickyComposer();
+  const focusSessionComposer = useCallback(() => {
+    const composer = composerRef.current;
+    if (!composer) return;
+    composer.scrollIntoView({ block: "nearest", behavior: "smooth" });
+    const shell = composer.querySelector<HTMLElement>("[data-testid='comment-composer-shell']");
+    shell?.click();
+    requestAnimationFrame(() => {
+      requestAnimationFrame(() => {
+        composer.querySelector<HTMLElement>("[contenteditable='true']")?.focus();
+      });
+    });
+  }, []);
 
   // Per-session: which resolved threads the user has temporarily expanded.
   // Not persisted (matches Linear) — reload collapses everything back to bars.
@@ -1343,7 +1309,7 @@ export function IssueDetail({ issueId, onDelete, onDone, defaultSidebarOpen = tr
     submitReply,
     editComment, deleteComment, toggleResolveComment,
   } = useIssueTimeline(id, user?.id);
-  const { data: issueSession } = useQuery(issueSessionOptions(id));
+  const { data: issueSession, isLoading: issueSessionLoading } = useQuery(issueSessionOptions(id));
   const { data: issueSessionTasks = [] } = useQuery({
     queryKey: issueKeys.tasks(id),
     queryFn: () => api.listTasksByIssue(id),
@@ -1358,8 +1324,8 @@ export function IssueDetail({ issueId, onDelete, onDone, defaultSidebarOpen = tr
     return ids;
   }, [issueSessionTasks]);
   const conversationMarkers = useMemo(
-    () => buildIssueConversationMarkers(issueSession, issueSessionTasks, timeline),
-    [issueSession, issueSessionTasks, timeline],
+    () => buildIssueConversationMarkers(issueSession, issueSessionTasks),
+    [issueSession, issueSessionTasks],
   );
   const sendSessionMessage = useSendIssueSessionMessage(wsId, id);
   const submitSessionMessage = useCallback(async (content: string, attachmentIds?: string[]) => {
@@ -1410,9 +1376,17 @@ export function IssueDetail({ issueId, onDelete, onDone, defaultSidebarOpen = tr
     // bucketed under their parent's id and rendered nested inside CommentCard.
     // No orphan rescue needed: the timeline is fetched in full, so every
     // reply's parent is always in the same array.
-    const topLevel = timeline.filter(
-      (e) => e.type === "activity" || !e.parent_id,
-    );
+    const topLevel = timeline.filter((entry) => {
+      if (entry.type === "activity") {
+        // A session is a conversation, not an audit feed. Normal issue and run
+        // events are already represented by the state strip or execution log;
+        // only a failed run interrupts the conversation because it needs user
+        // attention. Suppress while the session query loads as well, avoiding a
+        // flash of legacy activities before the session arrives.
+        return !(issueSessionLoading || issueSession) || entry.action === "task_failed";
+      }
+      return !entry.parent_id;
+    });
     const repliesByParent = new Map<string, TimelineEntry[]>();
     for (const e of timeline) {
       if (e.type === "comment" && e.parent_id) {
@@ -1505,7 +1479,7 @@ export function IssueDetail({ issueId, onDelete, onDone, defaultSidebarOpen = tr
     }
 
     return { threadReplies, groups };
-  }, [timeline, conversationMarkers]);
+  }, [timeline, conversationMarkers, issueSession, issueSessionLoading]);
 
   // Flat array consumed by <Virtuoso>. Recomputed when timelineView.groups
   // changes (timeline events) or expandedResolved flips (user toggles a
@@ -2626,6 +2600,7 @@ export function IssueDetail({ issueId, onDelete, onDone, defaultSidebarOpen = tr
               issueId={id}
               entry={item.entry}
               conversationRole={conversationRole}
+              conversationExpanded
               conversationAgentId={conversationAgentId}
               replies={timelineView.threadReplies.get(item.id) ?? EMPTY_REPLIES}
               currentUserId={user?.id}
@@ -2968,7 +2943,7 @@ export function IssueDetail({ issueId, onDelete, onDone, defaultSidebarOpen = tr
 
           <div
             {...descDropZoneProps}
-            className="relative mt-5 rounded-lg"
+            className={cn("relative rounded-lg", issue.description?.trim() ? "mt-5" : "mt-3")}
             onFocusCapture={() => {
               if (!descriptionEditingRef.current) {
                 descriptionEditingRef.current = true;
@@ -3080,7 +3055,7 @@ export function IssueDetail({ issueId, onDelete, onDone, defaultSidebarOpen = tr
               />
             ) : null}
 
-            <div className="flex items-center gap-1 mt-3">
+            <div className={cn("flex items-center gap-1", issue.description?.trim() ? "mt-3" : "mt-1")}>
               <FileUploadButton
                 size="sm"
                 multiple
@@ -3092,7 +3067,7 @@ export function IssueDetail({ issueId, onDelete, onDone, defaultSidebarOpen = tr
 
           {/* Sub-issues — Linear-style */}
           {childIssues.length === 0 && (
-            <div className="mt-6">
+            <div className={issue.description?.trim() ? "mt-6" : "mt-3"}>
               <button
                 type="button"
                 className="inline-flex items-center gap-1.5 text-caption text-muted-foreground hover:text-foreground transition-colors"
@@ -3207,10 +3182,10 @@ export function IssueDetail({ issueId, onDelete, onDone, defaultSidebarOpen = tr
             );
           })()}
 
-          <div className="my-8 border-t" />
+          <div className={cn("border-t", issue.description?.trim() || childIssues.length > 0 ? "my-8" : "my-6")} />
 
-          {/* One Issue Session conversation. Product turns and stage/run
-              markers stay here; raw execution detail remains in the sidebar. */}
+          {/* One Issue Session conversation. Product turns and lightweight
+              stage checkpoints stay here; run detail remains in the sidebar. */}
           <div>
             <div className="flex items-center justify-between">
               <div className="flex items-center gap-3">
@@ -3218,7 +3193,7 @@ export function IssueDetail({ issueId, onDelete, onDone, defaultSidebarOpen = tr
               </div>
             </div>
 
-            <IssueSessionWorkspace issue={issue} timeline={timeline} />
+            <IssueSessionWorkspace issue={issue} onContinueConversation={focusSessionComposer} />
 
             <LocalDirectoryHint projectId={issue?.project_id} />
 
@@ -3267,7 +3242,7 @@ export function IssueDetail({ issueId, onDelete, onDone, defaultSidebarOpen = tr
                   // flash empty.
                   <TimelineSkeleton />
                 ) : (
-                  <div className="mt-4">
+                  <div className={cn("mt-4", stickyComposer && "pb-24")}>
                     <Virtuoso
                       key={`${wsId}:${id}`}
                       ref={virtuosoRef}
@@ -3285,7 +3260,7 @@ export function IssueDetail({ issueId, onDelete, onDone, defaultSidebarOpen = tr
                   </div>
                 )
               ) : (
-                <div className="mt-4">
+                <div className={cn("mt-4", stickyComposer && "pb-24")}>
                   {items.map((item, i) => (
                     <Fragment key={`${item.kind}:${item.id}`}>
                       {renderItem(i, item)}

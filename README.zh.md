@@ -18,6 +18,16 @@ Multica 在一个本地桌面应用中连接 Git 项目、用户任务、Codex �
 
 API 只监听 loopback，数据存入单个 SQLite 文件。历史命名中的 `workspace` 只是唯一、本地数据空间的兼容标识，不代表租户，也不能新增或切换。
 
+## 任务工作流
+
+Issue 详情页就是一个任务的工作界面：
+
+- 顶部保留任务定义和本地 Git 项目。
+- 状态条明确区分任务状态与当前工作阶段，并展示该阶段最近一次 Run 的状态。
+- 会话区按时间展示用户指令和 Codex 回复。只有发生真实阶段切换时才插入阶段分隔；普通执行事件不打断阅读，失败事件仍会明确显示。
+- 输入框继续同一个 Issue Session，并排队一次 Codex Run。记录阶段只是进度操作，不会自行执行 commit、push 或 release。
+- 完整 Run 历史、执行转录和诊断信息保留在执行日志中。
+
 ## 开发
 
 需要 Node.js 22、pnpm 10.28.2 和 Go 1.26.6，不需要 Docker。
@@ -36,6 +46,8 @@ make check          # 类型检查、测试和桌面端构建
 ```
 
 桌面包内置 `multica-server`（本地 SQLite API）和 `multica`（本地执行 CLI）。
+
+从仓库源码安装、启动 Worktree 和执行验证，见 [CLI_INSTALL.md](CLI_INSTALL.md)。
 
 ## 许可证
 

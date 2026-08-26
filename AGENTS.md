@@ -12,23 +12,22 @@ This file provides guidance to AI agents when working with code in this reposito
 
 ### Architecture
 
-Go backend + monorepo frontend (pnpm workspaces + Turborepo) with shared packages.
+One local Electron product backed by a loopback Go API, with pnpm workspaces and shared packages.
 
-- `server/` - Go backend (Chi router, sqlc, gorilla/websocket)
-- `apps/web/` - Next.js frontend (App Router)
-- `apps/desktop/` - Electron desktop app
-- `apps/mobile/` - Expo / React Native iOS app (read `apps/mobile/CLAUDE.md` first)
-- `apps/docs/` - Fumadocs documentation site
+- `server/cmd/server/` - loopback-only Go API
+- `server/internal/localworkbench/` - SQLite schema, store, and local business handlers
+- `server/internal/daemon/` - local Codex execution
+- `apps/desktop/` - Electron lifecycle, bundled server, IPC, and renderer routing
 - `packages/core/` - Headless business logic (Zustand stores, React Query hooks, API client)
 - `packages/ui/` - Atomic UI components (shadcn/Base UI, zero business logic)
-- `packages/views/` - Shared business pages/components
+- `packages/views/` - Project, task, Run, and timeline pages/components
 - `packages/tsconfig/` - Shared TypeScript config
 - `packages/eslint-config/` - Shared ESLint config
 
 ### State Management (critical)
 
-- **React Query** owns all server state (issues, members, agents, inbox, workspace list)
-- **Zustand** owns client/view state (view filters, drafts, modals, desktop tab state); current workspace identity is route-driven and only mirrored for platform plumbing
+- **React Query** owns API state (projects, issues, runs, timeline events, agents, runtimes, and the fixed local data-space descriptor)
+- **Zustand** owns client/view state (view filters, drafts, modals, desktop tab state, and navigation history); the historical workspace identity is a fixed compatibility value
 - All Zustand stores live in `packages/core/` - never in `packages/views/` or app directories
 - WS events update React Query for server data; store writes are only for clearing client-owned pointers with a single responder/self-event guard
 
@@ -36,18 +35,21 @@ Go backend + monorepo frontend (pnpm workspaces + Turborepo) with shared package
 
 - `packages/core/` - zero react-dom, zero localStorage, zero process.env
 - `packages/ui/` - zero `@multica/core` imports
-- `packages/views/` - zero `next/*`, zero `react-router-dom`, use `NavigationAdapter` for routing
-- `apps/web/platform/` - only place for Next.js APIs
+- `packages/views/` - zero Electron APIs and zero `react-router-dom`; use `NavigationAdapter`, `useNavigation`, and `AppLink`
+- `apps/desktop/src/renderer/src/platform/` - owns `react-router-dom` wiring
 
 ### Database Migrations (hard rules)
 
-- Never add database foreign keys or cascading actions. Enforce relationships and perform dependent cleanup explicitly in the application layer, using transactions when the operation must be atomic.
-- Every index created by a migration, including unique indexes and indexes on new tables, must use `CREATE [UNIQUE] INDEX CONCURRENTLY`. Keep each concurrent index build in its own single-statement migration file.
+- SQLite is the only product database. Schema initialization and forward upgrades live in `server/internal/localworkbench` and run transactionally.
+- Never add database foreign keys or cascading actions. Enforce relationships and dependent cleanup in application transactions.
+- Create indexes with SQLite `CREATE INDEX IF NOT EXISTS` statements.
 
 ### Commands
 
 ```bash
 make dev              # Auto-setup + start everything
+make status           # Inspect this checkout's local processes
+make down             # Stop processes and preserve local data
 pnpm typecheck        # TypeScript check
 pnpm test             # TS unit tests (Vitest)
 make test             # Go tests

@@ -2,7 +2,7 @@
 import { fireEvent, screen } from "@testing-library/react";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
-import type { AgentTask, Issue, IssueSession, TimelineEntry } from "@multica/core/types";
+import type { AgentTask, Issue, IssueSession } from "@multica/core/types";
 import { renderWithI18n } from "../../test/i18n";
 
 const state = vi.hoisted(() => ({
@@ -43,11 +43,6 @@ const completedTask: AgentTask = {
   error: null, created_at: "2026-01-01",
 };
 
-const timeline: TimelineEntry[] = [{
-  type: "comment", id: "outcome-1", actor_type: "agent", actor_id: "agent-1", source_task_id: "run-completed",
-  content: "Review found no blocking issues.", created_at: "2026-01-01T02:00:00Z",
-}];
-
 vi.mock("@multica/core/paths", () => ({ useWorkspacePaths: () => ({ issueDetail: (id: string) => `/issues/${id}` }) }));
 vi.mock("../../navigation", () => ({ AppLink: ({ href, children, ...props }: React.AnchorHTMLAttributes<HTMLAnchorElement>) => <a href={href} {...props}>{children}</a> }));
 vi.mock("@multica/core/issues/session", () => ({
@@ -65,15 +60,11 @@ vi.mock("@multica/core/api", () => ({ api: { listTasksByIssue: vi.fn(async () =>
   if (state.tasksError) throw new Error("unavailable");
   return state.tasks;
 }) } }));
-vi.mock("../../common/task-transcript", () => ({
-  TranscriptButton: ({ task, open }: { task: AgentTask; open?: boolean }) => open ? <div role="dialog">Transcript {task.id}</div> : null,
-}));
-
 import { IssueSessionWorkspace } from "./issue-session-section";
 
-function renderWorkspace(issueOverride: Partial<Issue> = {}) {
+function renderWorkspace(issueOverride: Partial<Issue> = {}, onContinueConversation?: () => void) {
   const client = new QueryClient({ defaultOptions: { queries: { retry: false } } });
-  return renderWithI18n(<QueryClientProvider client={client}><IssueSessionWorkspace issue={{ ...issue, ...issueOverride }} timeline={timeline} /></QueryClientProvider>);
+  return renderWithI18n(<QueryClientProvider client={client}><IssueSessionWorkspace issue={{ ...issue, ...issueOverride }} onContinueConversation={onContinueConversation} /></QueryClientProvider>);
 }
 
 describe("IssueSessionWorkspace", () => {
@@ -99,17 +90,17 @@ describe("IssueSessionWorkspace", () => {
     ];
   });
 
-  it("leads with progress, the current outcome, and a compact recovery path", async () => {
+  it("leads with one compact task and stage status strip", async () => {
     renderWorkspace();
     expect(await screen.findByText("Check scope and correctness")).toBeInTheDocument();
-    expect(screen.getByText("Review found no blocking issues.")).toBeInTheDocument();
-    expect(screen.getByText("Analysis")).toBeInTheDocument();
-    expect(screen.getByText("Validate")).toBeInTheDocument();
-    expect(screen.getByText("Validate").closest("li")).toHaveAttribute(
-      "aria-current",
-      "step",
-    );
-    expect(screen.getByText("Deliver")).toBeInTheDocument();
+    expect(screen.getByText("Task")).toBeInTheDocument();
+    expect(screen.getByText("In Progress")).toBeInTheDocument();
+    expect(screen.getByText("Stage")).toBeInTheDocument();
+    expect(screen.getByText("Review")).toBeInTheDocument();
+    expect(screen.getByText("Completed")).toBeInTheDocument();
+    expect(screen.getByText(/1 runs/)).toBeInTheDocument();
+    expect(screen.queryByText("Review found no blocking issues.")).not.toBeInTheDocument();
+    expect(screen.queryByText("Validate")).not.toBeInTheDocument();
     expect(screen.getByText("Execution context was not fully resumed")).toBeInTheDocument();
     expect(screen.getByText(/review the latest outcome/i)).toBeInTheDocument();
     expect(screen.getByText("Verify the child flow")).not.toBeVisible();
@@ -148,11 +139,19 @@ describe("IssueSessionWorkspace", () => {
     expect(state.continueMutateAsync).not.toHaveBeenCalled();
   });
 
-  it("opens the latest completed stage conversation without starting another run", async () => {
+  it("uses the blocked primary action to focus the existing composer", async () => {
+    const onContinue = vi.fn();
+    renderWorkspace({ status: "blocked" }, onContinue);
+    fireEvent.click(await screen.findByRole("button", { name: "Continue conversation" }));
+    expect(onContinue).toHaveBeenCalledOnce();
+    expect(screen.getByText("Add the missing context below, then continue with Codex.")).toBeInTheDocument();
+  });
+
+  it("leaves completed run detail in the execution log", async () => {
     renderWorkspace();
-    fireEvent.click(await screen.findByRole("button", { name: "View latest conversation" }));
+    await screen.findByText("Completed");
+    expect(screen.queryByRole("button", { name: "View latest conversation" })).not.toBeInTheDocument();
     expect(state.continueMutateAsync).not.toHaveBeenCalled();
-    expect(await screen.findByRole("dialog")).toHaveTextContent("run-completed");
   });
 
   it("records the recommended stage separately from running work", async () => {
@@ -173,6 +172,22 @@ describe("IssueSessionWorkspace", () => {
     expect(screen.getByText("Analysis → Review")).toBeInTheDocument();
   });
 
+  it("omits redundant history and fresh execution context for the first stage", async () => {
+    state.session.active_stage_id = "stage-1";
+    state.session.continuity_state = "fresh";
+    state.session.handoff = null;
+    state.session.stages = [
+      { id: "stage-1", session_id: "session-1", kind: "analysis", status: "active", position: 0, migrated: false, started_at: "2026-01-01", completed_at: null },
+    ];
+    state.tasks = [];
+
+    renderWorkspace();
+    fireEvent.click(await screen.findByText("Stage guidance and history"));
+
+    expect(screen.queryByText("History:")).not.toBeInTheDocument();
+    expect(screen.queryByText("Execution context:")).not.toBeInTheDocument();
+  });
+
   it("shows an accessible inline mutation error", async () => {
     state.error = true;
     renderWorkspace();
@@ -189,7 +204,8 @@ describe("IssueSessionWorkspace", () => {
   it("shows an already active run without adding another execution action", async () => {
     state.tasks = [{ ...completedTask, id: "run-active", status: "running" }];
     renderWorkspace();
-    expect(await screen.findByText("Running · 1 runs")).toBeInTheDocument();
+    expect(await screen.findByText("Running")).toBeInTheDocument();
+    expect(screen.getByText(/1 runs/)).toBeInTheDocument();
     expect(screen.queryByRole("button", { name: "Open current conversation" })).not.toBeInTheDocument();
     expect(state.continueMutateAsync).not.toHaveBeenCalled();
   });
