@@ -810,7 +810,7 @@ describe("IssueDetail (shared)", () => {
     expect(contentEditorMounts.count).toBe(1);
   });
 
-  it("places one current-work journey in the main narrative across wide and narrow layouts", async () => {
+  it("places one current-work focus inside the conversation across wide and narrow layouts", async () => {
     const desktop = renderIssueDetail();
     const workspace = await screen.findByRole("heading", {
       name: "Define the problem and acceptance boundary",
@@ -820,7 +820,7 @@ describe("IssueDetail (shared)", () => {
 
     expect(document.querySelectorAll("[data-issue-session-workspace]")).toHaveLength(1);
     expect(surface).not.toBeNull();
-    expect(surface!.compareDocumentPosition(activity) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+    expect(activity.compareDocumentPosition(surface!) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
 
     desktop.unmount();
     mockViewport.isMobile = true;

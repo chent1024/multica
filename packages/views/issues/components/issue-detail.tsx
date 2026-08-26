@@ -387,9 +387,47 @@ function flattenGroups(
 
 function SessionMarkerRow({ marker, t }: { marker: IssueConversationMarker; t: ActivityT }) {
   const runStatus = marker.status ?? "queued";
-  const label = marker.type === "stage"
-    ? t(($) => $.issue_session.feed_stage, { stage: t(($) => $.issue_session.stages[marker.stageKind]) })
-    : t(($) => $.issue_session.feed_run, {
+  if (marker.type === "stage") {
+    const completed = marker.stageStatus === "completed";
+    const label = completed
+      ? t(($) => $.issue_session.feed_stage_completed, {
+          stage: t(($) => $.issue_session.stages[marker.stageKind]),
+        })
+      : t(($) => $.issue_session.feed_stage_active, {
+          stage: t(($) => $.issue_session.stages[marker.stageKind]),
+        });
+    return (
+      <div className="pb-4 px-4 max-md:px-3" data-session-marker="stage">
+        <div
+          className={cn(
+            "border-y border-border/70 px-1 py-3",
+            !completed && "bg-primary/[0.035]",
+          )}
+        >
+          <div className="flex items-center gap-2.5">
+            {completed ? (
+              <CircleCheck className="size-4 shrink-0 text-success" aria-hidden="true" />
+            ) : (
+              <Milestone className="size-4 shrink-0 text-primary" aria-hidden="true" />
+            )}
+            <span className="text-caption font-semibold text-foreground">{label}</span>
+            {!!marker.runCount && (
+              <span className="ml-auto text-micro tabular-nums text-muted-foreground">
+                {t(($) => $.issue_session.stage_run_count, { count: marker.runCount })}
+              </span>
+            )}
+          </div>
+          {completed && marker.latestOutcome && (
+            <p className="mt-1.5 line-clamp-2 pl-[26px] text-caption leading-relaxed text-muted-foreground">
+              {marker.latestOutcome}
+            </p>
+          )}
+        </div>
+      </div>
+    );
+  }
+
+  const label = t(($) => $.issue_session.feed_run, {
         stage: t(($) => $.issue_session.stages[marker.stageKind]),
         status: t(($) => $.issue_session.run_status[runStatus]),
       });
@@ -1320,8 +1358,8 @@ export function IssueDetail({ issueId, onDelete, onDone, defaultSidebarOpen = tr
     return ids;
   }, [issueSessionTasks]);
   const conversationMarkers = useMemo(
-    () => buildIssueConversationMarkers(issueSession, issueSessionTasks),
-    [issueSession, issueSessionTasks],
+    () => buildIssueConversationMarkers(issueSession, issueSessionTasks, timeline),
+    [issueSession, issueSessionTasks, timeline],
   );
   const sendSessionMessage = useSendIssueSessionMessage(wsId, id);
   const submitSessionMessage = useCallback(async (content: string, attachmentIds?: string[]) => {
@@ -3052,8 +3090,6 @@ export function IssueDetail({ issueId, onDelete, onDone, defaultSidebarOpen = tr
             {descDragOver && <FileDropOverlay />}
           </div>
 
-          <IssueSessionWorkspace issue={issue} timeline={timeline} />
-
           {/* Sub-issues — Linear-style */}
           {childIssues.length === 0 && (
             <div className="mt-6">
@@ -3181,6 +3217,8 @@ export function IssueDetail({ issueId, onDelete, onDone, defaultSidebarOpen = tr
                 <h2 className="text-title-sm font-semibold">{t(($) => $.issue_session.conversation)}</h2>
               </div>
             </div>
+
+            <IssueSessionWorkspace issue={issue} timeline={timeline} />
 
             <LocalDirectoryHint projectId={issue?.project_id} />
 

@@ -30,6 +30,12 @@ describe("buildIssueSessionWorkspaceModel", () => {
     ], "implementation-2", "gap", [], []);
     expect(model?.occurrences.map(({ kind }) => kind)).toEqual(["implementation", "review", "implementation"]);
     expect(model?.hasContinuityGap).toBe(true);
+    expect(model?.progressGroups).toEqual([
+      { kind: "analysis", status: "upcoming" },
+      { kind: "implementation", status: "active" },
+      { kind: "validation", status: "upcoming" },
+      { kind: "delivery", status: "upcoming" },
+    ]);
   });
 
   it("does not invent an active stage for an invalid server pointer", () => {

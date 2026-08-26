@@ -10,6 +10,22 @@ export const issueSessionStageKinds: readonly IssueSessionStageKind[] = [
   "release",
 ];
 
+export type IssueSessionProgressGroupKind =
+  | "analysis"
+  | "implementation"
+  | "validation"
+  | "delivery";
+
+const progressGroupStages: ReadonlyArray<{
+  kind: IssueSessionProgressGroupKind;
+  stages: readonly IssueSessionStageKind[];
+}> = [
+  { kind: "analysis", stages: ["analysis"] },
+  { kind: "implementation", stages: ["implementation"] },
+  { kind: "validation", stages: ["review", "test"] },
+  { kind: "delivery", stages: ["commit", "push", "release"] },
+];
+
 const recommendedNextStage: Record<
   IssueSessionStageKind,
   IssueSessionStageKind | null
@@ -37,6 +53,10 @@ export interface IssueSessionWorkspaceModel {
     kind: IssueSessionStageKind;
     active: boolean;
     position: number;
+  }>;
+  progressGroups: Array<{
+    kind: IssueSessionProgressGroupKind;
+    status: "completed" | "active" | "upcoming";
   }>;
 }
 
@@ -86,6 +106,22 @@ export function buildIssueSessionWorkspaceModel(
         active: stage.id === activeStageId,
         position: stage.position,
       })),
+    progressGroups: progressGroupStages.map((group, index) => {
+      const activeGroupIndex = progressGroupStages.findIndex((candidate) =>
+        candidate.stages.includes(active.kind),
+      );
+      return {
+        kind: group.kind,
+        status: index === activeGroupIndex
+          ? "active"
+          : index < activeGroupIndex && stages.some(
+                (stage) =>
+                  stage.status === "completed" && group.stages.includes(stage.kind),
+              )
+            ? "completed"
+            : "upcoming",
+      };
+    }),
   };
 }
 

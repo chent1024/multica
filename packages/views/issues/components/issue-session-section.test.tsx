@@ -99,13 +99,22 @@ describe("IssueSessionWorkspace", () => {
     ];
   });
 
-  it("leads with the current goal, evidence, recovery, and inherited context", async () => {
+  it("leads with progress, the current outcome, and a compact recovery path", async () => {
     renderWorkspace();
     expect(await screen.findByText("Check scope and correctness")).toBeInTheDocument();
-    expect(screen.getByText("Review result and concrete findings")).toBeInTheDocument();
     expect(screen.getByText("Review found no blocking issues.")).toBeInTheDocument();
+    expect(screen.getByText("Analysis")).toBeInTheDocument();
+    expect(screen.getByText("Validate")).toBeInTheDocument();
+    expect(screen.getByText("Validate").closest("li")).toHaveAttribute(
+      "aria-current",
+      "step",
+    );
+    expect(screen.getByText("Deliver")).toBeInTheDocument();
     expect(screen.getByText("Execution context was not fully resumed")).toBeInTheDocument();
     expect(screen.getByText(/review the latest outcome/i)).toBeInTheDocument();
+    expect(screen.getByText("Verify the child flow")).not.toBeVisible();
+    fireEvent.click(screen.getByText("Stage guidance and history"));
+    expect(screen.getByText("Review result and concrete findings")).toBeVisible();
     expect(screen.getByText("Verify the child flow")).toBeInTheDocument();
     expect(screen.getAllByText("Contract is fixed")).toHaveLength(2);
     expect(screen.getAllByText("No cloud scope")).toHaveLength(2);
@@ -126,6 +135,7 @@ describe("IssueSessionWorkspace", () => {
       references: ["issue://parent-1"],
     };
     renderWorkspace();
+    fireEvent.click(await screen.findByText("Stage guidance and history"));
     expect(await screen.findAllByText("Keep the current contract")).toHaveLength(2);
     expect(screen.getAllByText("Conversation opens")).toHaveLength(2);
     expect(screen.getByText("issue://parent-1")).not.toBeVisible();
@@ -159,7 +169,7 @@ describe("IssueSessionWorkspace", () => {
     fireEvent.click(screen.getByRole("button", { name: "Record another stage" }));
     fireEvent.click(await screen.findByRole("menuitem", { name: "Build" }));
     expect(state.mutate).toHaveBeenCalledWith("implementation");
-    fireEvent.click(screen.getByText("Journey details"));
+    fireEvent.click(screen.getByText("Stage guidance and history"));
     expect(screen.getByText("Analysis → Review")).toBeInTheDocument();
   });
 
