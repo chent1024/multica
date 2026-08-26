@@ -29,7 +29,7 @@ import {
   SettingsTab,
 } from "./settings-layout";
 
-export function PreferencesTab() {
+export function PreferencesTab({ localMode = false }: { localMode?: boolean } = {}) {
   const { theme, setTheme } = useTheme();
   const { t, i18n } = useT("settings");
   const localeAdapter = useLocaleAdapter();
@@ -71,7 +71,7 @@ export function PreferencesTab() {
     localeAdapter.persist(next);
 
     let syncFailed = false;
-    if (user) {
+    if (user && !localMode) {
       try {
         await api.updateMe({ language: next });
       } catch {
@@ -160,7 +160,7 @@ export function PreferencesTab() {
             </Select>
           </SettingsRow>
 
-          <TimezoneRow />
+          <TimezoneRow localMode={localMode} />
 
           <StickyCommentBarRow />
         </SettingsCard>
@@ -197,7 +197,7 @@ function StickyCommentBarRow() {
 // state through this sentinel and translate at the wire boundary.
 const BROWSER_TZ_VALUE = "__browser__";
 
-function TimezoneRow() {
+function TimezoneRow({ localMode }: { localMode: boolean }) {
   const { t } = useT("settings");
   const user = useAuthStore((s) => s.user);
   const setUser = useAuthStore((s) => s.setUser);
@@ -241,7 +241,11 @@ function TimezoneRow() {
   return (
     <SettingsRow
       label={t(($) => $.preferences.timezone.title)}
-      description={t(($) => $.preferences.timezone.hint)}
+      description={t(($) =>
+        localMode
+          ? $.preferences.timezone.local_hint
+          : $.preferences.timezone.hint,
+      )}
       size="select-wide"
     >
       <Select

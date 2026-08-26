@@ -108,7 +108,7 @@ function IssueWindowUnavailable() {
         <div className="space-y-1">
           <h1 className="text-title font-semibold">Issue unavailable</h1>
           <p className="text-body text-muted-foreground">
-            This workspace is no longer available in your account.
+            This task is no longer available in local data.
           </p>
         </div>
         <Button variant="outline" onClick={() => window.desktopAPI.closeWindow()}>

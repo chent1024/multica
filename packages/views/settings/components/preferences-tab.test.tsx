@@ -188,6 +188,19 @@ describe("PreferencesTab — Language switcher", () => {
     expect(mockReload).toHaveBeenCalledTimes(1);
   });
 
+  it("in local mode: keeps language on this device without account sync", async () => {
+    userRef.current = { id: "local-user" };
+    const user = userEvent.setup({ advanceTimers: vi.advanceTimersByTime });
+    render(<PreferencesTab localMode />, { wrapper: I18nWrapper });
+
+    await pickLanguage(user, "中文");
+
+    expect(mockPersist).toHaveBeenCalledWith("zh-Hans");
+    expect(mockUpdateMe).not.toHaveBeenCalled();
+    expect(mockToastWarning).not.toHaveBeenCalled();
+    expect(mockToastSuccess).toHaveBeenCalledTimes(1);
+  });
+
   it("when logged in + PATCH fails: shows toast and delays reload by 2.5s", async () => {
     userRef.current = { id: "user-1" };
     mockUpdateMe.mockRejectedValueOnce(new Error("network"));
@@ -258,6 +271,14 @@ describe("PreferencesTab — Timezone section", () => {
     expect(
       screen.getByRole("combobox", { name: "Viewing Timezone" }).textContent,
     ).toContain("Asia/Shanghai");
+  });
+
+  it("uses device-only copy in local mode", () => {
+    render(<PreferencesTab localMode />, { wrapper: I18nWrapper });
+
+    expect(
+      screen.getByText("Used for local dates and ‘today’ labels on this device."),
+    ).toBeInTheDocument();
   });
 
   // handleChange PATCHes then updates the store asynchronously, so the

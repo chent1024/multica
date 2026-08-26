@@ -68,9 +68,6 @@ export function LocalSettingsPage({
           </h1>
         </div>
         <TabsList variant="line" className="flex w-max min-w-full flex-row items-center gap-1 p-0 md:w-full md:flex-col md:items-stretch">
-          <span className="hidden px-2 pb-1 pt-2 text-caption font-medium text-muted-foreground md:block">
-            Local
-          </span>
           {LOCAL_TABS.map(({ key, value, icon: Icon }) => (
             <TabsTrigger key={value} value={value} className={TRIGGER_CLASS}>
               <Icon className="h-4 w-4" />
@@ -88,7 +85,7 @@ export function LocalSettingsPage({
 
       <div className="min-w-0 flex-1 md:overflow-y-auto">
         <div className="mx-auto w-full max-w-3xl p-4 sm:p-6 md:p-8">
-          <TabsContent value="preferences"><PreferencesTab /></TabsContent>
+          <TabsContent value="preferences"><PreferencesTab localMode /></TabsContent>
           <TabsContent value="shortcuts"><KeyboardShortcutsTab /></TabsContent>
           <TabsContent value="issue"><IssueTab /></TabsContent>
           {extraTabs?.map((tab) => (

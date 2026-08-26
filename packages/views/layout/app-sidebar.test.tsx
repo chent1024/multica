@@ -309,6 +309,7 @@ describe("local mode sidebar", () => {
     expect(container.querySelector('button[data-href="/acme/projects"]')).not.toBeNull();
     expect(container.querySelector('button[data-href="/acme/inbox"]')).toBeNull();
     expect(container.querySelector('button[data-href="/acme/my-issues"]')).toBeNull();
+    expect(screen.queryByText("Acme")).not.toBeInTheDocument();
     expect(screen.queryByText("Legacy")).not.toBeInTheDocument();
     expect(screen.queryByText("Create workspace")).not.toBeInTheDocument();
     expect(screen.queryByText("Log out")).not.toBeInTheDocument();

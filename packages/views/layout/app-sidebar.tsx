@@ -616,22 +616,12 @@ export function AppSidebar({
   return (
       <Sidebar variant="inset">
         {topSlot}
-        {/* Workspace Switcher */}
+        {/* Cloud workspace/account switcher. Local mode has one implicit data
+            container and no user identity, so it starts directly with tools. */}
         <SidebarHeader className={cn("py-3", headerClassName)} style={headerStyle}>
-          <SidebarMenu>
-            <SidebarMenuItem>
-              {localMode ? (
-                <SidebarMenuButton aria-label={workspace?.name ?? "Local"}>
-                  <WorkspaceAvatar
-                    name={workspace?.name ?? "Local"}
-                    avatarUrl={workspace?.avatar_url}
-                    size="sm"
-                  />
-                  <span className="flex-1 truncate font-medium">
-                    {workspace?.name ?? "Local"}
-                  </span>
-                </SidebarMenuButton>
-              ) : (
+          {!localMode && (
+            <SidebarMenu>
+              <SidebarMenuItem>
                 <DropdownMenu>
                 <DropdownMenuTrigger
                   render={
@@ -758,9 +748,9 @@ export function AppSidebar({
                   </DropdownMenuGroup>
                 </DropdownMenuContent>
                 </DropdownMenu>
-              )}
-            </SidebarMenuItem>
-          </SidebarMenu>
+              </SidebarMenuItem>
+            </SidebarMenu>
+          )}
           <SidebarMenu>
             {searchSlot && (
               <SidebarMenuItem>

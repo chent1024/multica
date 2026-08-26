@@ -106,6 +106,10 @@ describe("IssueWindow", () => {
     render(<IssueWindow context={context} />);
 
     expect(await screen.findByText("Issue unavailable")).toBeInTheDocument();
+    expect(
+      screen.getByText("This task is no longer available in local data."),
+    ).toBeInTheDocument();
+    expect(screen.queryByText(/account/i)).toBeNull();
     expect(screen.queryByTestId("workspace-loading")).toBeNull();
   });
 

@@ -122,6 +122,7 @@
       "title": "Viewing Timezone",
       "browser_suffix": " (browser)",
       "hint": "Used for dashboards, charts, and any 'today' label shown to you. It's a personal preference that applies across all your workspaces.",
+      "local_hint": "Used for local dates and ‘today’ labels on this device.",
       "sync_failed": "Failed to save your timezone preference."
     },
     "sticky_comment_bar": {
