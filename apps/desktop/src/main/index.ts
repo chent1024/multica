@@ -14,7 +14,11 @@ import { installNavigationGestures } from "./navigation-gestures";
 import { installNavigationGuard } from "./navigation-guard";
 import { createRendererWebPreferences } from "./renderer-web-preferences";
 import { getAppVersion } from "./app-version";
-import { loadRuntimeConfig } from "./runtime-config-loader";
+import {
+  loadRuntimeConfig,
+  shouldStartBundledLocalServer,
+} from "./runtime-config-loader";
+import { startLocalServer, stopLocalServer } from "./local-server-manager";
 import type { RuntimeConfigResult } from "../shared/runtime-config";
 import {
   RENDERER_ROUTE_CONTEXT_CHANNEL,
@@ -615,17 +619,39 @@ if (!gotTheLock) {
       readonly VITE_APP_URL?: string;
     };
 
-    runtimeConfigResult = await loadRuntimeConfig({
+    const runtimeConfigOptions = {
       isDev: is.dev,
       // electron-vite exposes VITE_* on import.meta.env for the main process;
       // keep dev URL overrides on the same source the renderer used before
       // runtime config moved endpoint resolution into main/preload.
       env: {
-        apiUrl: viteEnv.VITE_API_URL,
+        apiUrl: viteEnv.VITE_API_URL ?? process.env.MULTICA_LOCAL_API_URL,
         wsUrl: viteEnv.VITE_WS_URL,
         appUrl: viteEnv.VITE_APP_URL,
       },
-    });
+    };
+    runtimeConfigResult = await loadRuntimeConfig(runtimeConfigOptions);
+    if (
+      runtimeConfigResult.ok &&
+      shouldStartBundledLocalServer({
+        isDev: runtimeConfigOptions.isDev,
+        env: { apiUrl: viteEnv.VITE_API_URL },
+      })
+    ) {
+      try {
+        await startLocalServer(runtimeConfigResult.config.apiUrl);
+      } catch (error) {
+        runtimeConfigResult = {
+          ok: false,
+          error: {
+            message:
+              error instanceof Error
+                ? error.message
+                : "Local SQLite server failed to start",
+          },
+        };
+      }
+    }
 
     electronApp.setAppUserModelId(
       is.dev ? "ai.multica.desktop.dev" : "ai.multica.desktop",
@@ -842,4 +868,8 @@ if (!gotTheLock) {
 
 app.on("window-all-closed", () => {
   if (process.platform !== "darwin") app.quit();
+});
+
+app.on("before-quit", () => {
+  stopLocalServer();
 });

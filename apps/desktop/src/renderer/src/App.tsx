@@ -21,7 +21,10 @@ import { useTabStore } from "./stores/tab-store";
 import { useWindowOverlayStore } from "./stores/window-overlay-store";
 import { useOpenSettingsShortcut } from "./hooks/use-open-settings-shortcut";
 import { useDaemonIPCBridge } from "./platform/daemon-ipc-bridge";
-import { syncDaemonOnLogin } from "./platform/daemon-login-sync";
+import {
+  LOCAL_DAEMON_TOKEN,
+  syncDaemonOnLogin,
+} from "./platform/daemon-login-sync";
 import { createDesktopLocaleAdapter } from "./platform/i18n-adapter";
 import { captureEvent } from "@multica/core/analytics";
 import { RESOURCES } from "@multica/views/locales";
@@ -161,15 +164,16 @@ function AppContent() {
   // inside syncDaemonOnLogin is load-bearing — see that module.
   useEffect(() => {
     if (!user || !runtimeConfig) return;
-    const token = localStorage.getItem("multica_token");
-    if (!token) return;
+    // The local workbench has a fixed operator and does not authenticate API
+    // requests. The daemon IPC contract still requires an opaque credential,
+    // so keep that compatibility input local to this process.
     const userId = user.id;
     (async () => {
       try {
         await syncDaemonOnLogin(
           window.daemonAPI,
           runtimeConfig.apiUrl,
-          token,
+          LOCAL_DAEMON_TOKEN,
           userId,
         );
       } catch (err) {
@@ -265,7 +269,6 @@ function AppContent() {
     open({ type: "new-workspace" });
     return undefined;
   }, [user, workspaceListReady, wsCount, workspaces, hasOnboarded, qc]);
-
 
   // Validate persisted tab state against the current user's workspace list,
   // and pick an active workspace if none is set. Runs in useLayoutEffect
@@ -454,6 +457,7 @@ export default function App() {
         <CoreProvider
           apiBaseUrl={runtimeConfigResult.config.apiUrl}
           wsUrl={runtimeConfigResult.config.wsUrl}
+          cookieAuth
           onLogout={
             windowContext.kind === "main" ? handleDaemonLogout : undefined
           }

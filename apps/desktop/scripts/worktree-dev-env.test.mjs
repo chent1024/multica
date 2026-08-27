@@ -7,6 +7,7 @@ import {
   appSuffixForPath,
   applyWorktreeDevEnv,
   cksum,
+  localApiPortForPath,
   offsetForPath,
   rendererPortForPath,
 } from "./worktree-dev-env.mjs";
@@ -98,6 +99,9 @@ describe("worktree-dev-env", () => {
     applyWorktreeDevEnv(env, { root });
     expect(env.DESKTOP_RENDERER_PORT).toBe(String(rendererPortForPath(root)));
     expect(env.DESKTOP_APP_SUFFIX).toBe(appSuffixForPath(root));
+    expect(env.MULTICA_LOCAL_API_URL).toBe(
+      `http://127.0.0.1:${localApiPortForPath(root)}`,
+    );
   });
 
   it("leaves the primary checkout untouched (.git is a dir)", () => {
@@ -106,14 +110,20 @@ describe("worktree-dev-env", () => {
     applyWorktreeDevEnv(env, { root });
     expect(env.DESKTOP_RENDERER_PORT).toBeUndefined();
     expect(env.DESKTOP_APP_SUFFIX).toBeUndefined();
+    expect(env.MULTICA_LOCAL_API_URL).toBeUndefined();
   });
 
   it("respects explicit env overrides", () => {
     const root = tmpRoot("file");
-    const env = { DESKTOP_RENDERER_PORT: "9999", DESKTOP_APP_SUFFIX: "manual" };
+    const env = {
+      DESKTOP_RENDERER_PORT: "9999",
+      DESKTOP_APP_SUFFIX: "manual",
+      MULTICA_LOCAL_API_URL: "http://127.0.0.1:29999",
+    };
     applyWorktreeDevEnv(env, { root });
     expect(env.DESKTOP_RENDERER_PORT).toBe("9999");
     expect(env.DESKTOP_APP_SUFFIX).toBe("manual");
+    expect(env.MULTICA_LOCAL_API_URL).toBe("http://127.0.0.1:29999");
   });
 
   it("fills only the missing knob when one is set explicitly", () => {
@@ -122,5 +132,8 @@ describe("worktree-dev-env", () => {
     applyWorktreeDevEnv(env, { root });
     expect(env.DESKTOP_RENDERER_PORT).toBe("9999");
     expect(env.DESKTOP_APP_SUFFIX).toBe(appSuffixForPath(root));
+    expect(env.MULTICA_LOCAL_API_URL).toBe(
+      `http://127.0.0.1:${localApiPortForPath(root)}`,
+    );
   });
 });

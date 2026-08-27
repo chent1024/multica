@@ -20,6 +20,7 @@ import { basename, join } from "node:path";
 // checkout's default — even when a worktree's offset is 0 (e.g. POSIX cksum of
 // "/tmp/multica-3494" is 1189739000, and 1189739000 % 1000 === 0). Range 5174–6173.
 const RENDERER_PORT_BASE = 5174;
+const LOCAL_API_PORT_BASE = 19080;
 const OFFSET_MODULO = 1000;
 
 // Chromium refuses to navigate to a URL on its restricted-port list and fails
@@ -78,6 +79,10 @@ export function rendererPortForPath(path) {
   return avoidRestrictedPort(RENDERER_PORT_BASE + offsetForPath(path));
 }
 
+export function localApiPortForPath(path) {
+  return LOCAL_API_PORT_BASE + offsetForPath(path);
+}
+
 // Worktree → a readable, unique, filesystem-safe suffix "<folder>-<offset>".
 // The dev app then shows e.g. "Multica Canary mul-3724-194" in Cmd+Tab and gets
 // its own userData / single-instance lock under that name. The offset is what
@@ -115,16 +120,20 @@ export function repoRootFromScriptDir(scriptDir) {
 export function applyWorktreeDevEnv(env, { root, log = false } = {}) {
   const hasPort = Boolean(env.DESKTOP_RENDERER_PORT);
   const hasSuffix = Boolean(env.DESKTOP_APP_SUFFIX);
-  if (hasPort && hasSuffix) return env; // explicit overrides win outright
+  const hasLocalApi = Boolean(env.MULTICA_LOCAL_API_URL);
+  if (hasPort && hasSuffix && hasLocalApi) return env; // explicit overrides win outright
   if (!isLinkedWorktree(root)) return env; // primary checkout → keep defaults
 
   if (!hasPort) env.DESKTOP_RENDERER_PORT = String(rendererPortForPath(root));
   if (!hasSuffix) env.DESKTOP_APP_SUFFIX = appSuffixForPath(root);
+  if (!hasLocalApi) {
+    env.MULTICA_LOCAL_API_URL = `http://127.0.0.1:${localApiPortForPath(root)}`;
+  }
 
   if (log) {
     console.log(
       `[dev:desktop] worktree isolation → renderer port ${env.DESKTOP_RENDERER_PORT}, ` +
-        `app "Multica Canary ${env.DESKTOP_APP_SUFFIX}"`,
+        `local API ${env.MULTICA_LOCAL_API_URL}, app "Multica Canary ${env.DESKTOP_APP_SUFFIX}"`,
     );
   }
   return env;

@@ -6,7 +6,6 @@ import { cn } from "@multica/ui/lib/utils";
 import { useScrollFade } from "@multica/ui/hooks/use-scroll-fade";
 import { AppLink, useNavigation } from "../navigation";
 import { HelpLauncher } from "./help-launcher";
-import { JoinDiscordCard } from "./join-discord-card";
 import {
   DndContext,
   PointerSensor,
@@ -79,6 +78,7 @@ import { issueDetailOptions } from "@multica/core/issues/queries";
 import { projectDetailOptions } from "@multica/core/projects/queries";
 import type { PinnedItem } from "@multica/core/types";
 import { useLogout } from "../auth";
+import { isDesktopShell } from "../platform/local-directory";
 import { ProjectIcon } from "../projects/components/project-icon";
 import { routeIconForPath } from "./route-icon-components";
 import { useT } from "../i18n";
@@ -428,6 +428,7 @@ export function AppSidebar({ topSlot, searchSlot, headerClassName, headerStyle }
   const user = useAuthStore((s) => s.user);
   const userId = useAuthStore((s) => s.user?.id);
   const logout = useLogout();
+  const localDesktop = isDesktopShell();
   const workspace = useCurrentWorkspace();
   const p = useWorkspacePaths();
   const { data: workspaces = EMPTY_WORKSPACES } = useQuery(workspaceListOptions());
@@ -715,13 +716,17 @@ export function AppSidebar({ topSlot, searchSlot, headerClassName, headerStyle }
                       </DropdownMenuGroup>
                     </>
                   )}
-                  <DropdownMenuSeparator />
-                  <DropdownMenuGroup>
-                    <DropdownMenuItem variant="destructive" onClick={logout}>
-                      <LogOut className="h-3.5 w-3.5" />
-                      {t(($) => $.sidebar.log_out)}
-                    </DropdownMenuItem>
-                  </DropdownMenuGroup>
+                  {!localDesktop && (
+                    <>
+                      <DropdownMenuSeparator />
+                      <DropdownMenuGroup>
+                        <DropdownMenuItem variant="destructive" onClick={logout}>
+                          <LogOut className="h-3.5 w-3.5" />
+                          {t(($) => $.sidebar.log_out)}
+                        </DropdownMenuItem>
+                      </DropdownMenuGroup>
+                    </>
+                  )}
                 </DropdownMenuContent>
               </DropdownMenu>
             </SidebarMenuItem>
@@ -877,11 +882,7 @@ export function AppSidebar({ topSlot, searchSlot, headerClassName, headerStyle }
         </SidebarContent>
 
         <SidebarFooter className="p-2">
-          {/* One utility strip: the Discord link takes the leading space the
-              help trigger was leaving empty. `justify-end` keeps the trigger
-              right-aligned once the Discord link is dismissed. */}
           <div className="flex items-center justify-end gap-1">
-            <JoinDiscordCard />
             <HelpLauncher />
           </div>
         </SidebarFooter>

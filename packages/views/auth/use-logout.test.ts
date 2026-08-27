@@ -14,6 +14,11 @@ const mockClearWorkspaceStorage = vi.hoisted(() => vi.fn());
 const mockAuthLogout = vi.hoisted(() => vi.fn());
 const mockPush = vi.hoisted(() => vi.fn());
 const mockQueryClientClear = vi.hoisted(() => vi.fn());
+const desktopShell = vi.hoisted(() => ({ current: false }));
+
+vi.mock("../platform/local-directory", () => ({
+  isDesktopShell: () => desktopShell.current,
+}));
 
 vi.mock("@tanstack/react-query", () => ({
   useQueryClient: () => ({
@@ -58,12 +63,23 @@ vi.mock("../navigation", () => ({
 
 describe("useLogout", () => {
   beforeEach(() => {
+	desktopShell.current = false;
     calls.length = 0;
     vi.clearAllMocks();
     mockReset.mockImplementation(() => calls.push("reset"));
     mockClearWorkspaceStorage.mockImplementation((_a: unknown, slug: string) =>
       calls.push(`clear:${slug}`),
     );
+  });
+
+  it("keeps the fixed local operator authenticated in Desktop", () => {
+    desktopShell.current = true;
+    const { result } = renderHook(() => useLogout());
+    result.current();
+
+    expect(mockQueryClientClear).not.toHaveBeenCalled();
+    expect(mockAuthLogout).not.toHaveBeenCalled();
+    expect(mockPush).not.toHaveBeenCalled();
   });
 
   it("resets in-memory drafts BEFORE removing their persisted keys", () => {

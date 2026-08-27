@@ -63,6 +63,10 @@ function binaryNameForPlatform(platform) {
   return platform === "win32" ? "multica.exe" : "multica";
 }
 
+function serverBinaryNameForPlatform(platform) {
+  return platform === "win32" ? "multica-server.exe" : "multica-server";
+}
+
 const targetPlatform = normalizeRuntimePlatform(
   runtimePlatformFromArgs(process.argv.slice(2)),
 );
@@ -70,9 +74,17 @@ const targetArch = normalizeRuntimeArch(runtimeArchFromArgs(process.argv.slice(2
 const goos = PLATFORM_TO_GOOS[targetPlatform];
 const goarch = targetArch === "x64" ? "amd64" : targetArch;
 const binName = binaryNameForPlatform(targetPlatform);
+const serverBinName = serverBinaryNameForPlatform(targetPlatform);
 const srcBinary = join(serverDir, "bin", `${goos}-${goarch}`, binName);
+const srcServerBinary = join(
+  serverDir,
+  "bin",
+  `${goos}-${goarch}`,
+  serverBinName,
+);
 const destDir = join(repoRoot, "apps", "desktop", "resources", "bin");
 const destBinary = join(destDir, binName);
+const destServerBinary = join(destDir, serverBinName);
 
 // Hand git arguments straight to the binary (no shell). A match pattern like
 // `v[0-9]*` must reach git as one literal argument; routing it through a shell
@@ -138,6 +150,30 @@ if (hasGo()) {
       },
     },
   );
+  console.log(
+    `[bundle-cli] go build local server → ${srcServerBinary} (${goos}/${goarch})`,
+  );
+  execFileSync(
+    "go",
+    [
+      "build",
+      "-ldflags",
+      `-X main.version=${version} -X main.commit=${commit}`,
+      "-o",
+      srcServerBinary,
+      "./cmd/local-server",
+    ],
+    {
+      cwd: serverDir,
+      stdio: "inherit",
+      env: {
+        ...process.env,
+        CGO_ENABLED: "0",
+        GOOS: goos,
+        GOARCH: goarch,
+      },
+    },
+  );
 } else {
   console.warn(
     "[bundle-cli] `go` not found in PATH — skipping CLI build. " +
@@ -155,10 +191,18 @@ if (!(await exists(srcBinary))) {
   process.exit(0);
 }
 
+if (!(await exists(srcServerBinary))) {
+  throw new Error(
+    `[bundle-cli] ${srcServerBinary} not present — local Desktop cannot start`,
+  );
+}
+
 await rm(destDir, { recursive: true, force: true });
 await mkdir(destDir, { recursive: true });
 await copyFile(srcBinary, destBinary);
 await chmod(destBinary, 0o755);
+await copyFile(srcServerBinary, destServerBinary);
+await chmod(destServerBinary, 0o755);
 
 // macOS: ad-hoc sign so Gatekeeper doesn't complain when the parent app
 // (which itself may be unsigned in dev) spawns the child.
@@ -167,9 +211,15 @@ if (process.platform === "darwin") {
     execSync(`codesign -s - --force ${JSON.stringify(destBinary)}`, {
       stdio: "pipe",
     });
+    execSync(`codesign -s - --force ${JSON.stringify(destServerBinary)}`, {
+      stdio: "pipe",
+    });
   } catch {
     // Non-fatal. Unsigned binaries still run when the parent app is trusted.
   }
 }
 
 console.log(`[bundle-cli] bundled ${srcBinary} → ${destBinary}`);
+console.log(
+  `[bundle-cli] bundled ${srcServerBinary} → ${destServerBinary}`,
+);

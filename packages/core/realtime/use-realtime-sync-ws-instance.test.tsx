@@ -2,7 +2,7 @@
  * @vitest-environment jsdom
  */
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
-import { renderHook } from "@testing-library/react";
+import { act, renderHook } from "@testing-library/react";
 import type { ReactNode } from "react";
 import { describe, expect, it, vi, beforeEach, afterEach } from "vitest";
 import type { WSClient } from "../api/ws-client";
@@ -85,6 +85,28 @@ describe("useRealtimeSync — ws instance change", () => {
     // Simpler: count calls — first mount with a ws should not trigger the
     // workspace-scoped bulk invalidation.
     expect(invalidateSpy).not.toHaveBeenCalled();
+  });
+
+  it("refreshes agents when daemon registration creates the local default agent", () => {
+    vi.useFakeTimers();
+    const ws = createMockWs();
+    renderHook(() => useRealtimeSync(ws, stores), {
+      wrapper: createWrapper(qc),
+    });
+    const onAny = vi.mocked(ws.onAny).mock.calls[0]?.[0];
+    expect(onAny).toBeDefined();
+
+    invalidateSpy.mockClear();
+    act(() => {
+      onAny!({ type: "daemon:register", payload: {} });
+      vi.advanceTimersByTime(100);
+    });
+
+    const calls = invalidateSpy.mock.calls.map(
+      (call: [{ queryKey?: unknown }, ...unknown[]]) => call[0].queryKey,
+    );
+    expect(calls).toContainEqual(workspaceKeys.agents("ws-1"));
+    vi.useRealTimers();
   });
 
   it("does not invalidate when ws goes from instance to null", () => {

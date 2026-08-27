@@ -18,6 +18,11 @@ export interface DaemonLoginSyncAPI {
   autoStart: () => Promise<unknown>;
 }
 
+// The loopback workbench does not authenticate HTTP requests, but the daemon
+// profile contract still requires a PAT-shaped credential. This stable local
+// compatibility value bypasses cloud PAT minting without granting remote use.
+export const LOCAL_DAEMON_TOKEN = "mul_local_desktop";
+
 export async function syncDaemonOnLogin(
   api: DaemonLoginSyncAPI,
   apiUrl: string,

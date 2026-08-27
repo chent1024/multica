@@ -9,6 +9,7 @@ import { resetAllRegisteredDrafts } from "@multica/core/drafts/cleanup-registry"
 import { paths } from "@multica/core/paths";
 import type { Workspace } from "@multica/core/types";
 import { useNavigation } from "../navigation";
+import { isDesktopShell } from "../platform/local-directory";
 
 /**
  * Performs a complete logout: clears per-workspace client storage, legacy
@@ -29,6 +30,10 @@ export function useLogout() {
   const { push } = useNavigation();
 
   return useCallback(() => {
+    // Desktop has one deterministic local operator and no hosted /login
+    // contract. Logging it out would strand the renderer on a dead auth page.
+    if (isDesktopShell()) return;
+
     // Reset draft stores' in-memory state FIRST, before removing persisted
     // keys. Each reset is a Zustand setState, and persist middleware writes
     // the new (empty) state straight back to storage under the still-active

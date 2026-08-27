@@ -2,6 +2,7 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
 import {
+  LOCAL_DAEMON_TOKEN,
   syncDaemonOnLogin,
   type DaemonLoginSyncAPI,
 } from "./daemon-login-sync";
@@ -29,6 +30,9 @@ beforeEach(() => {
 });
 
 describe("syncDaemonOnLogin", () => {
+  it("uses a PAT-shaped token for the loopback daemon", () => {
+    expect(LOCAL_DAEMON_TOKEN).toMatch(/^mul_/);
+  });
   // Regression: syncToken used to race a separate effect's setTargetApiUrl.
   // Arriving first meant main had no resolved profile and wrote the token to
   // the user's default CLI profile. #6399.

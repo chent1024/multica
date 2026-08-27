@@ -838,6 +838,12 @@ export function useRealtimeSync(
         const wsId = getCurrentWsId();
         if (wsId) {
           qc.invalidateQueries({ queryKey: runtimeKeys.all(wsId) });
+          // Local desktop daemon registration transactionally creates or
+          // rebinds the default Agent after the first agent query may already
+          // have cached an empty list. Refresh both projections from the same
+          // durable registration event so Agents and Chat become usable on
+          // first launch without a manual reload.
+          qc.invalidateQueries({ queryKey: workspaceKeys.agents(wsId) });
           // Runtime online/offline transitions move the derived status
           // for every agent that hosts on this runtime, which shifts the
           // working/idle/offline pill on the squad page.

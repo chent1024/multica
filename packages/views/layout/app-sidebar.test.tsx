@@ -236,6 +236,14 @@ describe("PinRow", () => {
   });
 });
 
+describe("sidebar footer", () => {
+  it("does not render the Discord invitation", () => {
+    const { container } = render(<AppSidebar />);
+
+    expect(container.querySelector('a[href="https://discord.gg/W8gYBn226t"]')).not.toBeInTheDocument();
+  });
+});
+
 // On a phone the sidebar is a Sheet laid over the page, so a nav tap that
 // leaves it open renders the destination underneath and reads as a dead tap.
 describe("mobile sheet dismissal", () => {
