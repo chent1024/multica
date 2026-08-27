@@ -182,7 +182,7 @@ func (s *Server) listRuntimes(w http.ResponseWriter, r *http.Request) {
 		result = append(result, map[string]any{
 			"id": item.ID, "workspace_id": item.WorkspaceID, "daemon_id": item.DaemonID, "name": item.Name,
 			"runtime_mode": "local", "provider": item.Provider, "launch_header": "", "status": item.Status,
-			"device_info": "", "metadata": map[string]any{"cli_version": item.Version}, "owner_id": nil, "visibility": "private",
+			"device_info": "", "metadata": map[string]any{"cli_version": item.Version}, "owner_id": LocalOperatorID, "visibility": "private",
 			"profile_id": item.ProfileID, "last_seen_at": item.LastSeenAt, "created_at": item.CreatedAt, "updated_at": item.UpdatedAt,
 		})
 	}

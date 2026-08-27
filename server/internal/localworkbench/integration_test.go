@@ -88,6 +88,12 @@ func TestLocalWorkbenchRetainedFeatureLifecyclePersists(t *testing.T) {
 	requireStatus(t, register, http.StatusOK)
 	registered := decodeResponse[map[string]any](t, register)
 	runtimeID := registered["runtimes"].([]any)[0].(map[string]any)["id"].(string)
+	runtimes := localRequest(t, handler, http.MethodGet, "/api/runtimes", nil)
+	requireStatus(t, runtimes, http.StatusOK)
+	runtimeList := decodeResponse[[]map[string]any](t, runtimes)
+	if len(runtimeList) != 1 || runtimeList[0]["owner_id"] != LocalOperatorID {
+		t.Fatalf("local runtime ownership=%v", runtimeList)
+	}
 	agents := localRequest(t, handler, http.MethodGet, "/api/agents", nil)
 	requireStatus(t, agents, http.StatusOK)
 	agentList := decodeResponse[[]map[string]any](t, agents)
