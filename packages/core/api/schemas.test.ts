@@ -1295,6 +1295,26 @@ describe("InboxItemListSchema", () => {
     });
   });
 
+  it("keeps the list when a newer backend adds non-string detail values", () => {
+    const parsed = parseWithFallback(
+      [
+        row({
+          details: {
+            failed_task_id: "task-1",
+            max_attempts: 3,
+            retryable: false,
+          },
+        }),
+      ],
+      InboxItemListSchema,
+      EMPTY_INBOX_ITEMS,
+      ENDPOINT,
+    );
+
+    expect(parsed).toHaveLength(1);
+    expect(parsed[0]?.details).toEqual({ failed_task_id: "task-1" });
+  });
+
   it("keeps a notification type this client doesn't know yet", () => {
     // Enums stay lenient on purpose: a backend that ships a new inbox type
     // must not blank the whole archived list on older clients.

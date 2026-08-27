@@ -1,7 +1,9 @@
 {
   "page": {
     "title": "インボックス",
-    "back": "インボックス"
+    "back": "インボックス",
+    "notifications_title": "通知",
+    "notifications_back": "通知"
   },
   "menu": {
     "mark_all_read": "すべて既読にする",
@@ -11,6 +13,7 @@
   },
   "filters": {
     "tooltip": "インボックスを絞り込む",
+    "notifications_tooltip": "通知を絞り込む",
     "active_count_other": "{{count}} 件のフィルター",
     "status": "ステータス",
     "priority": "優先度",
@@ -45,9 +48,11 @@
   "detail": {
     "select_prompt": "詳細を表示する通知を選択してください",
     "empty": "インボックスは空です",
+    "notifications_empty": "通知はありません",
     "original_input": "元の入力",
     "retry_with_context": "コンテキストを保持して再試行",
     "edit_advanced": "詳細フォームで編集",
+    "open_recovery": "設定を開く",
     "archive": "アーカイブ",
     "unarchive": "アーカイブ解除"
   },
@@ -70,7 +75,12 @@
     "reaction_added": "リアクションあり",
     "quick_create_done": "エージェントで作成",
     "quick_create_failed": "エージェントでの作成に失敗",
-    "quick_create_unconfirmed": "エージェントでの作成結果は未確認"
+    "quick_create_unconfirmed": "エージェントでの作成結果は未確認",
+    "automation_failed": "自動化に失敗",
+    "integration_failed": "連携に失敗",
+    "webhook_failed": "Webhook に失敗",
+    "plugin_failed": "プラグインに失敗",
+    "runtime_failed": "ランタイム要求に失敗"
   },
   "labels": {
     "set_status_to": "ステータスを変更:",

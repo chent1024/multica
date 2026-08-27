@@ -266,7 +266,7 @@ func (s *Server) createCommentSubIssue(w http.ResponseWriter, r *http.Request) {
 	if len([]rune(title)) > 120 {
 		title = string([]rune(title)[:120])
 	}
-	create := CreateIssueInput{Title: title, Description: input.QuickCreate.Prompt, Status: "todo", Priority: input.QuickCreate.Priority, AssigneeType: &assigneeType, AssigneeID: &assigneeID, ParentIssueID: &parentID, ProjectID: projectID, DueDate: input.QuickCreate.DueDate, AttachmentIDs: input.QuickCreate.AttachmentIDs, SourceContext: source}
+	create := CreateIssueInput{Title: title, Description: input.QuickCreate.Prompt, Status: "todo", Priority: input.QuickCreate.Priority, AssigneeType: &assigneeType, AssigneeID: &assigneeID, ParentIssueID: &parentID, ProjectID: projectID, DueDate: input.QuickCreate.DueDate, AttachmentIDs: input.QuickCreate.AttachmentIDs, Metadata: map[string]any{"origin": "quick_create"}, SourceContext: source}
 	item, err := s.store.CreateIssue(r.Context(), LocalWorkspaceID, create)
 	if err != nil {
 		s.respondStoreError(w, err)

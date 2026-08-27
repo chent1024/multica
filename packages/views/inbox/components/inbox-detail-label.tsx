@@ -34,6 +34,11 @@ export function useTypeLabels(): Record<InboxItemType, string> {
     quick_create_done: t(($) => $.types.quick_create_done),
     quick_create_failed: t(($) => $.types.quick_create_failed),
     quick_create_unconfirmed: t(($) => $.types.quick_create_unconfirmed),
+    automation_failed: t(($) => $.types.automation_failed),
+    integration_failed: t(($) => $.types.integration_failed),
+    webhook_failed: t(($) => $.types.webhook_failed),
+    plugin_failed: t(($) => $.types.plugin_failed),
+    runtime_failed: t(($) => $.types.runtime_failed),
   };
 }
 

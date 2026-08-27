@@ -33,6 +33,21 @@ describe("notification preference patches", () => {
     ).toEqual({ status_changes: "muted", comments: "muted" });
   });
 
+  it("preserves the local action-required mode as a non-default value", () => {
+    expect(
+      deriveNotificationPreferencePatch({}, { local_delivery: "action_required" }),
+    ).toEqual({ local_delivery: "action_required" });
+    expect(
+      applyNotificationPreferencePatch({}, { local_delivery: "action_required" }),
+    ).toEqual({ local_delivery: "action_required" });
+    expect(
+      applyNotificationPreferencePatch(
+        { local_delivery: "action_required" },
+        { local_delivery: "all" },
+      ),
+    ).toEqual({});
+  });
+
   it("carries the mentions group independently of comments", () => {
     // The point of the split (#6468): muting comment volume must not travel
     // to mentions. A missing key in NOTIFICATION_GROUP_KEYS would make the

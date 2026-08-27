@@ -5,8 +5,10 @@ import (
 	"context"
 	"crypto/hmac"
 	"crypto/sha256"
+	"database/sql"
 	"encoding/hex"
 	"encoding/json"
+	"errors"
 	"net/http"
 	"net/http/httptest"
 	"path/filepath"
@@ -99,6 +101,13 @@ func TestLocalAutomationWebhookDedupeSignatureReplayAndPersistence(t *testing.T)
 
 	invalid := send("sha256=00", "delivery-2")
 	requireStatus(t, invalid, http.StatusUnauthorized)
+	var webhookNotifications int
+	if err := fixture.server.store.db.QueryRow(`SELECT COUNT(*) FROM inbox_items WHERE type='webhook_failed' AND source_key LIKE 'automation-delivery:%:rejected'`).Scan(&webhookNotifications); err != nil {
+		t.Fatal(err)
+	}
+	if webhookNotifications != 1 {
+		t.Fatalf("webhook failure notifications=%d want=1", webhookNotifications)
+	}
 	retried := send("sha256="+hex.EncodeToString(hash.Sum(nil)), "delivery-2")
 	requireStatus(t, retried, http.StatusOK)
 	if got := decodeResponse[map[string]any](t, retried)["status"]; got != "accepted" {
@@ -110,6 +119,87 @@ func TestLocalAutomationWebhookDedupeSignatureReplayAndPersistence(t *testing.T)
 	}
 	if runCount != 3 {
 		t.Fatalf("run count=%d want=3", runCount)
+	}
+}
+
+func TestFinishAutomationDeliveryDoesNotCreateNotificationWithoutSourceDelivery(t *testing.T) {
+	fixture := newLocalAutomationFixture(t)
+	request := httptest.NewRequest(http.MethodPost, "/", nil)
+	err := fixture.server.finishAutomationDelivery(request, "missing-delivery", "failed", http.StatusInternalServerError, map[string]any{
+		"status": "failed",
+		"reason": "dispatch failed",
+	}, "", "dispatch_failed")
+	if !errors.Is(err, sql.ErrNoRows) {
+		t.Fatalf("finish error=%v want=%v", err, sql.ErrNoRows)
+	}
+	var count int
+	if err := fixture.server.store.db.QueryRow(`SELECT COUNT(*) FROM inbox_items WHERE source_key='automation-delivery:missing-delivery:failed'`).Scan(&count); err != nil {
+		t.Fatal(err)
+	}
+	if count != 0 {
+		t.Fatalf("orphan notifications=%d want=0", count)
+	}
+}
+
+func TestFinishAutomationDeliveryRollsBackOutcomeWhenNotificationInsertFails(t *testing.T) {
+	fixture := newLocalAutomationFixture(t)
+	stamp := now()
+	if _, err := fixture.server.store.db.Exec(`INSERT INTO automation_deliveries(
+		id, workspace_id, automation_id, trigger_id, provider, event, signature_status,
+		status, available_at, received_at, last_attempt_at, created_at)
+		VALUES ('delivery-with-notification-failure', ?, ?, 'trigger-1', 'github', 'issues',
+		'valid', 'queued', ?, ?, ?, ?)`, LocalWorkspaceID, fixture.automationID, stamp, stamp, stamp, stamp); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := fixture.server.store.db.Exec(`CREATE TRIGGER reject_test_notification
+		BEFORE INSERT ON inbox_items BEGIN SELECT RAISE(ABORT, 'notification insert failed'); END`); err != nil {
+		t.Fatal(err)
+	}
+	request := httptest.NewRequest(http.MethodPost, "/", nil)
+	err := fixture.server.finishAutomationDelivery(request, "delivery-with-notification-failure", "failed", http.StatusInternalServerError, map[string]any{
+		"status": "failed",
+		"reason": "dispatch failed",
+	}, "", "dispatch_failed")
+	if err == nil {
+		t.Fatal("finish succeeded despite notification insert failure")
+	}
+	var status string
+	var dispatchAttempts int
+	if err := fixture.server.store.db.QueryRow(`SELECT status, dispatch_attempts FROM automation_deliveries WHERE id='delivery-with-notification-failure'`).Scan(&status, &dispatchAttempts); err != nil {
+		t.Fatal(err)
+	}
+	if status != "queued" || dispatchAttempts != 0 {
+		t.Fatalf("delivery status=%q dispatch_attempts=%d want queued,0", status, dispatchAttempts)
+	}
+	var count int
+	if err := fixture.server.store.db.QueryRow(`SELECT COUNT(*) FROM inbox_items WHERE source_key='automation-delivery:delivery-with-notification-failure:failed'`).Scan(&count); err != nil {
+		t.Fatal(err)
+	}
+	if count != 0 {
+		t.Fatalf("notifications=%d want=0", count)
+	}
+}
+
+func TestLocalAutomationRuntimeFailureCreatesOneNotification(t *testing.T) {
+	fixture := newLocalAutomationFixture(t)
+	if _, err := fixture.server.store.db.Exec(`UPDATE runtimes SET status='offline' WHERE workspace_id=?`, LocalWorkspaceID); err != nil {
+		t.Fatal(err)
+	}
+	first := localRequest(t, fixture.handler, http.MethodPost, "/api/autopilots/"+fixture.automationID+"/trigger", map[string]any{})
+	requireStatus(t, first, http.StatusCreated)
+	run := decodeResponse[map[string]any](t, first)
+	if run["status"] != "skipped" || run["reason_code"] != "runtime_unavailable" {
+		t.Fatalf("run=%v", run)
+	}
+	if err := fixture.server.notifyAutomationRun(t.Context(), LocalWorkspaceID, fixture.automationID, run); err != nil {
+		t.Fatal(err)
+	}
+	var count int
+	if err := fixture.server.store.db.QueryRow(`SELECT COUNT(*) FROM inbox_items WHERE type='automation_failed' AND source_key=?`, "automation-run:"+run["id"].(string)+":failed").Scan(&count); err != nil {
+		t.Fatal(err)
+	}
+	if count != 1 {
+		t.Fatalf("automation failure notifications=%d want=1", count)
 	}
 }
 

@@ -128,6 +128,7 @@ type NavKey =
 // icons derived from the destination path via routeIconForPath.
 type NavLabelKey =
   | "inbox"
+  | "notifications"
   | "chat"
   | "my_issues"
   | "issues"
@@ -760,37 +761,40 @@ export function AppSidebar({ topSlot, searchSlot, headerClassName, headerStyle }
           <SidebarGroup>
             <SidebarGroupContent>
               <SidebarMenu className="gap-0.5">
-                {personalNav.map((item) => {
-                  const href = p[item.key]();
-                  const Icon = routeIconForPath(href);
-                  const isActive = isNavActive(pathname, href);
-                  return (
-                    <SidebarMenuItem key={item.key}>
-                      <SidebarMenuButton
-                        isActive={isActive}
-                        render={<AppLink href={href} />}
-                        className="text-muted-foreground hover:not-data-active:bg-sidebar-accent/70 data-active:bg-sidebar-accent data-active:text-sidebar-accent-foreground"
-                      >
-                        <Icon />
-                        <span>{t(($) => $.nav[item.labelKey])}</span>
-                        {item.key === "inbox" && unreadCount > 0 && (
-                          <CappedNumberFlow
-                            value={unreadCount}
-                            animated={false}
-                            className="ml-auto text-caption"
-                          />
-                        )}
-                        {item.key === "chat" && chatUnreadCount > 0 && (
-                          <CappedNumberFlow
-                            value={chatUnreadCount}
-                            animated={false}
-                            className="ml-auto text-caption"
-                          />
-                        )}
-                      </SidebarMenuButton>
-                    </SidebarMenuItem>
-                  );
-                })}
+                {personalNav
+                  .filter((item) => !localDesktop || item.key !== "myIssues")
+                  .map((item) => {
+                    const href = p[item.key]();
+                    const Icon = routeIconForPath(href);
+                    const isActive = isNavActive(pathname, href);
+                    const labelKey = localDesktop && item.key === "inbox" ? "notifications" : item.labelKey;
+                    return (
+                      <SidebarMenuItem key={item.key}>
+                        <SidebarMenuButton
+                          isActive={isActive}
+                          render={<AppLink href={href} />}
+                          className="text-muted-foreground hover:not-data-active:bg-sidebar-accent/70 data-active:bg-sidebar-accent data-active:text-sidebar-accent-foreground"
+                        >
+                          <Icon />
+                          <span>{t(($) => $.nav[labelKey])}</span>
+                          {item.key === "inbox" && unreadCount > 0 && (
+                            <CappedNumberFlow
+                              value={unreadCount}
+                              animated={false}
+                              className="ml-auto text-caption"
+                            />
+                          )}
+                          {item.key === "chat" && chatUnreadCount > 0 && (
+                            <CappedNumberFlow
+                              value={chatUnreadCount}
+                              animated={false}
+                              className="ml-auto text-caption"
+                            />
+                          )}
+                        </SidebarMenuButton>
+                      </SidebarMenuItem>
+                    );
+                  })}
               </SidebarMenu>
             </SidebarGroupContent>
           </SidebarGroup>

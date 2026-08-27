@@ -1,4 +1,25 @@
 import type { InboxItem } from "@multica/core/types";
+import type { WorkspacePaths } from "@multica/core/paths";
+
+export function getLocalNotificationDestination(
+  details: Record<string, string> | null | undefined,
+  paths: WorkspacePaths,
+): string | null {
+  if (!details) return null;
+  if (details.destination === "automation" && details.automation_id) {
+    return paths.autopilotDetail(details.automation_id);
+  }
+  if (details.destination === "runtime" && details.runtime_id) {
+    return paths.runtimeDetail(details.runtime_id);
+  }
+  if (details.destination === "plugin") {
+    return `${paths.settings()}?tab=plugins`;
+  }
+  if (details.destination === "integration") {
+    return `${paths.settings()}?tab=integrations`;
+  }
+  return null;
+}
 
 function singleLine(value: string | null | undefined): string {
   return (value ?? "").replace(/\s+/g, " ").trim();

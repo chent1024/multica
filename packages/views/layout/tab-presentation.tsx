@@ -34,6 +34,7 @@ import { ProjectIcon } from "../projects/components/project-icon";
 import { ActorAvatar } from "../common/actor-avatar";
 import { getInboxDisplayTitle } from "../inbox/components/inbox-display";
 import { useT } from "../i18n";
+import { isDesktopShell } from "../platform/local-directory";
 import { ROUTE_ICON_COMPONENTS } from "./route-icon-components";
 
 /**
@@ -207,8 +208,10 @@ function useTabTitle(spec: TabTitleSpec, fallbackTitle?: string): string {
   switch (spec.kind) {
     case "text":
       return spec.text;
-    case "nav":
-      return layoutT(($) => $.nav[spec.navKey]);
+    case "nav": {
+      const navKey = isDesktopShell() && spec.navKey === "inbox" ? "notifications" : spec.navKey;
+      return layoutT(($) => $.nav[navKey]);
+    }
     case "tab": {
       if (PENDING_RESOURCE_KEYS.has(spec.tabKey)) {
         const clean = fallbackTitle?.trim();

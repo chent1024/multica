@@ -33,6 +33,7 @@ import { PriorityIcon } from "../../issues/components/priority-icon";
 import { StatusIcon } from "../../issues/components/status-icon";
 import { useStatusOptions } from "../../issues/utils/status-options";
 import { useT } from "../../i18n";
+import { isDesktopShell } from "../../platform/local-directory";
 
 function statusCounts(items: InboxItem[]): Map<string, number> {
   const counts = new Map<string, number>();
@@ -181,7 +182,9 @@ export function InboxFilterMenu({
   const triggerLabel =
     activeCount > 0
       ? t(($) => $.filters.active_count, { count: activeCount })
-      : t(($) => $.filters.tooltip);
+      : isDesktopShell()
+        ? t(($) => $.filters.notifications_tooltip)
+        : t(($) => $.filters.tooltip);
 
   return (
     <DropdownMenu>

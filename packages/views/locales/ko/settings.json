@@ -559,6 +559,10 @@
     "title": "인박스 알림",
     "description": "어떤 이벤트가 인박스 알림을 만들지 제어합니다. 음소거한 이벤트 유형은 조용히 걸러지지만, 태스크를 직접 열면 계속 볼 수 있습니다.",
     "toast_failed": "알림 설정을 업데이트하지 못했습니다",
+    "local": {
+      "action_required_label": "조치가 필요한 알림만 표시",
+      "action_required_description": "정보성 결과를 숨기고 확인이 필요한 실패 또는 차단 알림만 표시합니다."
+    },
     "groups": {
       "assignments": {
         "label": "할당",

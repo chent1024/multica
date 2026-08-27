@@ -5,9 +5,10 @@ export type NotificationGroupKey =
   | "mentions"
   | "updates"
   | "agent_activity"
+  | "local_delivery"
   | "system_notifications";
 
-export type NotificationGroupValue = "all" | "muted";
+export type NotificationGroupValue = "all" | "muted" | "action_required";
 
 export type NotificationPreferences = Partial<Record<NotificationGroupKey, NotificationGroupValue>>;
 

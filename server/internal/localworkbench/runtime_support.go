@@ -340,18 +340,48 @@ func (s *Server) reportRuntimeRequest(w http.ResponseWriter, r *http.Request) {
 	delete(body, "status")
 	delete(body, "error")
 	raw, _ := json.Marshal(body)
-	result, err := s.store.db.ExecContext(r.Context(), `UPDATE runtime_requests SET status=?, result=?, error=?, updated_at=? WHERE id=? AND runtime_id=? AND status IN ('pending','running')`, status, string(raw), nullable(errorText), now(), requestID, runtimeID)
+	tx, err := s.store.db.BeginTx(r.Context(), nil)
 	if err != nil {
 		s.fail(w, err)
 		return
 	}
+	defer func() { _ = tx.Rollback() }()
+	result, err := tx.ExecContext(r.Context(), `UPDATE runtime_requests SET status=?, result=?, error=?, updated_at=? WHERE id=? AND runtime_id=? AND status IN ('pending','running')`, status, string(raw), nullable(errorText), now(), requestID, runtimeID)
+	if err != nil {
+		s.fail(w, err)
+		return
+	}
+	var notificationItem map[string]any
+	notificationInserted := false
 	if count, _ := result.RowsAffected(); count == 0 {
 		var terminal int
-		_ = s.store.db.QueryRowContext(r.Context(), `SELECT COUNT(*) FROM runtime_requests WHERE id=? AND runtime_id=? AND status IN ('completed','failed')`, requestID, runtimeID).Scan(&terminal)
+		_ = tx.QueryRowContext(r.Context(), `SELECT COUNT(*) FROM runtime_requests WHERE id=? AND runtime_id=? AND status IN ('completed','failed')`, requestID, runtimeID).Scan(&terminal)
 		if terminal == 0 {
 			s.respondStoreError(w, sql.ErrNoRows)
 			return
 		}
+	} else if status == "failed" {
+		var workspaceID, kind, runtimeName string
+		if err := tx.QueryRowContext(r.Context(), `SELECT rr.workspace_id,rr.kind,rt.name FROM runtime_requests rr JOIN runtimes rt ON rt.id=rr.runtime_id WHERE rr.id=? AND rr.runtime_id=?`, requestID, runtimeID).Scan(&workspaceID, &kind, &runtimeName); err != nil {
+			s.fail(w, err)
+			return
+		}
+		notificationItem, notificationInserted, err = insertLocalNotificationTx(r.Context(), tx, localNotificationInput{
+			WorkspaceID: workspaceID, Type: "runtime_failed", Severity: "action_required",
+			SourceKey: "runtime-request:" + requestID + ":failed", Title: "Runtime request failed: " + runtimeName,
+			Body: errorText, Details: map[string]string{"destination": "runtime", "runtime_id": runtimeID, "request_id": requestID, "request_kind": kind},
+		})
+		if err != nil {
+			s.fail(w, err)
+			return
+		}
+	}
+	if err := tx.Commit(); err != nil {
+		s.fail(w, err)
+		return
+	}
+	if notificationInserted {
+		s.hub.broadcast("inbox:new", map[string]any{"item": notificationItem})
 	}
 	writeJSON(w, http.StatusOK, map[string]any{"status": "ok"})
 }

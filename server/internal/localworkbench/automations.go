@@ -480,6 +480,9 @@ func (s *Server) executeAutomation(ctx context.Context, workspaceID, automationI
 		var raw string
 		if err := s.store.db.QueryRowContext(ctx, `SELECT data FROM automation_runs WHERE id=? AND automation_id=?`, runID, automationID).Scan(&raw); err == nil {
 			value, decodeErr := decodeJSONMap(raw)
+			if decodeErr == nil {
+				decodeErr = s.notifyAutomationRun(ctx, workspaceID, automationID, value)
+			}
 			return value, http.StatusOK, decodeErr
 		} else if !errors.Is(err, sql.ErrNoRows) {
 			return nil, 0, err
@@ -558,7 +561,33 @@ func (s *Server) executeAutomation(ctx context.Context, workspaceID, automationI
 	updated["last_run_at"], updated["updated_at"] = stamp, stamp
 	automationRaw, _ := encodeJSONMap(updated)
 	_, _ = s.store.db.ExecContext(ctx, `UPDATE automations SET data=?, updated_at=? WHERE id=?`, automationRaw, stamp, automationID)
+	if err := s.notifyAutomationRun(ctx, workspaceID, automationID, run); err != nil {
+		return nil, 0, err
+	}
 	return run, http.StatusCreated, nil
+}
+
+func (s *Server) notifyAutomationRun(ctx context.Context, workspaceID, automationID string, run map[string]any) error {
+	status := stringFromAny(run["status"])
+	reasonCode := stringFromAny(run["reason_code"])
+	if status != "failed" && !(status == "skipped" && reasonCode == "runtime_unavailable") {
+		return nil
+	}
+	var title string
+	if err := s.store.db.QueryRowContext(ctx, `SELECT title FROM automations WHERE id=? AND workspace_id=?`, automationID, workspaceID).Scan(&title); err != nil {
+		return err
+	}
+	reason := strings.TrimSpace(stringFromAny(run["failure_reason"]))
+	if reason == "" && reasonCode == "runtime_unavailable" {
+		reason = "The assigned Agent has no online Runtime."
+	}
+	runID := stringFromAny(run["id"])
+	return s.createLocalNotification(ctx, localNotificationInput{
+		WorkspaceID: workspaceID, Type: "automation_failed", Severity: "action_required",
+		SourceKey: "automation-run:" + runID + ":failed", IssueID: stringFromAny(run["issue_id"]),
+		Title: "Automation needs attention: " + title, Body: reason,
+		Details: map[string]string{"destination": "automation", "automation_id": automationID, "run_id": runID, "reason_code": reasonCode},
+	})
 }
 
 func (s *Server) listAutomationRuns(w http.ResponseWriter, r *http.Request) {

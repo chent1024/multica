@@ -211,7 +211,42 @@ func (s *Server) receiveVCSWebhook(w http.ResponseWriter, r *http.Request) {
 			// A failed business projection is retryable. Release the provider's
 			// dedupe identity so the same delivery can be processed again instead
 			// of being acknowledged as a false duplicate.
-			_, _ = s.store.db.ExecContext(r.Context(), `UPDATE local_integration_deliveries SET status='failed',error=?,dedupe_key=NULL WHERE id=?`, processErr.Error(), deliveryID)
+			tx, err := s.store.db.BeginTx(r.Context(), nil)
+			if err != nil {
+				s.fail(w, err)
+				return
+			}
+			defer func() { _ = tx.Rollback() }()
+			result, err := tx.ExecContext(r.Context(), `UPDATE local_integration_deliveries SET status='failed',error=?,dedupe_key=NULL WHERE id=?`, processErr.Error(), deliveryID)
+			if err != nil {
+				s.fail(w, err)
+				return
+			}
+			updated, err := result.RowsAffected()
+			if err != nil {
+				s.fail(w, err)
+				return
+			}
+			if updated == 0 {
+				s.fail(w, sql.ErrNoRows)
+				return
+			}
+			notificationItem, notificationInserted, err := insertLocalNotificationTx(r.Context(), tx, localNotificationInput{
+				Type: "integration_failed", Severity: "action_required", SourceKey: "integration-delivery:" + deliveryID + ":failed",
+				Title: "Integration delivery failed: " + stringFromAny(public["provider"]), Body: processErr.Error(),
+				Details: map[string]string{"destination": "integration", "integration_id": id, "delivery_id": deliveryID},
+			})
+			if err != nil {
+				s.fail(w, err)
+				return
+			}
+			if err := tx.Commit(); err != nil {
+				s.fail(w, err)
+				return
+			}
+			if notificationInserted {
+				s.hub.broadcast("inbox:new", map[string]any{"item": notificationItem})
+			}
 			writeJSON(w, http.StatusUnprocessableEntity, map[string]any{"status": "failed", "delivery_id": deliveryID, "event": event, "provider": public["provider"], "reason": processErr.Error()})
 			return
 		}

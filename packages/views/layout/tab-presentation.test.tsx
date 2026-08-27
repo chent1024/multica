@@ -13,7 +13,14 @@ import { agentListOptions } from "@multica/core/workspace/queries";
 import { runtimeListOptions } from "@multica/core/runtimes/queries";
 
 // Mutable workspace stub so a test can simulate "workspace not resolved yet".
-const ws = vi.hoisted(() => ({ current: { id: "ws1", slug: "acme" } as { id: string; slug: string } | null }));
+const { desktopShell, ws } = vi.hoisted(() => ({
+  desktopShell: { current: false },
+  ws: { current: { id: "ws1", slug: "acme" } as { id: string; slug: string } | null },
+}));
+
+vi.mock("../platform/local-directory", () => ({
+  isDesktopShell: () => desktopShell.current,
+}));
 
 vi.mock("@multica/core/paths", async (importOriginal) => ({
   ...(await importOriginal<typeof import("@multica/core/paths")>()),
@@ -97,6 +104,7 @@ function presentationOf(url: string, fallback?: string) {
 
 beforeEach(() => {
   ws.current = { id: "ws1", slug: "acme" };
+  desktopShell.current = false;
 });
 
 describe("useTabPresentation — live from cache", () => {
@@ -161,6 +169,13 @@ describe("useTabPresentation — live from cache", () => {
       visual: { kind: "icon", icon: "Inbox" },
       title: "MUL-9: Crash",
     });
+  });
+
+  it("labels an unselected Inbox tab as Notifications only in local Desktop", () => {
+    expect(presentationOf("/acme/inbox").title).toBe("Inbox");
+
+    desktopShell.current = true;
+    expect(presentationOf("/acme/inbox").title).toBe("Notifications");
   });
 
   it("inbox container: selected non-issue shows its display title", () => {

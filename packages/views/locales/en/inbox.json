@@ -1,7 +1,9 @@
 {
   "page": {
     "title": "Inbox",
-    "back": "Inbox"
+    "back": "Inbox",
+    "notifications_title": "Notifications",
+    "notifications_back": "Notifications"
   },
   "menu": {
     "mark_all_read": "Mark all as read",
@@ -11,6 +13,7 @@
   },
   "filters": {
     "tooltip": "Filter inbox",
+    "notifications_tooltip": "Filter notifications",
     "active_count_one": "{{count}} active filter",
     "active_count_other": "{{count}} active filters",
     "status": "Status",
@@ -47,9 +50,11 @@
   "detail": {
     "select_prompt": "Select a notification to view details",
     "empty": "Your inbox is empty",
+    "notifications_empty": "No notifications",
     "original_input": "Original input",
     "retry_with_context": "Retry with context",
     "edit_advanced": "Edit as advanced form",
+    "open_recovery": "Open settings",
     "archive": "Archive",
     "unarchive": "Unarchive"
   },
@@ -72,7 +77,12 @@
     "reaction_added": "Reacted",
     "quick_create_done": "Created with agent",
     "quick_create_failed": "Create with agent failed",
-    "quick_create_unconfirmed": "Create with agent unconfirmed"
+    "quick_create_unconfirmed": "Create with agent unconfirmed",
+    "automation_failed": "Automation failed",
+    "integration_failed": "Integration failed",
+    "webhook_failed": "Webhook failed",
+    "plugin_failed": "Plugin failed",
+    "runtime_failed": "Runtime request failed"
   },
   "labels": {
     "set_status_to": "Set status to",

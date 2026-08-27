@@ -115,6 +115,16 @@ func TestOpenAppliesOrderedUpgradeAndSQLitePolicy(t *testing.T) {
 	if count != len(schemaMigrations) || latest != schemaMigrations[len(schemaMigrations)-1].version {
 		t.Fatalf("migration ledger count=%d latest=%d", count, latest)
 	}
+	var notificationColumns, sourceIndexes int
+	if err := store.db.QueryRowContext(ctx, `SELECT COUNT(*) FROM pragma_table_info('inbox_items') WHERE name IN ('actor_type','actor_id','details','source_key')`).Scan(&notificationColumns); err != nil {
+		t.Fatal(err)
+	}
+	if err := store.db.QueryRowContext(ctx, `SELECT COUNT(*) FROM pragma_index_list('inbox_items') WHERE name='inbox_items_source_idx' AND "unique"=1`).Scan(&sourceIndexes); err != nil {
+		t.Fatal(err)
+	}
+	if notificationColumns != 4 || sourceIndexes != 1 {
+		t.Fatalf("notification migration columns=%d source_indexes=%d", notificationColumns, sourceIndexes)
+	}
 	var journal, synchronous string
 	var foreignKeys int
 	if err := store.db.QueryRowContext(ctx, `PRAGMA journal_mode`).Scan(&journal); err != nil {

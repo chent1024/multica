@@ -1,6 +1,7 @@
 {
   "nav": {
     "inbox": "インボックス",
+    "notifications": "通知",
     "chat": "チャット",
     "my_issues": "マイタスク",
     "issues": "タスク",

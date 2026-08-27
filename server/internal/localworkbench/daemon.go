@@ -710,6 +710,8 @@ func (s *Server) daemonTaskState(w http.ResponseWriter, r *http.Request) {
 	workDir, _ := body["work_dir"].(string)
 	terminal := status == "completed" || status == "failed"
 	createdCommentID := ""
+	var notificationItem map[string]any
+	notificationInserted := false
 	if err := pinTaskSessionTx(r.Context(), tx, ws.ID, chi.URLParam(r, "taskID"), sessionID, workDir, terminal); err != nil && !errors.Is(err, sql.ErrNoRows) {
 		s.fail(w, err)
 		return
@@ -737,9 +739,9 @@ func (s *Server) daemonTaskState(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusConflict, errors.New("task is already terminal or missing"))
 		return
 	}
-	var issueID string
+	var issueID, issueTitle, issueDescription, issueMetadata string
 	var persistedAgentID, assigneeType, assigneeID sql.NullString
-	if err := tx.QueryRowContext(r.Context(), `SELECT tr.issue_id,tr.agent_id,i.assignee_type,i.assignee_id FROM task_runs tr JOIN issues i ON i.id=tr.issue_id WHERE tr.id=? AND i.workspace_id=?`, taskID, ws.ID).Scan(&issueID, &persistedAgentID, &assigneeType, &assigneeID); err != nil {
+	if err := tx.QueryRowContext(r.Context(), `SELECT tr.issue_id,tr.agent_id,i.assignee_type,i.assignee_id,i.title,COALESCE(i.description,''),i.metadata FROM task_runs tr JOIN issues i ON i.id=tr.issue_id WHERE tr.id=? AND i.workspace_id=?`, taskID, ws.ID).Scan(&issueID, &persistedAgentID, &assigneeType, &assigneeID, &issueTitle, &issueDescription, &issueMetadata); err != nil {
 		s.respondStoreError(w, err)
 		return
 	}
@@ -792,12 +794,40 @@ func (s *Server) daemonTaskState(w http.ResponseWriter, r *http.Request) {
 			s.fail(w, err)
 			return
 		}
-		severity := "info"
-		title := "Agent task completed"
-		if status == "failed" {
-			severity, title = "error", "Agent task failed"
+		kind, severity := "review_requested", "info"
+		title := "Agent work is ready for review"
+		notificationDetails := map[string]string{"task_id": taskID}
+		metadata := map[string]any{}
+		_ = json.Unmarshal([]byte(issueMetadata), &metadata)
+		quickCreate := metadata["origin"] == "quick_create"
+		var sourceContextID string
+		if err := tx.QueryRowContext(r.Context(), `SELECT id FROM issue_source_contexts WHERE issue_id=?`, issueID).Scan(&sourceContextID); err == nil {
+			quickCreate = true
+			notificationDetails["source_context_id"] = sourceContextID
 		}
-		if _, err := insertInboxTx(tx, ws.ID, "agent_task_"+status, severity, issueID, title, stringFromMap(body, "error")); err != nil {
+		if quickCreate {
+			kind, title = "quick_create_done", "Created with Agent"
+			notificationDetails["original_prompt"] = issueDescription
+			notificationDetails["agent_id"] = agentID
+		}
+		bodyText := ""
+		if status == "failed" {
+			kind, severity, title = "task_failed", "action_required", "Agent task failed"
+			bodyText = stringFromMap(body, "error")
+			if quickCreate {
+				kind, title = "quick_create_failed", "Create with Agent failed"
+			}
+		}
+		notificationTitle := title + ": " + issueTitle
+		if quickCreate {
+			notificationTitle = issueTitle
+		}
+		notificationItem, notificationInserted, err = insertLocalNotificationTx(r.Context(), tx, localNotificationInput{
+			WorkspaceID: ws.ID, Type: kind, Severity: severity, SourceKey: "task:" + taskID + ":" + kind,
+			IssueID: issueID, ActorType: "agent", ActorID: agentID, Title: notificationTitle,
+			Body: bodyText, Details: notificationDetails,
+		})
+		if err != nil {
 			s.fail(w, err)
 			return
 		}
@@ -813,6 +843,9 @@ func (s *Server) daemonTaskState(w http.ResponseWriter, r *http.Request) {
 		if comment, err := scanComment(s.store.db.QueryRowContext(r.Context(), `SELECT id, issue_id, author_type, author_id, content, type, parent_id, created_at, updated_at, revision, issue_revision, resolved_at, resolved_by_type, resolved_by_id, source_task_id, quick_action_id FROM comments WHERE id=?`, createdCommentID)); err == nil {
 			s.hub.broadcast("comment:created", map[string]any{"comment": comment})
 		}
+	}
+	if notificationInserted {
+		s.hub.broadcast("inbox:new", map[string]any{"item": notificationItem})
 	}
 	s.hub.broadcast("task:"+status, map[string]any{
 		"task_id":  taskID,

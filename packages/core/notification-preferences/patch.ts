@@ -11,6 +11,7 @@ const NOTIFICATION_GROUP_KEYS: readonly NotificationGroupKey[] = [
   "mentions",
   "updates",
   "agent_activity",
+  "local_delivery",
   "system_notifications",
 ];
 
@@ -51,7 +52,7 @@ export function applyNotificationPreferencePatch(
 
   for (const key of NOTIFICATION_GROUP_KEYS) {
     const value = patch[key];
-    if (value === "muted") {
+    if (value === "muted" || value === "action_required") {
       next[key] = value;
     } else if (value === "all") {
       delete next[key];

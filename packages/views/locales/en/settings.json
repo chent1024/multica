@@ -561,6 +561,10 @@
     "title": "Inbox Notifications",
     "description": "Control which events generate inbox notifications. Muted event types are silently filtered — you can still see them by visiting the issue directly.",
     "toast_failed": "Failed to update notification settings",
+    "local": {
+      "action_required_label": "Only show action required",
+      "action_required_description": "Hide informational results and keep failures or blocked work that need your attention."
+    },
     "groups": {
       "assignments": {
         "label": "Assignments",

@@ -1,7 +1,9 @@
 {
   "page": {
     "title": "인박스",
-    "back": "인박스"
+    "back": "인박스",
+    "notifications_title": "알림",
+    "notifications_back": "알림"
   },
   "menu": {
     "mark_all_read": "모두 읽음으로 표시",
@@ -11,6 +13,7 @@
   },
   "filters": {
     "tooltip": "인박스 필터",
+    "notifications_tooltip": "알림 필터",
     "active_count_other": "필터 {{count}}개 적용됨",
     "status": "상태",
     "priority": "우선순위",
@@ -45,9 +48,11 @@
   "detail": {
     "select_prompt": "자세히 볼 알림을 선택하세요",
     "empty": "인박스가 비어 있습니다",
+    "notifications_empty": "알림이 없습니다",
     "original_input": "원본 입력",
     "retry_with_context": "컨텍스트를 유지하여 재시도",
     "edit_advanced": "고급 양식으로 수정",
+    "open_recovery": "설정 열기",
     "archive": "보관",
     "unarchive": "보관 해제"
   },
@@ -70,7 +75,12 @@
     "reaction_added": "반응 추가됨",
     "quick_create_done": "에이전트로 생성됨",
     "quick_create_failed": "에이전트 생성 실패",
-    "quick_create_unconfirmed": "에이전트 생성 결과 미확인"
+    "quick_create_unconfirmed": "에이전트 생성 결과 미확인",
+    "automation_failed": "자동화 실패",
+    "integration_failed": "통합 실패",
+    "webhook_failed": "Webhook 실패",
+    "plugin_failed": "플러그인 실패",
+    "runtime_failed": "런타임 요청 실패"
   },
   "labels": {
     "set_status_to": "상태 변경:",

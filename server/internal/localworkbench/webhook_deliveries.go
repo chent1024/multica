@@ -111,13 +111,19 @@ func (s *Server) receiveAutomationWebhook(w http.ResponseWriter, r *http.Request
 	}
 	if status == "rejected" {
 		response := map[string]any{"status": status, "delivery_id": id, "reason": reasonCode}
-		s.finishAutomationDelivery(r, id, status, responseStatus, response, "", reasonCode)
+		if err := s.finishAutomationDelivery(r, id, status, responseStatus, response, "", reasonCode); err != nil {
+			s.fail(w, err)
+			return
+		}
 		writeJSON(w, responseStatus, response)
 		return
 	}
 	if enabled, _ := trigger["enabled"].(bool); !enabled {
 		response := map[string]any{"status": "ignored", "delivery_id": id, "reason": "trigger_disabled"}
-		s.finishAutomationDelivery(r, id, "ignored", http.StatusOK, response, "", "trigger_disabled")
+		if err := s.finishAutomationDelivery(r, id, "ignored", http.StatusOK, response, "", "trigger_disabled"); err != nil {
+			s.fail(w, err)
+			return
+		}
 		writeJSON(w, http.StatusOK, response)
 		return
 	}
@@ -125,7 +131,10 @@ func (s *Server) receiveAutomationWebhook(w http.ResponseWriter, r *http.Request
 	run, _, executeErr := s.executeAutomation(r.Context(), LocalWorkspaceID, automationID, "webhook", payload, runID)
 	if executeErr != nil {
 		response := map[string]any{"status": "failed", "delivery_id": id, "reason": executeErr.Error()}
-		s.finishAutomationDelivery(r, id, "failed", http.StatusInternalServerError, response, "", "dispatch_failed")
+		if err := s.finishAutomationDelivery(r, id, "failed", http.StatusInternalServerError, response, "", "dispatch_failed"); err != nil {
+			s.fail(w, err)
+			return
+		}
 		writeJSON(w, http.StatusInternalServerError, response)
 		return
 	}
@@ -133,7 +142,10 @@ func (s *Server) receiveAutomationWebhook(w http.ResponseWriter, r *http.Request
 	if stringFromAny(run["status"]) == "skipped" {
 		response["status"], response["reason"] = "skipped", run["failure_reason"]
 	}
-	s.finishAutomationDelivery(r, id, "dispatched", http.StatusOK, response, runID, nil)
+	if err := s.finishAutomationDelivery(r, id, "dispatched", http.StatusOK, response, runID, nil); err != nil {
+		s.fail(w, err)
+		return
+	}
 	writeJSON(w, http.StatusOK, response)
 }
 
@@ -182,9 +194,50 @@ func verifyLocalWebhookSignature(secret string, headers http.Header, body []byte
 	return "invalid"
 }
 
-func (s *Server) finishAutomationDelivery(r *http.Request, id, status string, responseStatus int, response map[string]any, runID string, reason any) {
-	raw, _ := json.Marshal(response)
-	_, _ = s.store.db.ExecContext(r.Context(), `UPDATE automation_deliveries SET status=?, dispatch_attempts=dispatch_attempts+1, response_status=?, response_body=?, automation_run_id=?, reason_code=?, last_attempt_at=? WHERE id=?`, status, responseStatus, string(raw), nullable(runID), reason, now(), id)
+func (s *Server) finishAutomationDelivery(r *http.Request, id, status string, responseStatus int, response map[string]any, runID string, reason any) error {
+	raw, err := json.Marshal(response)
+	if err != nil {
+		return err
+	}
+	tx, err := s.store.db.BeginTx(r.Context(), nil)
+	if err != nil {
+		return err
+	}
+	defer func() { _ = tx.Rollback() }()
+	result, err := tx.ExecContext(r.Context(), `UPDATE automation_deliveries SET status=?, dispatch_attempts=dispatch_attempts+1, response_status=?, response_body=?, automation_run_id=?, reason_code=?, last_attempt_at=? WHERE id=?`, status, responseStatus, string(raw), nullable(runID), reason, now(), id)
+	if err != nil {
+		return err
+	}
+	updated, err := result.RowsAffected()
+	if err != nil {
+		return err
+	}
+	if updated == 0 {
+		return sql.ErrNoRows
+	}
+	var notificationItem map[string]any
+	var notificationInserted bool
+	if status == "failed" || status == "rejected" {
+		var automationID, provider, event string
+		if err := tx.QueryRowContext(r.Context(), `SELECT automation_id,provider,event FROM automation_deliveries WHERE id=?`, id).Scan(&automationID, &provider, &event); err != nil {
+			return err
+		}
+		notificationItem, notificationInserted, err = insertLocalNotificationTx(r.Context(), tx, localNotificationInput{
+			Type: "webhook_failed", Severity: "action_required", SourceKey: "automation-delivery:" + id + ":" + status,
+			Title: "Automation Webhook needs attention", Body: stringFromAny(response["reason"]),
+			Details: map[string]string{"destination": "automation", "automation_id": automationID, "delivery_id": id, "provider": provider, "event": event},
+		})
+		if err != nil {
+			return err
+		}
+	}
+	if err := tx.Commit(); err != nil {
+		return err
+	}
+	if notificationInserted {
+		s.hub.broadcast("inbox:new", map[string]any{"item": notificationItem})
+	}
+	return nil
 }
 
 func scanAutomationDelivery(row rowScanner, detail bool) (map[string]any, error) {
@@ -294,12 +347,21 @@ func (s *Server) replayAutomationDelivery(w http.ResponseWriter, r *http.Request
 	}
 	payload["trigger_id"] = original["trigger_id"]
 	_, _, executeErr := s.executeAutomation(r.Context(), ws.ID, stringFromAny(original["autopilot_id"]), "webhook_replay", payload, runID)
+	var finishErr error
 	if executeErr != nil {
-		s.finishAutomationDelivery(r, id, "failed", http.StatusInternalServerError, map[string]any{"status": "failed", "reason": executeErr.Error()}, "", "dispatch_failed")
+		finishErr = s.finishAutomationDelivery(r, id, "failed", http.StatusInternalServerError, map[string]any{"status": "failed", "reason": executeErr.Error()}, "", "dispatch_failed")
 	} else {
-		s.finishAutomationDelivery(r, id, "dispatched", http.StatusAccepted, map[string]any{"status": "accepted", "run_id": runID}, runID, nil)
+		finishErr = s.finishAutomationDelivery(r, id, "dispatched", http.StatusAccepted, map[string]any{"status": "accepted", "run_id": runID}, runID, nil)
 	}
-	item, _ := scanAutomationDelivery(s.store.db.QueryRowContext(r.Context(), automationDeliverySelect+` WHERE id=?`, id), true)
+	if finishErr != nil {
+		s.fail(w, finishErr)
+		return
+	}
+	item, err := scanAutomationDelivery(s.store.db.QueryRowContext(r.Context(), automationDeliverySelect+` WHERE id=?`, id), true)
+	if err != nil {
+		s.respondStoreError(w, err)
+		return
+	}
 	writeJSON(w, http.StatusAccepted, item)
 }
 

@@ -671,6 +671,18 @@ var schemaMigrations = []migration{
 			 ON chat_draft_restores(chat_session_id, created_at, id)`,
 		},
 	},
+	{
+		version: 22,
+		name:    "durable local notifications",
+		statements: []string{
+			`ALTER TABLE inbox_items ADD COLUMN actor_type TEXT`,
+			`ALTER TABLE inbox_items ADD COLUMN actor_id TEXT`,
+			`ALTER TABLE inbox_items ADD COLUMN details TEXT NOT NULL DEFAULT '{}'`,
+			`ALTER TABLE inbox_items ADD COLUMN source_key TEXT`,
+			`CREATE UNIQUE INDEX IF NOT EXISTS inbox_items_source_idx
+			 ON inbox_items(workspace_id, recipient_id, source_key) WHERE source_key IS NOT NULL`,
+		},
+	},
 }
 
 func Open(ctx context.Context, path string) (*Store, error) {

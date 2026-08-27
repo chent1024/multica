@@ -144,6 +144,19 @@ func TestLocalPluginAgentHooksAndMCPReachDaemonClaim(t *testing.T) {
 	if result := decodeResponse[map[string]any](t, invoke); result["status"] != "ok" || receivedTrigger != plugincontract.TriggerAgent {
 		t.Fatalf("plugin hook result=%v trigger=%q", result, receivedTrigger)
 	}
+	hookServer.Close()
+	failedInvoke := localRequest(t, handler, http.MethodPost, "/api/daemon/tasks/"+taskID+"/plugin-hooks", map[string]any{"installation_id": installationID, "hook_key": "review", "input": map[string]any{"value": "check"}})
+	requireStatus(t, failedInvoke, http.StatusOK)
+	if result := decodeResponse[map[string]any](t, failedInvoke); result["status"] != "failed" {
+		t.Fatalf("failed plugin hook result=%v", result)
+	}
+	var pluginNotifications int
+	if err := server.store.db.QueryRow(`SELECT COUNT(*) FROM inbox_items WHERE type='plugin_failed'`).Scan(&pluginNotifications); err != nil {
+		t.Fatal(err)
+	}
+	if pluginNotifications != 1 {
+		t.Fatalf("plugin failure notifications=%d want=1", pluginNotifications)
+	}
 	delete(item, "approved_mcp_tools")
 	raw, _ = encodeJSONMap(item)
 	if _, err := server.store.db.Exec(`UPDATE plugin_installations SET data=? WHERE id=?`, raw, installationID); err != nil {

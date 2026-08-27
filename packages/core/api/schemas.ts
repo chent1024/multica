@@ -2388,6 +2388,16 @@ export const EMPTY_INBOX_UNREAD_SUMMARY: InboxWorkspaceUnread[] = [];
 // the same row shape and both feed the status/priority filter UI.
 // ---------------------------------------------------------------------------
 
+const InboxDetailsSchema = z
+  .record(z.string(), z.unknown())
+  .transform((details) =>
+    Object.fromEntries(
+      Object.entries(details).filter(
+        (entry): entry is [string, string] => typeof entry[1] === "string",
+      ),
+    ),
+  );
+
 export const InboxItemListSchema = z.array(
   z
     .object({
@@ -2395,6 +2405,8 @@ export const InboxItemListSchema = z.array(
       workspace_id: z.string(),
       recipient_type: z.string(),
       recipient_id: z.string(),
+      actor_type: z.string().nullish(),
+      actor_id: z.string().nullish(),
       type: z.string(),
       severity: z.string(),
       issue_id: z.string().nullish(),
@@ -2405,6 +2417,7 @@ export const InboxItemListSchema = z.array(
       read: z.boolean(),
       archived: z.boolean(),
       created_at: z.string(),
+      details: InboxDetailsSchema.nullish(),
     })
     .loose(),
 );

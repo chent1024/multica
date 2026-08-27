@@ -81,6 +81,16 @@ func TestVCSWebhookUsesConfiguredCallbackAndPersistsDedupe(t *testing.T) {
 	if duplicateBody["status"] != "duplicate" || duplicateBody["delivery_id"] != acceptedBody["delivery_id"] {
 		t.Fatalf("duplicate=%v accepted=%v", duplicateBody, acceptedBody)
 	}
+	brokenBody := []byte(`{"pull_request":`)
+	broken := send(brokenBody, sign(brokenBody), "delivery-broken")
+	requireStatus(t, broken, http.StatusUnprocessableEntity)
+	var integrationNotifications int
+	if err := server.store.db.QueryRow(`SELECT COUNT(*) FROM inbox_items WHERE type='integration_failed'`).Scan(&integrationNotifications); err != nil {
+		t.Fatal(err)
+	}
+	if integrationNotifications != 1 {
+		t.Fatalf("integration failure notifications=%d want=1", integrationNotifications)
+	}
 
 	var acceptedCount, rejectedCount int
 	if err := server.store.db.QueryRow(`SELECT COUNT(*) FROM local_integration_deliveries WHERE integration_id=? AND status='processed'`, id).Scan(&acceptedCount); err != nil {

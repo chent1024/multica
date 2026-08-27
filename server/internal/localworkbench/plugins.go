@@ -984,6 +984,15 @@ func (s *Server) runLocalPluginHook(ctx context.Context, id, hookKey string, inp
 	if _, err := s.store.db.ExecContext(ctx, `INSERT INTO plugin_invocations(id,installation_id,hook_key,trigger_kind,status,data,created_at) VALUES(?,?,?,?,?,?,?)`, result["id"], id, hookKey, stringFromAny(input["trigger"]), result["status"], raw, result["created_at"]); err != nil {
 		return nil, err
 	}
+	if result["status"] == "failed" {
+		if err := s.createLocalNotification(ctx, localNotificationInput{
+			Type: "plugin_failed", Severity: "action_required", SourceKey: "plugin-invocation:" + stringFromAny(result["id"]) + ":failed",
+			Title: "Plugin hook failed: " + stringFromAny(item["name"]), Body: stringFromAny(result["error"]),
+			Details: map[string]string{"destination": "plugin", "installation_id": id, "invocation_id": stringFromAny(result["id"]), "hook_key": hookKey},
+		}); err != nil {
+			return nil, err
+		}
+	}
 	return result, nil
 }
 

@@ -14,6 +14,7 @@ import type {
 } from "../types";
 import { useUpdateNotificationPreferences } from "./mutations";
 import { notificationPreferenceKeys } from "./queries";
+import { inboxKeys } from "../inbox/queries";
 
 vi.mock("../hooks", () => ({
   useWorkspaceId: () => "workspace-1",
@@ -120,6 +121,31 @@ describe("useUpdateNotificationPreferences", () => {
         { status_changes: "all" },
         WORKSPACE_SLUG,
       );
+    });
+  });
+
+  it("refreshes the local notification projections when delivery mode changes", async () => {
+    queryClient.setQueryData(notificationPreferenceKeys.all(WORKSPACE_ID), {
+      workspace_id: WORKSPACE_ID,
+      preferences: {},
+    });
+    const invalidateQueries = vi.spyOn(queryClient, "invalidateQueries");
+    const { result } = renderHook(
+      () => useUpdateNotificationPreferences(),
+      { wrapper: createWrapper(queryClient) },
+    );
+
+    act(() => {
+      result.current.mutate({ local_delivery: "action_required" });
+    });
+
+    await waitFor(() => {
+      expect(invalidateQueries).toHaveBeenCalledWith({
+        queryKey: inboxKeys.all(WORKSPACE_ID),
+      });
+      expect(invalidateQueries).toHaveBeenCalledWith({
+        queryKey: inboxKeys.unreadSummary(),
+      });
     });
   });
 

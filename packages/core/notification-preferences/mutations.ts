@@ -7,6 +7,7 @@ import { useCallback, useRef } from "react";
 import { api } from "../api";
 import { useWorkspaceId } from "../hooks";
 import { useRequiredWorkspaceSlug } from "../paths";
+import { inboxKeys } from "../inbox/queries";
 import { notificationPreferenceKeys } from "./queries";
 import type {
   NotificationPreferences,
@@ -115,12 +116,16 @@ export function useUpdateNotificationPreferences() {
         ),
       }));
     },
-    onSettled: (_data, _error, { workspaceId }, context) => {
+    onSettled: (_data, _error, { patch, workspaceId }, context) => {
       const mutationKey = notificationPreferenceKeys.all(workspaceId);
       // The current mutation is still counted during onSettled. Reconcile
       // only after every queued optimistic patch for this workspace finishes.
       if (qc.isMutating({ mutationKey }) > 1) return;
       qc.invalidateQueries({ queryKey: context?.key ?? mutationKey });
+      if (patch.local_delivery) {
+        qc.invalidateQueries({ queryKey: inboxKeys.all(workspaceId) });
+        qc.invalidateQueries({ queryKey: inboxKeys.unreadSummary() });
+      }
     },
   });
 

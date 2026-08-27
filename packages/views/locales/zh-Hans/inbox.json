@@ -1,7 +1,9 @@
 {
   "page": {
     "title": "收件箱",
-    "back": "收件箱"
+    "back": "收件箱",
+    "notifications_title": "通知",
+    "notifications_back": "通知"
   },
   "menu": {
     "mark_all_read": "全部标为已读",
@@ -11,6 +13,7 @@
   },
   "filters": {
     "tooltip": "筛选收件箱",
+    "notifications_tooltip": "筛选通知",
     "active_count_other": "{{count}} 个筛选条件",
     "status": "状态",
     "priority": "优先级",
@@ -45,9 +48,11 @@
   "detail": {
     "select_prompt": "选择一条通知查看详情",
     "empty": "收件箱为空",
+    "notifications_empty": "暂无通知",
     "original_input": "原始输入",
     "retry_with_context": "保留上下文重试",
     "edit_advanced": "在完整表单中编辑",
+    "open_recovery": "打开处理页面",
     "archive": "归档",
     "unarchive": "取消归档"
   },
@@ -70,7 +75,12 @@
     "reaction_added": "添加了表情反应",
     "quick_create_done": "通过智能体创建",
     "quick_create_failed": "通过智能体创建失败",
-    "quick_create_unconfirmed": "通过智能体创建结果未确认"
+    "quick_create_unconfirmed": "通过智能体创建结果未确认",
+    "automation_failed": "自动化失败",
+    "integration_failed": "集成失败",
+    "webhook_failed": "Webhook 失败",
+    "plugin_failed": "Plugin 失败",
+    "runtime_failed": "运行时请求失败"
   },
   "labels": {
     "set_status_to": "状态设为",

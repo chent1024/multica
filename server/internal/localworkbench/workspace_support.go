@@ -1,9 +1,11 @@
 package localworkbench
 
 import (
+	"context"
 	"database/sql"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"net/http"
 	"strings"
 
@@ -64,21 +66,101 @@ func (s *Server) assigneeFrequency(w http.ResponseWriter, r *http.Request) {
 
 func scanInbox(row rowScanner) (map[string]any, error) {
 	var id, workspaceID, recipientType, recipientID, kind, severity, title, createdAt string
-	var issueID, body sql.NullString
+	var issueID, body, actorType, actorID, sourceKey sql.NullString
+	var detailsRaw string
 	var read, archived bool
-	err := row.Scan(&id, &workspaceID, &recipientType, &recipientID, &kind, &severity, &issueID, &title, &body, &read, &archived, &createdAt)
+	err := row.Scan(&id, &workspaceID, &recipientType, &recipientID, &actorType, &actorID, &kind, &severity, &issueID, &title, &body, &read, &archived, &createdAt, &detailsRaw, &sourceKey)
+	details := map[string]string{}
+	if err == nil && strings.TrimSpace(detailsRaw) != "" {
+		if decodeErr := json.Unmarshal([]byte(detailsRaw), &details); decodeErr != nil {
+			details = map[string]string{}
+		}
+	}
 	return map[string]any{
 		"id": id, "workspace_id": workspaceID, "recipient_type": recipientType,
-		"recipient_id": recipientID, "type": kind, "severity": severity,
+		"recipient_id": recipientID, "actor_type": nullableString(actorType), "actor_id": nullableString(actorID),
+		"type": kind, "severity": severity,
 		"issue_id": nullableString(issueID), "title": title, "body": nullableString(body),
-		"read": read, "archived": archived, "created_at": createdAt,
+		"read": read, "archived": archived, "created_at": createdAt, "details": details,
+		"source_key": nullableString(sourceKey),
 	}, err
 }
 
-func insertInboxTx(tx *sql.Tx, workspaceID, kind, severity, issueID, title, body string) (string, error) {
+const inboxSelect = `SELECT id, workspace_id, recipient_type, recipient_id, actor_type, actor_id, type, severity, issue_id, title, body, read, archived, created_at, details, source_key FROM inbox_items`
+
+type localNotificationInput struct {
+	WorkspaceID string
+	Type        string
+	Severity    string
+	SourceKey   string
+	IssueID     string
+	ActorType   string
+	ActorID     string
+	Title       string
+	Body        string
+	Details     map[string]string
+}
+
+var localNotificationTypes = map[string]bool{
+	"review_requested": true, "task_failed": true, "agent_blocked": true,
+	"quick_create_done": true, "quick_create_failed": true, "quick_create_unconfirmed": true,
+	"automation_failed": true, "integration_failed": true, "webhook_failed": true,
+	"plugin_failed": true, "runtime_failed": true,
+}
+
+func insertLocalNotificationTx(ctx context.Context, tx *sql.Tx, input localNotificationInput) (map[string]any, bool, error) {
+	if !localNotificationTypes[input.Type] {
+		return nil, false, fmt.Errorf("unsupported local notification type %q", input.Type)
+	}
+	if input.Severity != "action_required" && input.Severity != "attention" && input.Severity != "info" {
+		return nil, false, fmt.Errorf("unsupported local notification severity %q", input.Severity)
+	}
+	if strings.TrimSpace(input.SourceKey) == "" || strings.TrimSpace(input.Title) == "" {
+		return nil, false, errors.New("local notification source key and title are required")
+	}
+	if input.WorkspaceID == "" {
+		input.WorkspaceID = LocalWorkspaceID
+	}
+	if input.ActorType == "" {
+		input.ActorType = "system"
+	}
+	details, err := json.Marshal(input.Details)
+	if err != nil {
+		return nil, false, err
+	}
 	id := uuid.NewString()
-	_, err := tx.Exec(`INSERT INTO inbox_items(id, workspace_id, recipient_type, recipient_id, type, severity, issue_id, title, body, created_at) VALUES (?, ?, 'member', ?, ?, ?, ?, ?, ?, ?)`, id, workspaceID, LocalOperatorID, kind, severity, nullable(issueID), title, nullable(body), now())
-	return id, err
+	result, err := tx.ExecContext(ctx, `INSERT OR IGNORE INTO inbox_items(id, workspace_id, recipient_type, recipient_id, actor_type, actor_id, type, severity, issue_id, title, body, details, source_key, created_at) VALUES (?, ?, 'member', ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`, id, input.WorkspaceID, LocalOperatorID, input.ActorType, nullable(input.ActorID), input.Type, input.Severity, nullable(input.IssueID), input.Title, nullable(input.Body), string(details), input.SourceKey, now())
+	if err != nil {
+		return nil, false, err
+	}
+	inserted, err := result.RowsAffected()
+	if err != nil {
+		return nil, false, err
+	}
+	if inserted == 0 {
+		return nil, false, nil
+	}
+	item, err := scanInbox(tx.QueryRowContext(ctx, inboxSelect+` WHERE id=?`, id))
+	return item, true, err
+}
+
+func (s *Server) createLocalNotification(ctx context.Context, input localNotificationInput) error {
+	tx, err := s.store.db.BeginTx(ctx, nil)
+	if err != nil {
+		return err
+	}
+	defer func() { _ = tx.Rollback() }()
+	item, inserted, err := insertLocalNotificationTx(ctx, tx, input)
+	if err != nil {
+		return err
+	}
+	if err := tx.Commit(); err != nil {
+		return err
+	}
+	if inserted {
+		s.hub.broadcast("inbox:new", map[string]any{"item": item})
+	}
+	return nil
 }
 
 func (s *Server) listInbox(w http.ResponseWriter, r *http.Request) {
@@ -88,7 +170,8 @@ func (s *Server) listInbox(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	archived := strings.HasSuffix(r.URL.Path, "/archived")
-	rows, err := s.store.db.QueryContext(r.Context(), `SELECT id, workspace_id, recipient_type, recipient_id, type, severity, issue_id, title, body, read, archived, created_at FROM inbox_items WHERE workspace_id=? AND recipient_id=? AND archived=? ORDER BY created_at DESC, id DESC LIMIT 500`, ws.ID, LocalOperatorID, archived)
+	mode := s.localNotificationListMode(r.Context(), ws.ID)
+	rows, err := s.store.db.QueryContext(r.Context(), inboxSelect+` WHERE workspace_id=? AND recipient_id=? AND archived=? AND (?='all' OR severity='action_required') ORDER BY created_at DESC, id DESC LIMIT 500`, ws.ID, LocalOperatorID, archived, mode)
 	if err != nil {
 		s.fail(w, err)
 		return
@@ -148,7 +231,7 @@ func (s *Server) inboxItemState(w http.ResponseWriter, r *http.Request) {
 		s.respondStoreError(w, sql.ErrNoRows)
 		return
 	}
-	item, err := scanInbox(s.store.db.QueryRowContext(r.Context(), `SELECT id, workspace_id, recipient_type, recipient_id, type, severity, issue_id, title, body, read, archived, created_at FROM inbox_items WHERE id=?`, id))
+	item, err := scanInbox(s.store.db.QueryRowContext(r.Context(), inboxSelect+` WHERE id=?`, id))
 	if err != nil {
 		s.fail(w, err)
 		return
@@ -163,7 +246,8 @@ func (s *Server) inboxCount(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	var count int
-	if err := s.store.db.QueryRowContext(r.Context(), `SELECT COUNT(*) FROM inbox_items WHERE workspace_id=? AND recipient_id=? AND read=0 AND archived=0`, ws.ID, LocalOperatorID).Scan(&count); err != nil {
+	mode := s.localNotificationListMode(r.Context(), ws.ID)
+	if err := s.store.db.QueryRowContext(r.Context(), `SELECT COUNT(*) FROM inbox_items WHERE workspace_id=? AND recipient_id=? AND read=0 AND archived=0 AND (?='all' OR severity='action_required')`, ws.ID, LocalOperatorID, mode).Scan(&count); err != nil {
 		s.fail(w, err)
 		return
 	}
@@ -203,7 +287,19 @@ func (s *Server) inboxBulk(w http.ResponseWriter, r *http.Request) {
 }
 
 func defaultNotificationPreferences() map[string]any {
-	return map[string]any{"assignments": "all", "status_changes": "all", "comments": "all", "mentions": "all", "updates": "all", "agent_activity": "all", "system_notifications": "all"}
+	return map[string]any{"local_delivery": "all", "system_notifications": "all"}
+}
+
+func (s *Server) localNotificationListMode(ctx context.Context, workspaceID string) string {
+	var raw string
+	if err := s.store.db.QueryRowContext(ctx, `SELECT data FROM local_preferences WHERE workspace_id=? AND owner_id=? AND kind='notifications'`, workspaceID, LocalOperatorID).Scan(&raw); err != nil {
+		return "all"
+	}
+	preferences := map[string]any{}
+	if json.Unmarshal([]byte(raw), &preferences) == nil && preferences["local_delivery"] == "action_required" {
+		return "action_required"
+	}
+	return "all"
 }
 
 func (s *Server) notificationPreferences(w http.ResponseWriter, r *http.Request) {
@@ -229,8 +325,10 @@ func (s *Server) notificationPreferences(w http.ResponseWriter, r *http.Request)
 			return
 		}
 		for key, value := range input.Preferences {
-			if value != "all" && value != "muted" {
-				writeError(w, http.StatusBadRequest, errors.New("notification preference must be all or muted"))
+			legacy := key == "assignments" || key == "status_changes" || key == "comments" || key == "mentions" || key == "updates" || key == "agent_activity"
+			valid := (key == "local_delivery" && (value == "all" || value == "action_required")) || ((key == "system_notifications" || legacy) && (value == "all" || value == "muted"))
+			if !valid {
+				writeError(w, http.StatusBadRequest, errors.New("unsupported local notification preference"))
 				return
 			}
 			preferences[key] = value

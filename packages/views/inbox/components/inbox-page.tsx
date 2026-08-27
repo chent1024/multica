@@ -51,6 +51,7 @@ import {
 
 import { IssueDetail, issueHighlightMementoKey } from "../../issues/components";
 import { useViewStateWriter } from "../../platform";
+import { isDesktopShell } from "../../platform/local-directory";
 import { ErrorBoundary } from "@multica/ui/components/common/error-boundary";
 import { useNavigation, useReportNavigating } from "../../navigation";
 import { toast } from "sonner";
@@ -92,6 +93,7 @@ import { ARCHIVED_VIEW_PARAM, type InboxView } from "./inbox-view";
 import { useTypeLabels } from "./inbox-detail-label";
 import {
   getInboxDisplayTitle,
+  getLocalNotificationDestination,
   isQuickCreateOutcome,
   resolveDetailItem,
 } from "./inbox-display";
@@ -99,11 +101,12 @@ import { useT } from "../../i18n";
 
 export function InboxPage() {
   const { t } = useT("inbox");
-  const { searchParams, replace } = useNavigation();
+  const { searchParams, replace, push } = useNavigation();
   const urlIssue = searchParams.get("issue") ?? "";
   const urlView: InboxView =
     searchParams.get("view") === ARCHIVED_VIEW_PARAM ? "archived" : "inbox";
   const wsPaths = useWorkspacePaths();
+  const localDesktop = isDesktopShell();
 
   const [selectedKey, setSelectedKeyState] = useState(() => urlIssue);
   const [view, setViewState] = useState<InboxView>(() => urlView);
@@ -513,7 +516,7 @@ export function InboxPage() {
   const listHeader = (
     <PageHeader>
       <div className="flex flex-1 items-center gap-2">
-        <h1 className="text-body font-semibold">{t(($) => $.page.title)}</h1>
+        <h1 className="text-body font-semibold">{localDesktop ? t(($) => $.page.notifications_title) : t(($) => $.page.title)}</h1>
         {unreadCount > 0 && (
           <NumberFlow
             value={unreadCount}
@@ -655,7 +658,7 @@ export function InboxPage() {
       <ArrowLeft className="h-4 w-4" />
       {/* Back goes to the list the user came FROM, so the label has to
           name it — "Inbox" here would be a lie about the destination. */}
-      {isArchivedView ? t(($) => $.list.archived_title) : t(($) => $.page.back)}
+      {isArchivedView ? t(($) => $.list.archived_title) : localDesktop ? t(($) => $.page.notifications_back) : t(($) => $.page.back)}
     </Button>
   ) : undefined;
 
@@ -724,6 +727,14 @@ export function InboxPage() {
         </div>
       )}
       <div className="mt-4 flex gap-2">
+        {detailItem.details?.destination && (() => {
+          const destination = getLocalNotificationDestination(detailItem.details, wsPaths);
+          return destination ? (
+            <Button size="sm" onClick={() => push(destination)}>
+              {t(($) => $.detail.open_recovery)}
+            </Button>
+          ) : null;
+        })()}
         {detailItem.type === "quick_create_failed" &&
           detailItem.details?.source_context_id &&
           detailItem.details?.task_id && (
@@ -899,7 +910,9 @@ export function InboxPage() {
             <Inbox className="mb-3 h-10 w-10 text-faint-foreground" />
             <p className="text-body">
               {visibleItems.length === 0
-                ? t(($) => $.detail.empty)
+                ? localDesktop
+                  ? t(($) => $.detail.notifications_empty)
+                  : t(($) => $.detail.empty)
                 : t(($) => $.detail.select_prompt)}
             </p>
           </div>

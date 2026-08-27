@@ -3,11 +3,12 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 import { ApiError } from "@multica/core/api";
 import { AppSidebar } from "./app-sidebar";
 
-const { appForeground, chatSessions, chatStore, detail, deletePin, inboxItems, navigation, pins, sidebarState, summary, workspaces } = vi.hoisted(() => ({
+const { appForeground, chatSessions, chatStore, desktopShell, detail, deletePin, inboxItems, navigation, pins, sidebarState, summary, workspaces } = vi.hoisted(() => ({
   appForeground: { current: true },
   sidebarState: { setOpenMobile: vi.fn() },
   chatSessions: { current: [] as { id?: string; unread_count?: number }[] },
   chatStore: { current: { activeSessionId: null as string | null, isOpen: false } },
+  desktopShell: { current: false },
   detail: { current: { isPending: false, isError: false, data: null as unknown, error: null as unknown } },
   deletePin: vi.fn(),
   inboxItems: { current: [] as { id: string; read: boolean }[] },
@@ -29,6 +30,10 @@ const { appForeground, chatSessions, chatStore, detail, deletePin, inboxItems, n
       },
     ],
   },
+}));
+
+vi.mock("../platform/local-directory", () => ({
+  isDesktopShell: () => desktopShell.current,
 }));
 
 vi.mock("@dnd-kit/core", () => ({
@@ -348,6 +353,18 @@ describe("personal nav — Chat", () => {
     navigation.current = { pathname: "/acme/issues" };
     chatStore.current = { activeSessionId: null, isOpen: false };
     appForeground.current = true;
+    desktopShell.current = false;
+  });
+
+  it("hides My Tasks only in the local Desktop sidebar", () => {
+    const web = render(<AppSidebar />);
+    expect(web.container.querySelector('button[data-href="/acme/my-issues"]')).not.toBeNull();
+    web.unmount();
+
+    desktopShell.current = true;
+    const localDesktop = render(<AppSidebar />);
+    expect(localDesktop.container.querySelector('button[data-href="/acme/my-issues"]')).toBeNull();
+    expect(localDesktop.container.querySelector('button[data-href="/acme/issues"]')).not.toBeNull();
   });
 
   // The mocked SidebarMenuButton exposes the AppLink target as `data-href`

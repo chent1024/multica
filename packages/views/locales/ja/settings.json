@@ -559,6 +559,10 @@
     "title": "インボックス通知",
     "description": "どのイベントがインボックス通知を生成するかを制御します。ミュートしたイベントタイプは静かにフィルタされますが、タスクを直接開けば引き続き確認できます。",
     "toast_failed": "通知設定を更新できませんでした",
+    "local": {
+      "action_required_label": "対応が必要な通知のみ表示",
+      "action_required_description": "情報のみの結果を非表示にし、対応が必要な失敗やブロックを表示します。"
+    },
     "groups": {
       "assignments": {
         "label": "担当の割り当て",

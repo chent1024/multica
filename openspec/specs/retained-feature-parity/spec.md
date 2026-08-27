@@ -4,11 +4,11 @@
 Makes complete upstream Desktop behavior the acceptance contract while limiting removals to proven cloud account and control-plane capabilities.
 ## Requirements
 ### Requirement: Retained upstream surfaces remain present
-Desktop SHALL retain Search, command palette, Inbox, Chat, My Issues, Issues, Projects, Automations, Agents, Squads, Statistics, Runtimes, Skills, Settings, onboarding, diagnostics, updates, and every supporting workflow classified `keep` or `keep/localize` in `feature-parity.md`.
+Desktop SHALL retain Search, command palette, Notifications through the compatible internal Inbox contract, Chat, My Issues, Issues, Projects, Automations, Agents, Squads, Statistics, Runtimes, Skills, Settings, onboarding, diagnostics, updates, and every supporting workflow classified `keep` or `keep/localize` in `feature-parity.md`. The localized Notifications surface SHALL present non-collaboration events defined by the local notification center rather than removed cloud collaboration events.
 
 #### Scenario: Navigation is audited
 - **WHEN** localized Desktop navigation and routes are compared with baseline `09a2410e`
-- **THEN** every retained surface remains reachable under the upstream information architecture
+- **THEN** every retained surface remains reachable under the upstream information architecture, with Notifications using the retained internal Inbox route
 
 ### Requirement: Retained features remain completely usable
 Each retained capability SHALL support its applicable create or configure, persistence, read, search, filter, edit, delete or archive, execution or integration side effect, committed state projection, actionable failure, reconnect, and restart behavior through the real Desktop contract.

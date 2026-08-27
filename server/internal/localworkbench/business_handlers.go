@@ -1003,7 +1003,7 @@ func (s *Server) quickCreateIssue(w http.ResponseWriter, r *http.Request) {
 		Title: title, Description: prompt, Status: "todo", Priority: input.Priority,
 		AssigneeType: &assigneeType, AssigneeID: &assigneeID,
 		ProjectID: input.ProjectID, ParentIssueID: input.ParentID, DueDate: input.DueDate,
-		AttachmentIDs: input.AttachmentIDs,
+		AttachmentIDs: input.AttachmentIDs, Metadata: map[string]any{"origin": "quick_create"},
 	})
 	if err != nil {
 		s.respondStoreError(w, err)

@@ -1,8 +1,10 @@
 // @vitest-environment node
 import { describe, expect, it } from "vitest";
 import type { InboxItem } from "@multica/core/types";
+import { paths } from "@multica/core/paths";
 import {
   getInboxDisplayTitle,
+  getLocalNotificationDestination,
   getQuickCreateOutcomeDetail,
   isQuickCreateOutcome,
   resolveDetailItem,
@@ -102,6 +104,40 @@ describe("inbox display helpers", () => {
     expect(getInboxDisplayTitle(unconfirmedItem)).toBe(
       "File a bug about the flaky test",
     );
+  });
+
+  it("maps only finite local recovery destinations", () => {
+    const workspacePaths = paths.workspace("local");
+    expect(
+      getLocalNotificationDestination(
+        { destination: "automation", automation_id: "auto-1" },
+        workspacePaths,
+      ),
+    ).toBe("/local/autopilots/auto-1");
+    expect(
+      getLocalNotificationDestination(
+        { destination: "runtime", runtime_id: "runtime-1" },
+        workspacePaths,
+      ),
+    ).toBe("/local/runtimes/runtime-1");
+    expect(
+      getLocalNotificationDestination(
+        { destination: "plugin", installation_id: "plugin-1" },
+        workspacePaths,
+      ),
+    ).toBe("/local/settings?tab=plugins");
+    expect(
+      getLocalNotificationDestination(
+        { destination: "integration", integration_id: "integration-1" },
+        workspacePaths,
+      ),
+    ).toBe("/local/settings?tab=integrations");
+    expect(
+      getLocalNotificationDestination(
+        { destination: "https://evil.example", url: "https://evil.example" },
+        workspacePaths,
+      ),
+    ).toBeNull();
   });
 });
 

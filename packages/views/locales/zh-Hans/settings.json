@@ -559,6 +559,10 @@
     "title": "收件箱通知",
     "description": "控制哪些事件会产生收件箱通知。被静默的事件类型仍然存在——可以直接到任务页面查看。",
     "toast_failed": "更新通知设置失败",
+    "local": {
+      "action_required_label": "只显示需要处理",
+      "action_required_description": "隐藏信息类结果，只保留需要你处理的失败或阻塞通知。"
+    },
     "groups": {
       "assignments": {
         "label": "分配",

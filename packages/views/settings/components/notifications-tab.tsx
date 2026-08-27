@@ -9,6 +9,7 @@ import { Switch } from "@multica/ui/components/ui/switch";
 import { toast } from "sonner";
 import { useT } from "../../i18n";
 import { BrowserNotificationSetting } from "./browser-notification-setting";
+import { isDesktopShell } from "../../platform/local-directory";
 import {
   SettingsCard,
   SettingsRow,
@@ -35,6 +36,7 @@ export function NotificationsTab() {
   const mutation = useUpdateNotificationPreferences();
 
   const preferences = data?.preferences ?? {};
+  const localDesktop = isDesktopShell();
 
   const handleToggle = (key: NotificationGroupKey, enabled: boolean) => {
     const updated: NotificationPreferences = {
@@ -60,6 +62,27 @@ export function NotificationsTab() {
   };
 
   const systemEnabled = preferences.system_notifications !== "muted";
+  const onlyActionRequired = preferences.local_delivery === "action_required";
+
+  const handleLocalDelivery = (enabled: boolean) => {
+    const updated: NotificationPreferences = {
+      ...preferences,
+      local_delivery: enabled ? "action_required" : "all",
+    };
+    if (!enabled) delete updated.local_delivery;
+    mutation.mutate(updated, {
+      onSuccess: () =>
+        toast.success(t(($) => $.auto_save.toast_saved), {
+          id: "settings-auto-save",
+        }),
+      onError: (err) =>
+        toast.error(
+          err instanceof Error && err.message
+            ? err.message
+            : t(($) => $.notifications.toast_failed),
+        ),
+    });
+  };
 
   return (
     <SettingsTab title={t(($) => $.page.tabs.notifications)}>
@@ -68,6 +91,19 @@ export function NotificationsTab() {
         description={t(($) => $.notifications.description)}
       >
         <SettingsCard>
+          {localDesktop ? (
+            <SettingsRow
+              label={t(($) => $.notifications.local.action_required_label)}
+              description={t(($) => $.notifications.local.action_required_description)}
+            >
+              <Switch
+                checked={onlyActionRequired}
+                aria-label={t(($) => $.notifications.local.action_required_label)}
+                onCheckedChange={handleLocalDelivery}
+              />
+            </SettingsRow>
+          ) : (
+            <>
             {INBOX_GROUP_KEYS.map((key: InboxGroupKey) => {
               const enabled = preferences[key] !== "muted";
               return (
@@ -84,6 +120,8 @@ export function NotificationsTab() {
                 </SettingsRow>
               );
             })}
+            </>
+          )}
         </SettingsCard>
       </SettingsSection>
 
