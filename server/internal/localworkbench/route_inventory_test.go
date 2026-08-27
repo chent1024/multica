@@ -44,7 +44,7 @@ func TestRetainedDesktopRouteInventory(t *testing.T) {
 	}
 }
 
-func TestLocalConfigDoesNotAdvertiseUnavailableHostedIntegrations(t *testing.T) {
+func TestLocalConfigAdvertisesLocalCapabilities(t *testing.T) {
 	server, err := NewServer(context.Background(), ServerConfig{DatabasePath: filepath.Join(t.TempDir(), "db.sqlite"), FileRoot: filepath.Join(t.TempDir(), "files")})
 	if err != nil {
 		t.Fatal(err)
@@ -57,5 +57,8 @@ func TestLocalConfigDoesNotAdvertiseUnavailableHostedIntegrations(t *testing.T) 
 	flags := config["feature_flags"].(map[string]any)
 	if flags["composio_mcp_apps"] != false {
 		t.Fatalf("composio_mcp_apps=%v, want false for local runtime", flags["composio_mcp_apps"])
+	}
+	if flags["local_workbench"] != true {
+		t.Fatalf("local_workbench=%v, want true for local runtime", flags["local_workbench"])
 	}
 }

@@ -548,6 +548,7 @@ func (s *Server) appConfig(w http.ResponseWriter, r *http.Request) {
 		"feature_flags": map[string]bool{
 			"plugins_v1":        true,
 			"composio_mcp_apps": false,
+			"local_workbench":   true,
 		},
 		"server_version": s.version,
 	})

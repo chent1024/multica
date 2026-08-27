@@ -1,6 +1,8 @@
 import { render, screen, waitFor } from "@testing-library/react";
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { ApiError } from "@multica/core/api";
+import { configStore } from "@multica/core/config";
+import { LOCAL_WORKBENCH_FLAG } from "@multica/core/feature-flags";
 import { AppSidebar } from "./app-sidebar";
 
 const { appForeground, chatSessions, chatStore, desktopShell, detail, deletePin, inboxItems, navigation, pins, sidebarState, summary, workspaces } = vi.hoisted(() => ({
@@ -246,6 +248,27 @@ describe("sidebar footer", () => {
     const { container } = render(<AppSidebar />);
 
     expect(container.querySelector('a[href="https://discord.gg/W8gYBn226t"]')).not.toBeInTheDocument();
+  });
+});
+
+describe("workspace switcher visibility", () => {
+  beforeEach(() => {
+    configStore.getState().setFeatureFlags({});
+  });
+
+  afterEach(() => {
+    configStore.getState().setFeatureFlags({});
+  });
+
+  it("shows the active workspace outside the local workbench", () => {
+    render(<AppSidebar />);
+    expect(screen.getByText("Acme")).toBeInTheDocument();
+  });
+
+  it("hides the fixed workspace identity in the local workbench", () => {
+    configStore.getState().setFeatureFlags({ [LOCAL_WORKBENCH_FLAG]: true });
+    render(<AppSidebar />);
+    expect(screen.queryByText("Acme")).not.toBeInTheDocument();
   });
 });
 
