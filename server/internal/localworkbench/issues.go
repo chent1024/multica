@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"maps"
 	"strings"
 	"time"
 
@@ -18,34 +19,38 @@ const (
 )
 
 type Issue struct {
-	ID             string         `json:"id"`
-	WorkspaceID    string         `json:"workspace_id"`
-	Number         int64          `json:"number"`
-	Identifier     string         `json:"identifier"`
-	Title          string         `json:"title"`
-	Description    *string        `json:"description"`
-	Status         string         `json:"status"`
-	StatusCategory string         `json:"status_category,omitempty"`
-	Priority       string         `json:"priority"`
-	AssigneeType   *string        `json:"assignee_type"`
-	AssigneeID     *string        `json:"assignee_id"`
-	CreatorType    string         `json:"creator_type"`
-	CreatorID      string         `json:"creator_id"`
-	ParentIssueID  *string        `json:"parent_issue_id"`
-	ProjectID      *string        `json:"project_id"`
-	Position       float64        `json:"position"`
-	Stage          *int64         `json:"stage"`
-	StartDate      *string        `json:"start_date"`
-	DueDate        *string        `json:"due_date"`
-	Metadata       map[string]any `json:"metadata"`
-	Properties     map[string]any `json:"properties"`
-	Reactions      []any          `json:"reactions"`
-	Labels         []any          `json:"labels"`
-	CreatedAt      string         `json:"created_at"`
-	UpdatedAt      string         `json:"updated_at"`
-	Revision       int64          `json:"revision"`
-	LastActivityAt *string        `json:"last_activity_at"`
-	SourceContext  map[string]any `json:"source_context,omitempty"`
+	workflowTaskID     string
+	workflowCancelled  []string
+	ID                 string                  `json:"id"`
+	WorkspaceID        string                  `json:"workspace_id"`
+	Number             int64                   `json:"number"`
+	Identifier         string                  `json:"identifier"`
+	Title              string                  `json:"title"`
+	Description        *string                 `json:"description"`
+	Status             string                  `json:"status"`
+	StatusCategory     string                  `json:"status_category,omitempty"`
+	Priority           string                  `json:"priority"`
+	AssigneeType       *string                 `json:"assignee_type"`
+	AssigneeID         *string                 `json:"assignee_id"`
+	CreatorType        string                  `json:"creator_type"`
+	CreatorID          string                  `json:"creator_id"`
+	ParentIssueID      *string                 `json:"parent_issue_id"`
+	DuplicateOfIssueID *string                 `json:"duplicate_of_issue_id,omitempty"`
+	DuplicateOf        *localIssueDuplicateRef `json:"duplicate_of"`
+	ProjectID          *string                 `json:"project_id"`
+	Position           float64                 `json:"position"`
+	Stage              *int64                  `json:"stage"`
+	StartDate          *string                 `json:"start_date"`
+	DueDate            *string                 `json:"due_date"`
+	Metadata           map[string]any          `json:"metadata"`
+	Properties         map[string]any          `json:"properties"`
+	Reactions          []any                   `json:"reactions"`
+	Labels             []any                   `json:"labels"`
+	CreatedAt          string                  `json:"created_at"`
+	UpdatedAt          string                  `json:"updated_at"`
+	Revision           int64                   `json:"revision"`
+	LastActivityAt     *string                 `json:"last_activity_at"`
+	SourceContext      map[string]any          `json:"source_context,omitempty"`
 }
 
 type Comment struct {
@@ -112,7 +117,7 @@ func (s *Store) ListIssues(ctx context.Context, workspaceID, projectID, parentID
 	query := `SELECT i.id, i.workspace_id, i.number, w.issue_prefix, i.title, i.description, i.status,
 		COALESCE(s.category, i.status), i.priority, i.assignee_type, i.assignee_id, i.creator_type, i.creator_id,
 		i.parent_issue_id, i.project_id, i.position, i.stage, i.start_date, i.due_date, i.metadata, i.properties,
-		i.created_at, i.updated_at, i.revision, i.last_activity_at
+		i.created_at, i.updated_at, i.revision, i.last_activity_at, ` + localIssueDuplicateSelect + `
 		FROM issues i JOIN workspaces w ON w.id=i.workspace_id
 		LEFT JOIN issue_statuses s ON s.workspace_id=i.workspace_id AND s.key=i.status
 		WHERE i.workspace_id=?`
@@ -152,7 +157,7 @@ func (s *Store) GetIssue(ctx context.Context, workspaceID, value string) (Issue,
 	query := `SELECT i.id, i.workspace_id, i.number, w.issue_prefix, i.title, i.description, i.status,
 		COALESCE(s.category, i.status), i.priority, i.assignee_type, i.assignee_id, i.creator_type, i.creator_id,
 		i.parent_issue_id, i.project_id, i.position, i.stage, i.start_date, i.due_date, i.metadata, i.properties,
-		i.created_at, i.updated_at, i.revision, i.last_activity_at
+		i.created_at, i.updated_at, i.revision, i.last_activity_at, ` + localIssueDuplicateSelect + `
 		FROM issues i JOIN workspaces w ON w.id=i.workspace_id
 		LEFT JOIN issue_statuses s ON s.workspace_id=i.workspace_id AND s.key=i.status
 		WHERE i.workspace_id=? AND (i.id=? OR upper(w.issue_prefix || '-' || i.number)=upper(?)) LIMIT 1`
@@ -178,6 +183,17 @@ func (s *Store) hydrateIssueDecorations(ctx context.Context, workspaceID string,
 			return err
 		}
 		issues[index].Labels, issues[index].Reactions = labels, reactions
+		if pointer := issues[index].DuplicateOfIssueID; pointer != nil {
+			var ref localIssueDuplicateRef
+			err := s.db.QueryRowContext(ctx, `SELECT i.id,w.issue_prefix||'-'||i.number,i.title,i.status FROM issues i JOIN workspaces w ON w.id=i.workspace_id WHERE i.id=? AND i.workspace_id=?`, *pointer, workspaceID).Scan(&ref.ID, &ref.Identifier, &ref.Title, &ref.Status)
+			if errors.Is(err, sql.ErrNoRows) {
+				issues[index].DuplicateOfIssueID = nil
+			} else if err != nil {
+				return err
+			} else {
+				issues[index].DuplicateOf = &ref
+			}
+		}
 	}
 	return nil
 }
@@ -221,18 +237,20 @@ func (s *Store) reactionsFor(ctx context.Context, workspaceID, resourceType, res
 func scanIssue(row rowScanner) (Issue, error) {
 	var i Issue
 	var prefix, metadata, properties string
-	var description, assigneeType, assigneeID, parentID, projectID, startDate, dueDate, lastActivity sql.NullString
+	var description, assigneeType, assigneeID, parentID, projectID, startDate, dueDate, lastActivity, duplicateOf sql.NullString
 	var stage sql.NullInt64
-	err := row.Scan(&i.ID, &i.WorkspaceID, &i.Number, &prefix, &i.Title, &description, &i.Status, &i.StatusCategory, &i.Priority, &assigneeType, &assigneeID, &i.CreatorType, &i.CreatorID, &parentID, &projectID, &i.Position, &stage, &startDate, &dueDate, &metadata, &properties, &i.CreatedAt, &i.UpdatedAt, &i.Revision, &lastActivity)
+	err := row.Scan(&i.ID, &i.WorkspaceID, &i.Number, &prefix, &i.Title, &description, &i.Status, &i.StatusCategory, &i.Priority, &assigneeType, &assigneeID, &i.CreatorType, &i.CreatorID, &parentID, &projectID, &i.Position, &stage, &startDate, &dueDate, &metadata, &properties, &i.CreatedAt, &i.UpdatedAt, &i.Revision, &lastActivity, &duplicateOf)
 	i.Identifier = fmt.Sprintf("%s-%d", prefix, i.Number)
 	i.Description, i.AssigneeType, i.AssigneeID = stringPtr(description), stringPtr(assigneeType), stringPtr(assigneeID)
 	i.ParentIssueID, i.ProjectID, i.StartDate, i.DueDate = stringPtr(parentID), stringPtr(projectID), stringPtr(startDate), stringPtr(dueDate)
 	i.Stage, i.LastActivityAt = intPtr(stage), stringPtr(lastActivity)
+	i.DuplicateOfIssueID = stringPtr(duplicateOf)
 	i.Metadata, i.Properties, i.Reactions, i.Labels = decodeObject(metadata), decodeObject(properties), []any{}, []any{}
 	return i, err
 }
 
 type CreateIssueInput struct {
+	SuppressRun   bool                `json:"suppress_run,omitempty"`
 	Title         string              `json:"title"`
 	Description   string              `json:"description"`
 	Status        string              `json:"status"`
@@ -263,6 +281,8 @@ var (
 	ErrIssueProjectRequired  = errors.New("issue project is required")
 	ErrIssueProjectImmutable = errors.New("issue project cannot be changed")
 	ErrIssueProjectMismatch  = errors.New("child issue project must match parent")
+	ErrIssueRevisionConflict = errors.New("issue was updated elsewhere")
+	ErrInvalidIssueRevision  = errors.New("expected_revision must be a positive integer")
 )
 
 func (s *Store) CreateIssue(ctx context.Context, workspaceID string, input CreateIssueInput) (Issue, error) {
@@ -317,6 +337,10 @@ func (s *Store) CreateIssue(ctx context.Context, workspaceID string, input Creat
 	if err := tx.QueryRowContext(ctx, "SELECT COALESCE(MAX(position), -1)+1 FROM issues WHERE workspace_id=?", workspaceID).Scan(&position); err != nil {
 		return Issue{}, err
 	}
+	workflowEntry, err := prepareLocalIssueWorkflowCreateTx(ctx, tx, workspaceID, &input)
+	if err != nil {
+		return Issue{}, err
+	}
 	if input.Status == "" {
 		input.Status = "backlog"
 	}
@@ -366,26 +390,86 @@ func (s *Store) CreateIssue(ctx context.Context, workspaceID string, input Creat
 			return Issue{}, err
 		}
 	}
+	workflowTaskID := ""
+	if workflowEntry != nil && workflowEntry.AgentID != "" && !input.SuppressRun {
+		workflowTaskID, err = enqueueLocalIssueAgentTaskTx(ctx, tx, workspaceID, id, workflowEntry.AgentID, workflowEntry.Brief, "", time.Now().UTC())
+		if err != nil {
+			if errors.Is(err, ErrLocalAgentRuntimeUnavailable) {
+				return Issue{}, workflowError(409, "workflow_runtime_unavailable", err.Error())
+			}
+			return Issue{}, err
+		}
+		if _, err := tx.ExecContext(ctx, `UPDATE task_runs SET workflow_id=?,workflow_step=? WHERE id=?`, workflowEntry.WorkflowID, workflowEntry.StatusKey, workflowTaskID); err != nil {
+			return Issue{}, err
+		}
+	}
 	if err := tx.Commit(); err != nil {
 		return Issue{}, err
 	}
-	return s.GetIssue(ctx, workspaceID, id)
+	record, err := s.GetIssue(ctx, workspaceID, id)
+	record.workflowTaskID = workflowTaskID
+	return record, err
 }
 
 func (s *Store) UpdateIssue(ctx context.Context, workspaceID, id string, updates map[string]any) (Issue, error) {
+	updates = maps.Clone(updates)
+	if updates == nil {
+		updates = map[string]any{}
+	}
 	tx, err := s.db.BeginTx(ctx, nil)
 	if err != nil {
 		return Issue{}, err
 	}
 	defer func() { _ = tx.Rollback() }()
-
-	var currentID string
-	var currentProjectID, currentParentIssueID sql.NullString
-	err = tx.QueryRowContext(ctx, `SELECT i.id, i.project_id, i.parent_issue_id
-		FROM issues i JOIN workspaces w ON w.id=i.workspace_id
-		WHERE i.workspace_id=? AND (i.id=? OR upper(w.issue_prefix || '-' || i.number)=upper(?)) LIMIT 1`, workspaceID, id, id).Scan(&currentID, &currentProjectID, &currentParentIssueID)
+	cursor, origin, err := beginLocalWakeupMutation(ctx, tx, workspaceID)
 	if err != nil {
 		return Issue{}, err
+	}
+
+	var currentID, currentStatus string
+	var currentRevision int64
+	var currentProjectID, currentParentIssueID, currentDuplicateOf sql.NullString
+	err = tx.QueryRowContext(ctx, `SELECT i.id, i.project_id, i.parent_issue_id, i.status, i.duplicate_of_issue_id,i.revision
+		FROM issues i JOIN workspaces w ON w.id=i.workspace_id
+		WHERE i.workspace_id=? AND (i.id=? OR upper(w.issue_prefix || '-' || i.number)=upper(?)) LIMIT 1`, workspaceID, id, id).Scan(&currentID, &currentProjectID, &currentParentIssueID, &currentStatus, &currentDuplicateOf, &currentRevision)
+	if err != nil {
+		return Issue{}, err
+	}
+
+	if raw, present := updates["expected_revision"]; present {
+		var revision int64
+		valid := true
+		switch v := raw.(type) {
+		case float64:
+			revision = int64(v)
+			valid = v == float64(revision)
+		case int:
+			revision = int64(v)
+		case int64:
+			revision = v
+		case json.Number:
+			var parseErr error
+			revision, parseErr = v.Int64()
+			valid = parseErr == nil
+		default:
+			valid = false
+		}
+		if !valid || revision < 1 {
+			return Issue{}, ErrInvalidIssueRevision
+		}
+		if revision != currentRevision {
+			return Issue{}, ErrIssueRevisionConflict
+		}
+	}
+	markingDuplicate, duplicateNoop, err := prepareLocalDuplicateMark(ctx, tx, workspaceID, currentID, currentStatus, currentDuplicateOf, updates)
+	if err != nil {
+		return Issue{}, err
+	}
+	if duplicateNoop {
+		if err := commitLocalWakeupMutation(ctx, tx, workspaceID, cursor, origin); err != nil {
+			return Issue{}, err
+		}
+		return s.GetIssue(ctx, workspaceID, currentID)
 	}
 	finalProjectID := strings.TrimSpace(currentProjectID.String)
 	repairingProject := false
@@ -421,7 +505,7 @@ func (s *Store) UpdateIssue(ctx context.Context, workspaceID, id string, updates
 			finalProjectID = projectID
 		}
 	}
-	if requestsRun(updates) && finalProjectID == "" {
+	if requestsRun(updates) && !markingDuplicate && finalProjectID == "" {
 		return Issue{}, ErrIssueProjectRequired
 	}
 	if value, ok := updates["parent_issue_id"].(string); ok && value != "" {
@@ -438,7 +522,12 @@ func (s *Store) UpdateIssue(ctx context.Context, workspaceID, id string, updates
 			return Issue{}, ErrIssueProjectMismatch
 		}
 	}
-	allowed := map[string]bool{"title": true, "description": true, "status": true, "priority": true, "assignee_type": true, "assignee_id": true, "project_id": true, "parent_issue_id": true, "start_date": true, "due_date": true, "position": true, "stage": true, "metadata": true, "properties": true}
+	updates["_workflow_source_task_id"] = origin.TaskID
+	workflowEntry, err := applyLocalIssueWorkflowEntryTx(ctx, tx, workspaceID, currentID, updates)
+	if err != nil {
+		return Issue{}, err
+	}
+	allowed := map[string]bool{"title": true, "description": true, "status": true, "priority": true, "assignee_type": true, "assignee_id": true, "project_id": true, "parent_issue_id": true, "start_date": true, "due_date": true, "position": true, "stage": true, "metadata": true, "properties": true, "duplicate_of_issue_id": true}
 	for key, value := range updates {
 		if !allowed[key] {
 			continue
@@ -449,6 +538,12 @@ func (s *Store) UpdateIssue(ctx context.Context, workspaceID, id string, updates
 		}
 		set = append(set, key+"=?")
 		args = append(args, value)
+	}
+
+	if status, requested := updates["status"]; requested && !markingDuplicate {
+		if status != "cancelled" || currentStatus != "cancelled" {
+			set = append(set, "duplicate_of_issue_id=NULL")
+		}
 	}
 	args = append(args, currentID)
 	where := "id=?"
@@ -468,6 +563,21 @@ func (s *Store) UpdateIssue(ctx context.Context, workspaceID, id string, updates
 			return Issue{}, ErrIssueProjectImmutable
 		}
 	}
+
+	if status, requested := updates["status"].(string); requested {
+		var category string
+		if err := tx.QueryRowContext(ctx, `SELECT category FROM issue_statuses WHERE workspace_id=? AND key=?`, workspaceID, status).Scan(&category); err != nil && !errors.Is(err, sql.ErrNoRows) {
+			return Issue{}, err
+		}
+		if category == "" {
+			category = status
+		}
+		if category == "done" || localStatusCategory(category) == "closed" {
+			if err := endLocalIssueWakeupsTx(ctx, tx, workspaceID, currentID, stamp); err != nil {
+				return Issue{}, err
+			}
+		}
+	}
 	if rawIDs, ok := updates["attachment_ids"]; ok {
 		ids, err := attachmentIDs(rawIDs)
 		if err != nil {
@@ -477,10 +587,36 @@ func (s *Store) UpdateIssue(ctx context.Context, workspaceID, id string, updates
 			return Issue{}, err
 		}
 	}
-	if err := tx.Commit(); err != nil {
+	workflowTaskID := ""
+	suppressRun, _ := updates["suppress_run"].(bool)
+	if workflowEntry != nil && workflowEntry.AgentID != "" && !suppressRun {
+		workflowTaskID, err = enqueueLocalIssueAgentTaskTx(ctx, tx, workspaceID, currentID, workflowEntry.AgentID, workflowEntry.Brief, "", time.Now().UTC())
+		if err != nil {
+			if errors.Is(err, ErrLocalAgentRuntimeUnavailable) {
+				return Issue{}, workflowError(409, "workflow_runtime_unavailable", err.Error())
+			}
+			return Issue{}, err
+		}
+		if _, err := tx.ExecContext(ctx, `UPDATE task_runs SET workflow_id=?,workflow_step=? WHERE id=?`, workflowEntry.WorkflowID, workflowEntry.StatusKey, workflowTaskID); err != nil {
+			return Issue{}, err
+		}
+	}
+	if origin.TaskID != "" {
+		if status, ok := updates["status"].(string); ok {
+			if _, err := tx.ExecContext(ctx, `UPDATE task_runs SET workflow_step=? WHERE id=? AND workflow_id IS NOT NULL`, status, origin.TaskID); err != nil {
+				return Issue{}, err
+			}
+		}
+	}
+	if err := commitLocalWakeupMutation(ctx, tx, workspaceID, cursor, origin); err != nil {
 		return Issue{}, err
 	}
-	return s.GetIssue(ctx, workspaceID, currentID)
+	record, err := s.GetIssue(ctx, workspaceID, currentID)
+	record.workflowTaskID = workflowTaskID
+	if workflowEntry != nil {
+		record.workflowCancelled = workflowEntry.CancelledTaskIDs
+	}
+	return record, err
 }
 
 func attachmentIDs(value any) ([]string, error) {
@@ -512,6 +648,13 @@ func (s *Store) DeleteIssue(ctx context.Context, workspaceID, id string) error {
 		return err
 	}
 	defer func() { _ = tx.Rollback() }()
+	if err := deleteLocalWakeupsForIssueTx(ctx, tx, workspaceID, issue.ID); err != nil {
+		return err
+	}
+
+	if _, err := tx.ExecContext(ctx, `UPDATE issues SET duplicate_of_issue_id=NULL,updated_at=?,last_activity_at=?,revision=revision+1 WHERE workspace_id=? AND duplicate_of_issue_id=?`, now(), now(), workspaceID, issue.ID); err != nil {
+		return err
+	}
 	if _, err := tx.ExecContext(ctx, `DELETE FROM issue_handoffs WHERE child_issue_id=? OR parent_issue_id=?`, issue.ID, issue.ID); err != nil {
 		return err
 	}
@@ -610,6 +753,21 @@ func (s *Store) createComment(ctx context.Context, workspaceID, issueID, content
 		return Comment{}, err
 	}
 	defer func() { _ = tx.Rollback() }()
+	if workspaceID == "" {
+		if err := tx.QueryRowContext(ctx, `SELECT workspace_id FROM issues WHERE id=?`, issueID).Scan(&workspaceID); err != nil {
+			return Comment{}, err
+		}
+	}
+
+	cursor, origin, err := beginLocalWakeupMutation(ctx, tx, workspaceID)
+	if err != nil {
+		return Comment{}, err
+	}
+
+	if authorType == "agent" {
+		origin = localWakeupOrigin{AgentID: authorID, TaskID: sourceTaskID}
+	}
+
 	var revision int64
 	if err := tx.QueryRowContext(ctx, "UPDATE issues SET revision=revision+1, updated_at=?, last_activity_at=? WHERE id=? RETURNING revision", stamp, stamp, issueID).Scan(&revision); err != nil {
 		return Comment{}, err
@@ -626,7 +784,7 @@ func (s *Store) createComment(ctx context.Context, workspaceID, issueID, content
 			return Comment{}, err
 		}
 	}
-	if err := tx.Commit(); err != nil {
+	if err := commitLocalWakeupMutation(ctx, tx, workspaceID, cursor, origin); err != nil {
 		return Comment{}, err
 	}
 	comment, err := scanComment(s.db.QueryRowContext(ctx, `SELECT id, issue_id, author_type, author_id, content, type, parent_id, created_at, updated_at, revision, issue_revision, resolved_at, resolved_by_type, resolved_by_id, source_task_id, quick_action_id FROM comments WHERE id=?`, id))
@@ -666,6 +824,11 @@ func (s *Store) setCommentResolved(ctx context.Context, workspaceID, commentID s
 		return Comment{}, err
 	}
 	defer func() { _ = tx.Rollback() }()
+	cursor, origin, err := beginLocalWakeupMutation(ctx, tx, workspaceID)
+	if err != nil {
+		return Comment{}, err
+	}
+
 	stamp := now()
 	var issueID string
 	if err := tx.QueryRowContext(ctx, `SELECT c.issue_id FROM comments c JOIN issues i ON i.id=c.issue_id WHERE c.id=? AND i.workspace_id=?`, commentID, workspaceID).Scan(&issueID); err != nil {
@@ -683,7 +846,7 @@ func (s *Store) setCommentResolved(ctx context.Context, workspaceID, commentID s
 	if err != nil {
 		return Comment{}, err
 	}
-	if err := tx.Commit(); err != nil {
+	if err := commitLocalWakeupMutation(ctx, tx, workspaceID, cursor, origin); err != nil {
 		return Comment{}, err
 	}
 	comment, err := scanComment(s.db.QueryRowContext(ctx, `SELECT id, issue_id, author_type, author_id, content, type, parent_id, created_at, updated_at, revision, issue_revision, resolved_at, resolved_by_type, resolved_by_id, source_task_id, quick_action_id FROM comments WHERE id=?`, commentID))

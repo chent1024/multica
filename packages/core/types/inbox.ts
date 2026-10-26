@@ -29,7 +29,14 @@ export type InboxItemType =
   | "integration_failed"
   | "webhook_failed"
   | "plugin_failed"
-  | "runtime_failed";
+  | "runtime_failed"
+  // System notifications are intentionally issue-less. Keep them in the
+  // same Inbox model so read/archive/realtime behavior remains consistent.
+  | "autopilot_paused"
+  | "autopilot_quota_exceeded"
+  // Sub-issues of an issue assigned to the recipient closed (the child_done
+  // system rule notifies a member assignee instead of waking an agent).
+  | "children_done";
 
 /**
  * One workspace's unread inbox count in the cross-workspace summary
@@ -65,4 +72,18 @@ export interface InboxItem {
   archived: boolean;
   created_at: string;
   details: Record<string, string> | null;
+}
+
+
+export interface ArchivedInboxPage {
+  items: InboxItem[];
+  nextCursor: string | null;
+  hasMore: boolean;
+}
+
+export interface ArchivedInboxFacets {
+  statuses: Record<string, number>;
+  priorities: Record<string, number>;
+  actors: Record<string, number>;
+  unreadCount: number;
 }

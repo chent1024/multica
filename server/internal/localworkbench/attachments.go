@@ -80,9 +80,21 @@ func scanAttachment(row rowScanner) (Attachment, error) {
 }
 
 func (s *Store) createAttachmentMetadata(ctx context.Context, id, workspaceID, issueID, filename, contentType, storagePath string, size int64) (Attachment, error) {
-	stamp := now()
-	_, err := s.db.ExecContext(ctx, `INSERT INTO attachments(id, workspace_id, issue_id, filename, content_type, size_bytes, data, storage_path, created_at) VALUES (?, ?, ?, ?, ?, ?, x'', ?, ?)`, id, workspaceID, nullable(issueID), filename, contentType, size, storagePath, stamp)
+	tx, err := s.db.BeginTx(ctx, nil)
 	if err != nil {
+		return Attachment{}, err
+	}
+	defer tx.Rollback()
+	cursor, origin, err := beginLocalWakeupMutation(ctx, tx, workspaceID)
+	if err != nil {
+		return Attachment{}, err
+	}
+	stamp := now()
+	_, err = tx.ExecContext(ctx, `INSERT INTO attachments(id, workspace_id, issue_id, filename, content_type, size_bytes, data, storage_path, created_at) VALUES (?, ?, ?, ?, ?, ?, x'', ?, ?)`, id, workspaceID, nullable(issueID), filename, contentType, size, storagePath, stamp)
+	if err != nil {
+		return Attachment{}, err
+	}
+	if err := commitLocalWakeupMutation(ctx, tx, workspaceID, cursor, origin); err != nil {
 		return Attachment{}, err
 	}
 	return s.getAttachment(ctx, workspaceID, id)
@@ -146,14 +158,28 @@ func (s *Store) bindAttachmentsToIssue(ctx context.Context, workspaceID, issueID
 		return err
 	}
 	defer func() { _ = tx.Rollback() }()
+	cursor, origin, err := beginLocalWakeupMutation(ctx, tx, workspaceID)
+	if err != nil {
+		return err
+	}
+
 	if err := bindAttachmentsTx(ctx, tx, workspaceID, issueID, "", ids); err != nil {
 		return err
 	}
-	return tx.Commit()
+	return commitLocalWakeupMutation(ctx, tx, workspaceID, cursor, origin)
 }
 
 func (s *Store) deleteAttachment(ctx context.Context, workspaceID, id string) error {
-	result, err := s.db.ExecContext(ctx, `DELETE FROM attachments WHERE workspace_id=? AND id=?`, workspaceID, id)
+	tx, err := s.db.BeginTx(ctx, nil)
+	if err != nil {
+		return err
+	}
+	defer tx.Rollback()
+	cursor, origin, err := beginLocalWakeupMutation(ctx, tx, workspaceID)
+	if err != nil {
+		return err
+	}
+	result, err := tx.ExecContext(ctx, `DELETE FROM attachments WHERE workspace_id=? AND id=?`, workspaceID, id)
 	if err != nil {
 		return err
 	}
@@ -164,7 +190,7 @@ func (s *Store) deleteAttachment(ctx context.Context, workspaceID, id string) er
 	if count != 1 {
 		return sql.ErrNoRows
 	}
-	return nil
+	return commitLocalWakeupMutation(ctx, tx, workspaceID, cursor, origin)
 }
 
 func attachmentWithURLs(item Attachment) Attachment {

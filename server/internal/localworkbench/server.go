@@ -79,6 +79,8 @@ func NewServer(ctx context.Context, config ServerConfig) (*Server, error) {
 	}
 	server.wg.Add(1)
 	go server.runAutomationScheduler(serverContext)
+	server.wg.Add(1)
+	go server.runLocalWakeupScheduler(serverContext)
 	return server, nil
 }
 
@@ -102,6 +104,7 @@ func (s *Server) Router() http.Handler {
 	router := chi.NewRouter()
 	router.Use(LoopbackOnly)
 	router.Use(localRequestBoundary)
+	router.Use(s.localWakeupActorContext)
 	router.Get("/health", s.health)
 	router.Get("/ws", s.websocket)
 	router.Get("/ws/daemon", s.websocket)
@@ -208,8 +211,37 @@ func (s *Server) Router() http.Handler {
 		api.Get("/integrations/composio/connections", emptyArray())
 		api.Delete("/integrations/composio/connections/{installationID}", s.localIntegrationUnavailable("Composio"))
 		api.Get("/assignee-frequency", s.assigneeFrequency)
+		api.Get("/issues/{id}/duplicates", s.listIssueDuplicates)
+		api.Get("/issue-workflows", s.listLocalIssueWorkflows)
+		api.Post("/issue-workflows", s.createLocalIssueWorkflow)
+		api.Get("/issue-workflows/{id}", s.localIssueWorkflowItem)
+		api.Patch("/issue-workflows/{id}", s.localIssueWorkflowItem)
+		api.Delete("/issue-workflows/{id}", s.localIssueWorkflowItem)
+		api.Put("/issue-workflows/{id}/handoffs/{status}", s.setLocalIssueWorkflowHandoff)
+		api.Post("/issue-workflows/{id}/brief", s.previewLocalIssueWorkflowBrief)
+		api.Post("/projects/{id}/workflow", s.setLocalProjectWorkflow)
+		api.Get("/issues/{id}/workflow-handoff", s.previewLocalWorkflowHandoff)
+		api.Get("/issue-wakeups", s.listWorkspaceWakeups)
+		api.Get("/issue-wakeup-summaries", s.listWorkspaceWakeupSummaries)
+		api.Get("/issue-wakeup-paused", s.listPausedWakeups)
+		api.Get("/issues/{id}/wakeups", s.listIssueWakeups)
+		api.Post("/issues/{id}/wakeups", s.createIssueWakeup)
+		api.Put("/issues/{id}/wakeups/{wakeupID}", s.createIssueWakeup)
+		api.Post("/issues/{id}/wakeups/{wakeupID}/disable", s.disableIssueWakeup)
+		api.Post("/issues/{id}/wakeups/{wakeupID}/enable", s.enableIssueWakeup)
+		api.Patch("/issues/{id}/wakeups/{wakeupID}/instruction", s.editIssueWakeupInstruction)
+		api.Post("/issues/{id}/wakeups/{wakeupID}/trigger", s.triggerIssueWakeup)
+		api.Post("/issues/{id}/wakeups/{wakeupID}/check-in", s.checkInIssueWakeup)
+		api.Delete("/issues/{id}/wakeups/{wakeupID}", s.deleteIssueWakeup)
+		api.Get("/issues/{id}/wakeups/{wakeupID}/runs", s.listIssueWakeupRuns)
+		api.Get("/issues/{id}/system-wakeups", s.listIssueSystemWakeups)
+		api.Put("/issues/{id}/system-wakeups/{rule}", s.updateIssueSystemWakeup)
+		api.Get("/system-wakeups", s.listWorkspaceSystemWakeups)
+		api.Put("/system-wakeups/{rule}", s.updateWorkspaceSystemWakeup)
 		api.Get("/inbox", s.listInbox)
 		api.Get("/inbox/archived", s.listInbox)
+		api.Get("/inbox/archived/page", s.listArchivedInboxPage)
+		api.Get("/inbox/archived/facets", s.archivedInboxFacets)
 		api.Get("/inbox/unread-count", s.inboxCount)
 		api.Get("/inbox/unread-summary", s.inboxCount)
 		api.Post("/inbox/{id}/{action:read|unread|archive|unarchive}", s.inboxItemState)
@@ -546,9 +578,10 @@ func (s *Server) appConfig(w http.ResponseWriter, r *http.Request) {
 		"local_worktree_supported":              true,
 		"agent_conversation_starters_supported": true,
 		"feature_flags": map[string]bool{
-			"plugins_v1":        true,
-			"composio_mcp_apps": false,
-			"local_workbench":   true,
+			"plugins_v1":           true,
+			"composio_mcp_apps":    false,
+			"local_workbench":      true,
+			"project_workflows_v1": true,
 		},
 		"server_version": s.version,
 	})

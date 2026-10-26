@@ -31,6 +31,7 @@ type Project struct {
 	IssueCount    int64   `json:"issue_count"`
 	DoneCount     int64   `json:"done_count"`
 	ResourceCount int64   `json:"resource_count"`
+	WorkflowID    *string `json:"workflow_id"`
 }
 
 type ProjectResource struct {
@@ -57,6 +58,7 @@ type CreateProjectInput struct {
 	StartDate   *string                `json:"start_date"`
 	DueDate     *string                `json:"due_date"`
 	Resources   []ProjectResourceInput `json:"resources"`
+	WorkflowID  *string                `json:"workflow_id,omitempty"`
 }
 
 type ProjectResourceInput struct {
@@ -101,7 +103,7 @@ const projectSelect = `SELECT
 	p.lead_type, p.lead_id, p.start_date, p.due_date, p.created_at, p.updated_at,
 	(SELECT COUNT(*) FROM issues i WHERE i.project_id = p.id),
 	(SELECT COUNT(*) FROM issues i WHERE i.project_id = p.id AND i.status = 'done'),
-	(SELECT COUNT(*) FROM project_resources r WHERE r.project_id = p.id)
+	(SELECT COUNT(*) FROM project_resources r WHERE r.project_id = p.id), p.workflow_id
 	FROM projects p `
 
 type rowScanner interface {
@@ -110,12 +112,12 @@ type rowScanner interface {
 
 func scanProject(row rowScanner) (Project, error) {
 	var project Project
-	var description, icon, leadType, leadID, startDate, dueDate sql.NullString
+	var description, icon, leadType, leadID, startDate, dueDate, workflowID sql.NullString
 	err := row.Scan(
 		&project.ID, &project.WorkspaceID, &project.Title, &description, &icon,
 		&project.Status, &project.Priority, &leadType, &leadID, &startDate, &dueDate,
 		&project.CreatedAt, &project.UpdatedAt, &project.IssueCount,
-		&project.DoneCount, &project.ResourceCount,
+		&project.DoneCount, &project.ResourceCount, &workflowID,
 	)
 	if err != nil {
 		return Project{}, err
@@ -126,6 +128,7 @@ func scanProject(row rowScanner) (Project, error) {
 	project.LeadID = nullStringPointer(leadID)
 	project.StartDate = nullStringPointer(startDate)
 	project.DueDate = nullStringPointer(dueDate)
+	project.WorkflowID = nullStringPointer(workflowID)
 	return project, nil
 }
 
@@ -147,13 +150,26 @@ func (s *Store) CreateProject(ctx context.Context, workspaceID string, input Cre
 		return Project{}, fmt.Errorf("begin create project: %w", err)
 	}
 	defer func() { _ = tx.Rollback() }()
+	if input.WorkflowID != nil && strings.TrimSpace(*input.WorkflowID) != "" {
+		target, err := localProjectWorkflowTargetTx(ctx, tx, workspaceID, input.WorkflowID)
+		if err != nil {
+			return Project{}, err
+		}
+		if target.IsDefault {
+			input.WorkflowID = nil
+		} else {
+			input.WorkflowID = &target.ID
+		}
+	} else {
+		input.WorkflowID = nil
+	}
 	if _, err := tx.ExecContext(ctx, `INSERT INTO projects (
 		id, workspace_id, title, description, icon, status, priority,
-		lead_type, lead_id, start_date, due_date, created_at, updated_at
-	) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+		lead_type, lead_id, start_date, due_date, created_at, updated_at, workflow_id
+	) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
 		id, workspaceID, input.Title, input.Description, input.Icon,
 		input.Status, input.Priority, input.LeadType, input.LeadID,
-		input.StartDate, input.DueDate, stamp, stamp,
+		input.StartDate, input.DueDate, stamp, stamp, input.WorkflowID,
 	); err != nil {
 		return Project{}, fmt.Errorf("insert project: %w", err)
 	}

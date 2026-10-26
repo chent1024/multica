@@ -1,7 +1,6 @@
 {
   "nav": {
     "inbox": "인박스",
-    "notifications": "알림",
     "chat": "채팅",
     "my_issues": "내 태스크",
     "issues": "태스크",
@@ -12,7 +11,8 @@
     "usage": "분석",
     "runtimes": "런타임",
     "skills": "스킬",
-    "settings": "설정"
+    "settings": "설정",
+    "notifications": "알림"
   },
   "tab": {
     "issue": "태스크",
@@ -41,6 +41,13 @@
     "loading_workspace": "워크스페이스 로딩 중...",
     "loading_named_prefix": "로딩 중"
   },
+  "window": {
+    "go_back": "뒤로",
+    "go_forward": "앞으로",
+    "hold_for_history": "길게 눌러 기록 보기",
+    "back_history": "뒤로 기록",
+    "forward_history": "앞으로 기록"
+  },
   "sidebar": {
     "unpin_tooltip": "고정 해제",
     "workspaces_label": "워크스페이스",
@@ -53,8 +60,16 @@
     "new_issue": "새 태스크",
     "new_issue_shortcut": "C",
     "pinned_label": "고정됨",
+    "work_group": "업무",
+    "ai_team_group": "AI 팀",
+    "show_more_pins": "{{count}}개 더 보기…",
+    "show_fewer_pins": "접기",
+    "unread_overflow": "99+",
+    "discord_card": {
+      "title": "Discord 참여하기",
+      "dismiss": "닫기"
+    },
     "workspace_group": "워크스페이스",
-    "configure_group": "설정",
-    "unread_overflow": "99+"
+    "configure_group": "설정"
   }
 }

@@ -10,11 +10,11 @@ import (
 	"time"
 
 	"github.com/go-chi/chi/v5"
+	"github.com/multica-ai/multica/server/internal/logger"
+	obsmetrics "github.com/multica-ai/multica/server/internal/metrics"
 )
 
-// ---------------------------------------------------------------------------
 // CLI update request store
-// ---------------------------------------------------------------------------
 
 type UpdateStatus string
 
@@ -204,14 +204,12 @@ func (s *InMemoryUpdateStore) Fail(_ context.Context, id string, errMsg string) 
 	return nil
 }
 
-// ---------------------------------------------------------------------------
 // Handlers
-// ---------------------------------------------------------------------------
 
 // InitiateUpdate creates a new CLI update request (protected route, called by frontend).
 func (h *Handler) InitiateUpdate(w http.ResponseWriter, r *http.Request) {
 	runtimeID := chi.URLParam(r, "runtimeId")
-	rt, member, ok := h.requireRuntimeReadAccess(w, r, runtimeID)
+	rt, member, ok := h.requireRuntimeReadAccess(w, r, obsmetrics.RuntimeLookupSourceRuntimeAPI, runtimeID)
 	if !ok {
 		return
 	}
@@ -261,7 +259,7 @@ func (h *Handler) InitiateUpdate(w http.ResponseWriter, r *http.Request) {
 // GetUpdate returns the status of an update request (protected route, called by frontend).
 func (h *Handler) GetUpdate(w http.ResponseWriter, r *http.Request) {
 	runtimeID := chi.URLParam(r, "runtimeId")
-	rt, member, ok := h.requireRuntimeReadAccess(w, r, runtimeID)
+	rt, member, ok := h.requireRuntimeReadAccess(w, r, obsmetrics.RuntimeLookupSourceRuntimeUpdatePoll, runtimeID)
 	if !ok {
 		return
 	}
@@ -269,7 +267,8 @@ func (h *Handler) GetUpdate(w http.ResponseWriter, r *http.Request) {
 
 	update, err := h.UpdateStore.Get(r.Context(), updateID)
 	if err != nil {
-		writeError(w, http.StatusInternalServerError, "failed to load update: "+err.Error())
+		slog.Warn("load update failed", append(logger.RequestAttrs(r), "error", err)...)
+		writeError(w, http.StatusInternalServerError, "failed to load update")
 		return
 	}
 	if update == nil || update.RuntimeID != uuidToString(rt.ID) {
@@ -300,7 +299,8 @@ func (h *Handler) ReportUpdateResult(w http.ResponseWriter, r *http.Request) {
 
 	existing, err := h.UpdateStore.Get(r.Context(), updateID)
 	if err != nil {
-		writeError(w, http.StatusInternalServerError, "failed to load update: "+err.Error())
+		slog.Warn("load update failed", append(logger.RequestAttrs(r), "error", err)...)
+		writeError(w, http.StatusInternalServerError, "failed to load update")
 		return
 	}
 	if existing == nil || existing.RuntimeID != runtimeID {

@@ -310,7 +310,10 @@ func (s *Server) mirrorLocalVCSPullRequest(ctx context.Context, connectionID, pr
 	createdAt, updatedAt := parseVCSTime(event.CreatedAt), parseVCSTime(event.UpdatedAt)
 	result, err := tx.ExecContext(ctx, `INSERT INTO vcs_pull_requests(id,workspace_id,connection_id,provider,repo_owner,repo_name,pr_number,title,state,html_url,branch,head_sha,author_login,author_avatar_url,merged_at,closed_at,pr_created_at,pr_updated_at,additions,deletions,changed_files)
 		VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
-		ON CONFLICT(connection_id,repo_owner,repo_name,pr_number) DO UPDATE SET title=excluded.title,state=excluded.state,html_url=excluded.html_url,branch=excluded.branch,head_sha=excluded.head_sha,author_login=excluded.author_login,author_avatar_url=excluded.author_avatar_url,merged_at=excluded.merged_at,closed_at=excluded.closed_at,pr_created_at=excluded.pr_created_at,pr_updated_at=excluded.pr_updated_at,additions=excluded.additions,deletions=excluded.deletions,changed_files=excluded.changed_files
+		ON CONFLICT(connection_id,repo_owner,repo_name,pr_number) DO UPDATE SET title=excluded.title,state=excluded.state,html_url=excluded.html_url,branch=excluded.branch,head_sha=excluded.head_sha,author_login=excluded.author_login,author_avatar_url=excluded.author_avatar_url,merged_at=excluded.merged_at,closed_at=excluded.closed_at,pr_created_at=excluded.pr_created_at,pr_updated_at=excluded.pr_updated_at,additions=excluded.additions,deletions=excluded.deletions,changed_files=excluded.changed_files,
+		snapshot_head_sha=CASE WHEN COALESCE(excluded.head_sha,'')<>COALESCE(vcs_pull_requests.head_sha,'') THEN NULL ELSE vcs_pull_requests.snapshot_head_sha END,
+		checks_rollup_state=CASE WHEN COALESCE(excluded.head_sha,'')<>COALESCE(vcs_pull_requests.head_sha,'') THEN NULL ELSE vcs_pull_requests.checks_rollup_state END,
+		api_mergeable=CASE WHEN COALESCE(excluded.head_sha,'')<>COALESCE(vcs_pull_requests.head_sha,'') THEN NULL ELSE vcs_pull_requests.api_mergeable END
 		WHERE excluded.pr_updated_at>=vcs_pull_requests.pr_updated_at`, prID, LocalWorkspaceID, connectionID, provider, event.RepoOwner, event.RepoName, event.Number, event.Title, event.State, event.HTMLURL, nullable(event.Branch), nullable(event.HeadSHA), nullable(event.AuthorLogin), nullable(event.AuthorAvatarURL), nullable(event.MergedAt), nullable(event.ClosedAt), createdAt, updatedAt, event.Additions, event.Deletions, event.ChangedFiles)
 	if err != nil {
 		return err
@@ -372,7 +375,7 @@ func (s *Server) mirrorLocalVCSPullRequest(ctx context.Context, connectionID, pr
 			}
 			if closeIntent > 0 && openCount == 0 {
 				stamp := now()
-				result, err := tx.ExecContext(ctx, `UPDATE issues SET status='done',revision=revision+1,last_activity_at=?,updated_at=? WHERE id=? AND workspace_id=? AND status NOT IN ('done','cancelled')`, stamp, stamp, issueID, LocalWorkspaceID)
+				result, err := tx.ExecContext(ctx, `UPDATE issues SET status='done',duplicate_of_issue_id=NULL,revision=revision+1,last_activity_at=?,updated_at=? WHERE id=? AND workspace_id=? AND status NOT IN ('done','cancelled')`, stamp, stamp, issueID, LocalWorkspaceID)
 				if err != nil {
 					return err
 				}

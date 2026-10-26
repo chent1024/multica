@@ -4,12 +4,24 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"testing"
 	"time"
+
+	"github.com/multica-ai/multica/server/pkg/protocol"
 )
+
+type runtimeLocalSkillPendingWorkRecorder struct {
+	hints []string
+}
+
+func (r *runtimeLocalSkillPendingWorkRecorder) NotifyPendingWork(runtimeID, kind string) {
+	r.hints = append(r.hints, runtimeID+":"+kind)
+}
 
 func newRequestAsUser(userID, method, path string, body any) *http.Request {
 	var buf bytes.Buffer
@@ -223,6 +235,45 @@ func TestInMemoryLocalSkillImportStore_TimesOutRunningRequests(t *testing.T) {
 	}
 }
 
+func TestFailLocalSkillImportInternalRedactsCause(t *testing.T) {
+	ctx := context.Background()
+	store := NewInMemoryLocalSkillImportStore()
+	req, err := store.Create(ctx, LocalSkillImportRequestInput{
+		RuntimeID: "runtime-xyz",
+		CreatorID: "user-1",
+		SkillKey:  "review-helper",
+	})
+	if err != nil {
+		t.Fatalf("create: %v", err)
+	}
+
+	h := Handler{LocalSkillImportStore: store}
+	w := httptest.NewRecorder()
+	r := httptest.NewRequest(http.MethodPost, "/api/daemon/local-skills/import/result", nil)
+	const leak = "postgres://secret@internal.example/skills"
+	h.failLocalSkillImportInternal(w, r, req.ID, "failed to create skill", errors.New(leak))
+
+	if w.Code != http.StatusOK {
+		t.Fatalf("status = %d, want %d", w.Code, http.StatusOK)
+	}
+	if strings.Contains(w.Body.String(), leak) {
+		t.Fatalf("daemon response leaked internal error: %s", w.Body.String())
+	}
+	got, err := store.Get(ctx, req.ID)
+	if err != nil {
+		t.Fatalf("get: %v", err)
+	}
+	if got == nil {
+		t.Fatal("expected stored import result")
+	}
+	if got.Error != "failed to create skill" {
+		t.Fatalf("stored error = %q, want stable public message", got.Error)
+	}
+	if strings.Contains(got.Error, leak) {
+		t.Fatalf("stored error leaked internal cause: %q", got.Error)
+	}
+}
+
 // Capability discovery (list + poll) is readable by workspace members only
 // after the runtime owner shares the machine with the workspace.
 func TestListLocalSkills_AllowsNonOwnerForPublicRuntime(t *testing.T) {
@@ -262,6 +313,32 @@ func TestListLocalSkills_AllowsNonOwnerForPublicRuntime(t *testing.T) {
 	testHandler.GetLocalSkillListRequest(w, pollReq)
 	if w.Code != http.StatusOK {
 		t.Fatalf("expected 200, got %d: %s", w.Code, w.Body.String())
+	}
+}
+
+func TestInitiateListLocalSkills_WakesDaemon(t *testing.T) {
+	if testHandler == nil {
+		t.Skip("database not available")
+	}
+
+	runtimeID := createRuntimeLocalSkillTestRuntime(t, testUserID)
+	recorder := &runtimeLocalSkillPendingWorkRecorder{}
+	h := *testHandler
+	h.DaemonPendingWork = recorder
+
+	w := httptest.NewRecorder()
+	req := withURLParams(
+		newRequestAsUser(testUserID, http.MethodPost, "/api/runtimes/"+runtimeID+"/local-skills", nil),
+		"runtimeId", runtimeID,
+	)
+
+	h.InitiateListLocalSkills(w, req)
+	if w.Code != http.StatusOK {
+		t.Fatalf("expected 200, got %d: %s", w.Code, w.Body.String())
+	}
+	want := runtimeID + ":" + protocol.PendingWorkKindLocalSkills
+	if len(recorder.hints) != 1 || recorder.hints[0] != want {
+		t.Fatalf("pending-work hints = %v, want [%s]", recorder.hints, want)
 	}
 }
 
@@ -316,6 +393,49 @@ func TestInitiateImportLocalSkill_RequiresRuntimeOwner(t *testing.T) {
 	testHandler.InitiateImportLocalSkill(w, req)
 	if w.Code != http.StatusNotFound {
 		t.Fatalf("expected 404, got %d: %s", w.Code, w.Body.String())
+	}
+}
+
+func TestInitiateImportLocalSkill_WakesDaemonAfterValidEnqueue(t *testing.T) {
+	if testHandler == nil {
+		t.Skip("database not available")
+	}
+
+	runtimeID := createRuntimeLocalSkillTestRuntime(t, testUserID)
+	recorder := &runtimeLocalSkillPendingWorkRecorder{}
+	h := *testHandler
+	h.DaemonPendingWork = recorder
+
+	w := httptest.NewRecorder()
+	req := withURLParams(
+		newRequestAsUser(testUserID, http.MethodPost, "/api/runtimes/"+runtimeID+"/local-skills/import", map[string]any{
+			"skill_key": "review-helper",
+		}),
+		"runtimeId", runtimeID,
+	)
+
+	h.InitiateImportLocalSkill(w, req)
+	if w.Code != http.StatusOK {
+		t.Fatalf("expected 200, got %d: %s", w.Code, w.Body.String())
+	}
+	want := runtimeID + ":" + protocol.PendingWorkKindLocalSkillImport
+	if len(recorder.hints) != 1 || recorder.hints[0] != want {
+		t.Fatalf("pending-work hints = %v, want [%s]", recorder.hints, want)
+	}
+
+	w = httptest.NewRecorder()
+	req = withURLParams(
+		newRequestAsUser(testUserID, http.MethodPost, "/api/runtimes/"+runtimeID+"/local-skills/import", map[string]any{
+			"skill_key": "",
+		}),
+		"runtimeId", runtimeID,
+	)
+	h.InitiateImportLocalSkill(w, req)
+	if w.Code != http.StatusBadRequest {
+		t.Fatalf("expected 400, got %d: %s", w.Code, w.Body.String())
+	}
+	if len(recorder.hints) != 1 {
+		t.Fatalf("rejected enqueue must not send another hint, got %v", recorder.hints)
 	}
 }
 
@@ -375,9 +495,9 @@ func TestRuntimeLocalSkillImportFlow_EndToEnd(t *testing.T) {
 	}
 
 	w = httptest.NewRecorder()
-	heartbeatReq := newDaemonTokenRequest(http.MethodPost, "/api/daemon/heartbeat", map[string]any{
+	heartbeatReq := newOwnerDaemonRequest(http.MethodPost, "/api/daemon/heartbeat", map[string]any{
 		"runtime_id": runtimeID,
-	}, testWorkspaceID, "runtime-local-skills-daemon")
+	})
 	testHandler.DaemonHeartbeat(w, heartbeatReq)
 	if w.Code != http.StatusOK {
 		t.Fatalf("DaemonHeartbeat: expected 200, got %d: %s", w.Code, w.Body.String())
@@ -406,7 +526,7 @@ func TestRuntimeLocalSkillImportFlow_EndToEnd(t *testing.T) {
 
 	w = httptest.NewRecorder()
 	reportReq := withURLParams(
-		newDaemonTokenRequest(http.MethodPost, "/api/daemon/runtimes/"+runtimeID+"/local-skills/import/"+importReq.ID+"/result", map[string]any{
+		newOwnerDaemonRequest(http.MethodPost, "/api/daemon/runtimes/"+runtimeID+"/local-skills/import/"+importReq.ID+"/result", map[string]any{
 			"status": "completed",
 			"skill": map[string]any{
 				"name":        "Original Review Helper",
@@ -421,7 +541,7 @@ func TestRuntimeLocalSkillImportFlow_EndToEnd(t *testing.T) {
 					},
 				},
 			},
-		}, testWorkspaceID, "runtime-local-skills-daemon"),
+		}),
 		"runtimeId", runtimeID,
 		"requestId", importReq.ID,
 	)
@@ -499,10 +619,10 @@ func TestBatchImportViaHeartbeat(t *testing.T) {
 
 	// Single heartbeat should return all 5 via the plural field.
 	w := httptest.NewRecorder()
-	heartbeatReq := newDaemonTokenRequest(http.MethodPost, "/api/daemon/heartbeat", map[string]any{
+	heartbeatReq := newOwnerDaemonRequest(http.MethodPost, "/api/daemon/heartbeat", map[string]any{
 		"runtime_id":            runtimeID,
 		"supports_batch_import": true,
-	}, testWorkspaceID, "runtime-local-skills-daemon")
+	})
 	testHandler.DaemonHeartbeat(w, heartbeatReq)
 	if w.Code != http.StatusOK {
 		t.Fatalf("DaemonHeartbeat: expected 200, got %d: %s", w.Code, w.Body.String())
@@ -548,10 +668,10 @@ func TestBatchImportViaHeartbeat(t *testing.T) {
 
 	// Second heartbeat should return nothing (all were claimed).
 	w = httptest.NewRecorder()
-	heartbeatReq2 := newDaemonTokenRequest(http.MethodPost, "/api/daemon/heartbeat", map[string]any{
+	heartbeatReq2 := newOwnerDaemonRequest(http.MethodPost, "/api/daemon/heartbeat", map[string]any{
 		"runtime_id":            runtimeID,
 		"supports_batch_import": true,
-	}, testWorkspaceID, "runtime-local-skills-daemon")
+	})
 	testHandler.DaemonHeartbeat(w, heartbeatReq2)
 	if w.Code != http.StatusOK {
 		t.Fatalf("DaemonHeartbeat: expected 200, got %d: %s", w.Code, w.Body.String())
@@ -602,7 +722,7 @@ func TestReportLocalSkillImportResult_IgnoresTimedOutRequests(t *testing.T) {
 
 	w := httptest.NewRecorder()
 	reportReq := withURLParams(
-		newDaemonTokenRequest(http.MethodPost, "/api/daemon/runtimes/"+runtimeID+"/local-skills/import/"+importReq.ID+"/result", map[string]any{
+		newOwnerDaemonRequest(http.MethodPost, "/api/daemon/runtimes/"+runtimeID+"/local-skills/import/"+importReq.ID+"/result", map[string]any{
 			"status": "completed",
 			"skill": map[string]any{
 				"name":        "Original Review Helper",
@@ -611,7 +731,7 @@ func TestReportLocalSkillImportResult_IgnoresTimedOutRequests(t *testing.T) {
 				"source_path": "~/.claude/skills/review-helper",
 				"provider":    "claude",
 			},
-		}, testWorkspaceID, "runtime-local-skills-daemon"),
+		}),
 		"runtimeId", runtimeID,
 		"requestId", importReq.ID,
 	)

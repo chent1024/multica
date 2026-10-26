@@ -6,39 +6,49 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"maps"
 	"net/http"
 	"strings"
 	"time"
 
 	"github.com/go-chi/chi/v5"
 	"github.com/google/uuid"
+	"github.com/multica-ai/multica/server/internal/service"
+	"github.com/multica-ai/multica/server/pkg/protocol"
 )
 
 type localRuntime struct {
-	ID          string  `json:"id"`
-	WorkspaceID string  `json:"workspace_id"`
-	DaemonID    string  `json:"daemon_id"`
-	Name        string  `json:"name"`
-	Provider    string  `json:"provider"`
-	Version     *string `json:"version,omitempty"`
-	Status      string  `json:"status"`
-	DeviceName  *string `json:"device_name,omitempty"`
-	ProfileID   *string `json:"profile_id,omitempty"`
-	LastSeenAt  *string `json:"last_seen_at"`
-	CreatedAt   string  `json:"created_at"`
-	UpdatedAt   string  `json:"updated_at"`
+	ID          string         `json:"id"`
+	WorkspaceID string         `json:"workspace_id"`
+	DaemonID    string         `json:"daemon_id"`
+	Name        string         `json:"name"`
+	Provider    string         `json:"provider"`
+	Version     *string        `json:"version,omitempty"`
+	Status      string         `json:"status"`
+	DeviceName  *string        `json:"device_name,omitempty"`
+	ProfileID   *string        `json:"profile_id,omitempty"`
+	LastSeenAt  *string        `json:"last_seen_at"`
+	CreatedAt   string         `json:"created_at"`
+	UpdatedAt   string         `json:"updated_at"`
+	Metadata    map[string]any `json:"metadata"`
 }
 
 func scanRuntime(row rowScanner) (localRuntime, error) {
 	var runtime localRuntime
 	var version, deviceName, profileID, lastSeen sql.NullString
-	err := row.Scan(&runtime.ID, &runtime.WorkspaceID, &runtime.DaemonID, &runtime.Name, &runtime.Provider, &version, &runtime.Status, &deviceName, &profileID, &lastSeen, &runtime.CreatedAt, &runtime.UpdatedAt)
+	var metadata string
+	if err := row.Scan(&runtime.ID, &runtime.WorkspaceID, &runtime.DaemonID, &runtime.Name, &runtime.Provider, &version, &runtime.Status, &deviceName, &profileID, &lastSeen, &runtime.CreatedAt, &runtime.UpdatedAt, &metadata); err != nil {
+		return localRuntime{}, err
+	}
+	if err := json.Unmarshal([]byte(metadata), &runtime.Metadata); err != nil {
+		return localRuntime{}, fmt.Errorf("decode runtime metadata: %w", err)
+	}
 	runtime.Version, runtime.DeviceName, runtime.ProfileID, runtime.LastSeenAt = stringPtr(version), stringPtr(deviceName), stringPtr(profileID), stringPtr(lastSeen)
-	return runtime, err
+	return runtime, nil
 }
 
 func (s *Store) listRuntimes(ctx context.Context, workspaceID string) ([]localRuntime, error) {
-	rows, err := s.db.QueryContext(ctx, `SELECT id, workspace_id, daemon_id, name, provider, version, status, device_name, profile_id, last_seen_at, created_at, updated_at FROM runtimes WHERE workspace_id=? ORDER BY provider, id`, workspaceID)
+	rows, err := s.db.QueryContext(ctx, `SELECT id, workspace_id, daemon_id, name, provider, version, status, device_name, profile_id, last_seen_at, created_at, updated_at, metadata FROM runtimes WHERE workspace_id=? ORDER BY provider, id`, workspaceID)
 	if err != nil {
 		return nil, err
 	}
@@ -55,11 +65,11 @@ func (s *Store) listRuntimes(ctx context.Context, workspaceID string) ([]localRu
 }
 
 func (s *Store) codexRuntime(ctx context.Context, workspaceID string) (localRuntime, error) {
-	return scanRuntime(s.db.QueryRowContext(ctx, `SELECT id, workspace_id, daemon_id, name, provider, version, status, device_name, profile_id, last_seen_at, created_at, updated_at FROM runtimes WHERE workspace_id=? AND provider='codex' AND status='online' ORDER BY updated_at DESC LIMIT 1`, workspaceID))
+	return scanRuntime(s.db.QueryRowContext(ctx, `SELECT id, workspace_id, daemon_id, name, provider, version, status, device_name, profile_id, last_seen_at, created_at, updated_at, metadata FROM runtimes WHERE workspace_id=? AND provider='codex' AND status='online' ORDER BY updated_at DESC LIMIT 1`, workspaceID))
 }
 
 func (s *Store) latestCodexRuntime(ctx context.Context, workspaceID string) (localRuntime, error) {
-	return scanRuntime(s.db.QueryRowContext(ctx, `SELECT id, workspace_id, daemon_id, name, provider, version, status, device_name, profile_id, last_seen_at, created_at, updated_at FROM runtimes WHERE workspace_id=? AND provider='codex' ORDER BY updated_at DESC LIMIT 1`, workspaceID))
+	return scanRuntime(s.db.QueryRowContext(ctx, `SELECT id, workspace_id, daemon_id, name, provider, version, status, device_name, profile_id, last_seen_at, created_at, updated_at, metadata FROM runtimes WHERE workspace_id=? AND provider='codex' ORDER BY updated_at DESC LIMIT 1`, workspaceID))
 }
 
 func localAgent(workspaceID string, runtime localRuntime) map[string]any {
@@ -96,14 +106,10 @@ func (s *Store) enqueueAssignedIssue(ctx context.Context, workspaceID, issueID, 
 	} else if *issue.AssigneeType != "agent" {
 		return nil
 	}
-	var runtime localRuntime
-	err = s.db.QueryRowContext(ctx, `SELECT r.id, r.workspace_id, r.daemon_id, r.name, r.provider,
-		r.version, r.status, r.device_name, r.profile_id, r.last_seen_at, r.created_at, r.updated_at
+	runtime, err := scanRuntime(s.db.QueryRowContext(ctx, `SELECT r.id, r.workspace_id, r.daemon_id, r.name, r.provider,
+		r.version, r.status, r.device_name, r.profile_id, r.last_seen_at, r.created_at, r.updated_at, r.metadata
 		FROM agents a JOIN runtimes r ON r.id=a.runtime_id
-		WHERE a.id=? AND a.workspace_id=? AND a.archived_at IS NULL AND r.status='online'`,
-		agentID, workspaceID).Scan(&runtime.ID, &runtime.WorkspaceID, &runtime.DaemonID,
-		&runtime.Name, &runtime.Provider, &runtime.Version, &runtime.Status, &runtime.DeviceName,
-		&runtime.ProfileID, &runtime.LastSeenAt, &runtime.CreatedAt, &runtime.UpdatedAt)
+		WHERE a.id=? AND a.workspace_id=? AND a.archived_at IS NULL AND r.status='online'`, agentID, workspaceID))
 	if errors.Is(err, sql.ErrNoRows) {
 		return nil
 	}
@@ -159,7 +165,7 @@ func (s *Store) enqueueAssignedIssue(ctx context.Context, workspaceID, issueID, 
 
 func localIssueCategoryRunnable(category string) bool {
 	switch category {
-	case "backlog", "done", "cancelled", "canceled":
+	case "backlog", "done", "closed", "cancelled", "canceled":
 		return false
 	default:
 		return true
@@ -179,12 +185,7 @@ func (s *Server) listRuntimes(w http.ResponseWriter, r *http.Request) {
 	}
 	result := make([]map[string]any, 0, len(items))
 	for _, item := range items {
-		result = append(result, map[string]any{
-			"id": item.ID, "workspace_id": item.WorkspaceID, "daemon_id": item.DaemonID, "name": item.Name,
-			"runtime_mode": "local", "provider": item.Provider, "launch_header": "", "status": item.Status,
-			"device_info": "", "metadata": map[string]any{"cli_version": item.Version}, "owner_id": LocalOperatorID, "visibility": "private",
-			"profile_id": item.ProfileID, "last_seen_at": item.LastSeenAt, "created_at": item.CreatedAt, "updated_at": item.UpdatedAt,
-		})
+		result = append(result, runtimePayload(item))
 	}
 	writeJSON(w, http.StatusOK, result)
 }
@@ -235,6 +236,8 @@ func (s *Server) daemonRegister(w http.ResponseWriter, r *http.Request) {
 		WorkspaceID string `json:"workspace_id"`
 		DaemonID    string `json:"daemon_id"`
 		DeviceName  string `json:"device_name"`
+		CLIVersion  string `json:"cli_version"`
+		LaunchedBy  string `json:"launched_by"`
 		Runtimes    []struct {
 			Name      string `json:"name"`
 			Type      string `json:"type"`
@@ -247,13 +250,25 @@ func (s *Server) daemonRegister(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusBadRequest, errors.New("invalid local daemon registration"))
 		return
 	}
+	daemonMetadata := map[string]any{}
+	if version := strings.TrimSpace(input.CLIVersion); version != "" {
+		daemonMetadata["cli_version"] = version
+	}
+	if launchedBy := strings.TrimSpace(input.LaunchedBy); launchedBy != "" {
+		daemonMetadata["launched_by"] = launchedBy
+	}
+	encodedDaemonMetadata, err := json.Marshal(daemonMetadata)
+	if err != nil {
+		s.fail(w, err)
+		return
+	}
 	tx, err := s.store.db.BeginTx(r.Context(), nil)
 	if err != nil {
 		s.fail(w, err)
 		return
 	}
 	defer func() { _ = tx.Rollback() }()
-	if _, err := tx.ExecContext(r.Context(), `UPDATE runtimes SET status='offline', updated_at=? WHERE workspace_id=? AND daemon_id=?`, now(), ws.ID, input.DaemonID); err != nil {
+	if _, err := tx.ExecContext(r.Context(), `UPDATE runtimes SET status='offline', metadata=json_patch(json_remove(metadata, '$.cli_version', '$.launched_by'), ?), updated_at=? WHERE workspace_id=? AND daemon_id=?`, string(encodedDaemonMetadata), now(), ws.ID, input.DaemonID); err != nil {
 		s.fail(w, err)
 		return
 	}
@@ -267,14 +282,27 @@ func (s *Server) daemonRegister(w http.ResponseWriter, r *http.Request) {
 		if name == "" {
 			name = provider
 		}
+		status := "online"
+		if candidate.Status != "" && candidate.Status != "online" {
+			status = "offline"
+		}
+		metadata := maps.Clone(daemonMetadata)
+		if version := strings.TrimSpace(candidate.Version); version != "" {
+			metadata["version"] = version
+		}
+		encodedMetadata, err := json.Marshal(metadata)
+		if err != nil {
+			s.fail(w, err)
+			return
+		}
 		profileKey := strings.TrimSpace(candidate.ProfileID)
 		var id string
-		err := tx.QueryRowContext(r.Context(), `SELECT id FROM runtimes WHERE workspace_id=? AND daemon_id=? AND provider=? AND COALESCE(profile_id,'')=? LIMIT 1`, ws.ID, input.DaemonID, provider, profileKey).Scan(&id)
+		err = tx.QueryRowContext(r.Context(), `SELECT id FROM runtimes WHERE workspace_id=? AND daemon_id=? AND provider=? AND COALESCE(profile_id,'')=? LIMIT 1`, ws.ID, input.DaemonID, provider, profileKey).Scan(&id)
 		if errors.Is(err, sql.ErrNoRows) {
 			id = uuid.NewString()
-			_, err = tx.ExecContext(r.Context(), `INSERT INTO runtimes(id, workspace_id, daemon_id, name, provider, version, status, device_name, profile_id, last_seen_at, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, 'online', ?, ?, ?, ?, ?)`, id, ws.ID, input.DaemonID, name, provider, nullable(candidate.Version), nullable(input.DeviceName), nullable(profileKey), stamp, stamp, stamp)
+			_, err = tx.ExecContext(r.Context(), `INSERT INTO runtimes(id, workspace_id, daemon_id, name, provider, version, status, device_name, profile_id, last_seen_at, created_at, updated_at, metadata) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`, id, ws.ID, input.DaemonID, name, provider, nullable(candidate.Version), status, nullable(input.DeviceName), nullable(profileKey), stamp, stamp, stamp, string(encodedMetadata))
 		} else if err == nil {
-			_, err = tx.ExecContext(r.Context(), `UPDATE runtimes SET name=?, version=?, status='online', device_name=?, last_seen_at=?, updated_at=? WHERE id=?`, name, nullable(candidate.Version), nullable(input.DeviceName), stamp, stamp, id)
+			_, err = tx.ExecContext(r.Context(), `UPDATE runtimes SET name=?, version=?, status=?, device_name=?, last_seen_at=?, updated_at=?, metadata=? WHERE id=?`, name, nullable(candidate.Version), status, nullable(input.DeviceName), stamp, stamp, string(encodedMetadata), id)
 		}
 		if err != nil {
 			s.fail(w, err)
@@ -381,7 +409,7 @@ func (s *Server) daemonClaimTasks(w http.ResponseWriter, r *http.Request) {
 		if len(tasks) >= input.MaxTasks {
 			break
 		}
-		task, err := s.claimTask(r.Context(), input.DaemonID, runtimeID)
+		task, err := s.claimTask(r.Context(), input.DaemonID, runtimeID, r.Header.Get("X-Client-Capabilities"))
 		if err != nil {
 			s.respondStoreError(w, err)
 			return
@@ -399,7 +427,7 @@ func (s *Server) daemonClaimTask(w http.ResponseWriter, r *http.Request) {
 		s.respondStoreError(w, err)
 		return
 	}
-	task, err := s.claimTask(r.Context(), daemonID, chi.URLParam(r, "runtimeID"))
+	task, err := s.claimTask(r.Context(), daemonID, chi.URLParam(r, "runtimeID"), r.Header.Get("X-Client-Capabilities"))
 	if err != nil {
 		s.respondStoreError(w, err)
 		return
@@ -407,7 +435,7 @@ func (s *Server) daemonClaimTask(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, map[string]any{"task": task})
 }
 
-func (s *Server) claimTask(ctx context.Context, daemonID, runtimeID string) (map[string]any, error) {
+func (s *Server) claimTask(ctx context.Context, daemonID, runtimeID, capabilities string) (map[string]any, error) {
 	workspaces, err := s.store.ListWorkspaces(ctx)
 	if err != nil {
 		return nil, err
@@ -425,10 +453,14 @@ func (s *Server) claimTask(ctx context.Context, daemonID, runtimeID string) (map
 		return nil, err
 	}
 	defer func() { _ = tx.Rollback() }()
+	if err := cancelStaleLocalWorkflowTasksTx(ctx, tx, workspaceID, runtimeID); err != nil {
+		return nil, err
+	}
+
 	stamp := now()
 	var taskID, issueID, sessionID, stageID, continuityState, agentID string
 	var handoffNote, priorTaskID, triggerCommentID sql.NullString
-	err = tx.QueryRowContext(ctx, `UPDATE task_runs SET status='dispatched', updated_at=? WHERE id=(SELECT tr.id FROM task_runs tr JOIN issues i ON i.id=tr.issue_id WHERE tr.status='queued' AND tr.runtime=? AND i.workspace_id=? ORDER BY tr.created_at LIMIT 1) RETURNING id, issue_id, handoff_note, session_id, stage_id, prior_task_id, trigger_comment_id, continuity_state, COALESCE(agent_id,'')`, stamp, runtimeID, workspaceID).Scan(&taskID, &issueID, &handoffNote, &sessionID, &stageID, &priorTaskID, &triggerCommentID, &continuityState, &agentID)
+	err = tx.QueryRowContext(ctx, `UPDATE task_runs SET status='dispatched', updated_at=?,dispatched_at=? WHERE id=(SELECT tr.id FROM task_runs tr JOIN issues i ON i.id=tr.issue_id WHERE tr.status='queued' AND tr.runtime=? AND i.workspace_id=? AND (tr.wakeup_id IS NULL OR COALESCE((SELECT category FROM issue_statuses WHERE workspace_id=i.workspace_id AND key=i.status),i.status) NOT IN ('done','closed','cancelled','canceled')) ORDER BY tr.created_at LIMIT 1) RETURNING id, issue_id, handoff_note, session_id, stage_id, prior_task_id, trigger_comment_id, continuity_state, COALESCE(agent_id,'')`, stamp, stamp, runtimeID, workspaceID).Scan(&taskID, &issueID, &handoffNote, &sessionID, &stageID, &priorTaskID, &triggerCommentID, &continuityState, &agentID)
 	if errors.Is(err, sql.ErrNoRows) {
 		if err := tx.Commit(); err != nil {
 			return nil, err
@@ -436,6 +468,32 @@ func (s *Server) claimTask(ctx context.Context, daemonID, runtimeID string) (map
 		return s.claimChatTask(ctx, workspaceID, runtimeID)
 	}
 	if err != nil {
+		return nil, err
+	}
+	if agentID == "" {
+		if err := tx.QueryRowContext(ctx, `SELECT CASE WHEN assignee_type='squad' THEN COALESCE((SELECT leader_id FROM squads WHERE id=assignee_id),'') ELSE COALESCE(assignee_id,'') END FROM issues WHERE id=? AND workspace_id=?`, issueID, workspaceID).Scan(&agentID); err != nil {
+			return nil, err
+		}
+	}
+	if agentID != "" {
+		if _, err := tx.ExecContext(ctx, `UPDATE task_runs SET agent_id=? WHERE id=? AND agent_id IS NULL`, agentID, taskID); err != nil {
+			return nil, err
+		}
+	}
+	if err := ensureLocalTaskWorkflowContextTx(ctx, tx, workspaceID, issueID, taskID); err != nil {
+		return nil, err
+	}
+	joinedNote := ""
+	for _, capability := range strings.Split(capabilities, ",") {
+		if strings.TrimSpace(capability) == protocol.DaemonCapabilityJoinedWakeupsV1 {
+			joinedNote, err = joinLocalWakeupsTx(ctx, tx, workspaceID, issueID, agentID, taskID, time.Now().UTC())
+			if err != nil {
+				return nil, err
+			}
+			break
+		}
+	}
+	if err := tx.QueryRowContext(ctx, `SELECT handoff_note FROM task_runs WHERE id=?`, taskID).Scan(&handoffNote); err != nil {
 		return nil, err
 	}
 	if err := tx.Commit(); err != nil {
@@ -468,10 +526,33 @@ func (s *Server) claimTask(ctx context.Context, daemonID, runtimeID string) (map
 		return nil, err
 	}
 	task := map[string]any{
-		"id": taskID, "agent_id": agentID, "runtime_id": runtimeID, "issue_id": issue.ID, "workspace_id": workspaceID,
+		"id": taskID, "dispatched_at": stamp, "start_claim_supported": true, "agent_id": agentID, "runtime_id": runtimeID, "issue_id": issue.ID, "workspace_id": workspaceID,
 		"thread_name": issue.Identifier + " " + issue.Title, "workspace_context": stringValue(ws.Context),
 		"agent": agent, "auth_token": localTaskToken(),
-		"issue_session_id": sessionID, "issue_session_stage_id": stageID, "issue_session_stage_kind": stageKind, "continuity_state": continuityState,
+		"wakeup_joined": joinedNote, "issue_session_id": sessionID, "issue_session_stage_id": stageID, "issue_session_stage_kind": stageKind, "continuity_state": continuityState,
+	}
+	var wakeupID sql.NullString
+	if err := s.store.db.QueryRowContext(ctx, `SELECT wakeup_id FROM task_runs WHERE id=?`, taskID).Scan(&wakeupID); err != nil {
+		return nil, err
+	}
+	var squadID sql.NullString
+	if err := s.store.db.QueryRowContext(ctx, `SELECT squad_id FROM task_runs WHERE id=?`, taskID).Scan(&squadID); err != nil {
+		return nil, err
+	}
+	if squadID.Valid {
+		var name, leader string
+		if err := s.store.db.QueryRowContext(ctx, `SELECT name,leader_id FROM squads WHERE id=? AND workspace_id=?`, squadID.String, workspaceID).Scan(&name, &leader); err != nil {
+			return nil, err
+		}
+		task["squad_id"], task["squad_name"], task["leader_role_resolved"], task["is_leader_task"] = squadID.String, name, true, leader == agentID
+	}
+	if wakeupID.Valid {
+		task["wakeup_id"] = wakeupID.String
+		if system, err := isLocalSystemWakeup(ctx, s.store.db, wakeupID.String); err != nil {
+			return nil, err
+		} else if system {
+			task["wakeup_system_rule"] = "child_done"
+		}
 	}
 	if handoffNote.Valid && strings.TrimSpace(handoffNote.String) != "" {
 		task["handoff_note"] = handoffNote.String
@@ -706,6 +787,27 @@ func (s *Server) daemonTaskState(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	defer func() { _ = tx.Rollback() }()
+	cursor, origin, err := beginLocalWakeupMutation(r.Context(), tx, ws.ID)
+	if err != nil {
+		s.localWakeupError(w, err)
+		return
+	}
+
+	if status == "running" {
+		replay, err := validateLocalStartClaimTx(r.Context(), tx, ws.ID, taskID, body)
+		if err != nil {
+			s.localWakeupError(w, err)
+			return
+		}
+		if replay {
+			if err := tx.Commit(); err != nil {
+				s.fail(w, err)
+				return
+			}
+			writeJSON(w, http.StatusOK, map[string]any{})
+			return
+		}
+	}
 	sessionID, _ := body["session_id"].(string)
 	workDir, _ := body["work_dir"].(string)
 	terminal := status == "completed" || status == "failed"
@@ -715,6 +817,43 @@ func (s *Server) daemonTaskState(w http.ResponseWriter, r *http.Request) {
 	if err := pinTaskSessionTx(r.Context(), tx, ws.ID, chi.URLParam(r, "taskID"), sessionID, workDir, terminal); err != nil && !errors.Is(err, sql.ErrNoRows) {
 		s.fail(w, err)
 		return
+	}
+	if status == "running" {
+		var joinedIssue string
+		if err := tx.QueryRowContext(r.Context(), `SELECT issue_id FROM task_runs WHERE id=?`, taskID).Scan(&joinedIssue); err != nil {
+			s.respondStoreError(w, err)
+			return
+		}
+		if err := ensureLocalTaskWorkflowContextTx(r.Context(), tx, ws.ID, joinedIssue, taskID); err != nil {
+			if _, cancelErr := tx.ExecContext(r.Context(), `UPDATE task_runs SET status='cancelled',completed_at=?,updated_at=? WHERE id=? AND started_at IS NULL`, stamp, stamp, taskID); cancelErr != nil {
+				s.fail(w, cancelErr)
+				return
+			}
+			if commitErr := tx.Commit(); commitErr != nil {
+				s.fail(w, commitErr)
+				return
+			}
+			s.respondStoreError(w, err)
+			return
+		}
+		if err := takeLocalJoinedWakeupsTx(r.Context(), tx, ws.ID, joinedIssue, taskID, time.Now().UTC()); err != nil {
+			if errors.Is(err, service.ErrWakeupConflict) {
+				if _, resetErr := tx.ExecContext(r.Context(), `UPDATE task_runs SET status='queued',dispatched_at=NULL,wakeup_joined='',updated_at=? WHERE id=? AND started_at IS NULL`, stamp, taskID); resetErr != nil {
+					s.fail(w, resetErr)
+					return
+				}
+				if _, resetErr := tx.ExecContext(r.Context(), `DELETE FROM issue_wakeup_joins WHERE task_id=?`, taskID); resetErr != nil {
+					s.fail(w, resetErr)
+					return
+				}
+				if commitErr := tx.Commit(); commitErr != nil {
+					s.fail(w, commitErr)
+					return
+				}
+			}
+			s.localWakeupError(w, err)
+			return
+		}
 	}
 	result, err := tx.ExecContext(r.Context(), `UPDATE task_runs SET `+strings.Join(set, ", ")+` WHERE id=? AND status NOT IN ('completed','failed','cancelled') AND issue_id IN (SELECT id FROM issues WHERE workspace_id=?)`, args...)
 	if err != nil {
@@ -729,7 +868,7 @@ func (s *Server) daemonTaskState(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 		if queryErr == nil && current == status {
-			if err := tx.Commit(); err != nil {
+			if err := commitLocalWakeupMutation(r.Context(), tx, ws.ID, cursor, origin); err != nil {
 				s.fail(w, err)
 				return
 			}
@@ -757,22 +896,54 @@ func (s *Server) daemonTaskState(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 	}
+	origin = localWakeupOrigin{AgentID: agentID, TaskID: taskID}
 	issueStatus := map[string]string{"running": "in_progress", "completed": "in_review", "failed": "blocked"}[status]
+	var workflowID, primaryWakeupID sql.NullString
+	if err := tx.QueryRowContext(r.Context(), `SELECT workflow_id,wakeup_id FROM task_runs WHERE id=?`, taskID).Scan(&workflowID, &primaryWakeupID); err != nil {
+		s.fail(w, err)
+		return
+	}
+	if workflowID.Valid || primaryWakeupID.Valid {
+		issueStatus = ""
+	}
+	var currentCategory string
+	if err := tx.QueryRowContext(r.Context(), `SELECT COALESCE(st.category,i.status) FROM issues i LEFT JOIN issue_statuses st ON st.workspace_id=i.workspace_id AND st.key=i.status WHERE i.id=? AND i.workspace_id=?`, issueID, ws.ID).Scan(&currentCategory); err != nil {
+		s.fail(w, err)
+		return
+	}
+	if localStatusCategory(currentCategory) == "closed" || currentCategory == "done" {
+		issueStatus = ""
+	}
+
 	if issueStatus != "" {
-		if _, err := tx.ExecContext(r.Context(), `UPDATE issues SET status=?, revision=revision+1, last_activity_at=?, updated_at=? WHERE id=?`, issueStatus, stamp, stamp, issueID); err != nil {
+		if _, err := tx.ExecContext(r.Context(), `UPDATE issues SET status=?, duplicate_of_issue_id=NULL, revision=revision+1, last_activity_at=?, updated_at=? WHERE id=?`, issueStatus, stamp, stamp, issueID); err != nil {
+			s.fail(w, err)
+			return
+		}
+	}
+	quietCheckin := false
+	if status == "completed" && primaryWakeupID.Valid {
+		if err := tx.QueryRowContext(r.Context(), `SELECT EXISTS(SELECT 1 FROM issue_wakeup_runs WHERE task_id=? AND wakeup_id=? AND checkin_note<>'')`, taskID, primaryWakeupID.String).Scan(&quietCheckin); err != nil {
+			s.fail(w, err)
+			return
+		}
+	}
+	var alreadyCommented bool
+	if status == "completed" {
+		if err := tx.QueryRowContext(r.Context(), `SELECT EXISTS(SELECT 1 FROM comments WHERE issue_id=? AND source_task_id=? AND author_type='agent')`, issueID, taskID).Scan(&alreadyCommented); err != nil {
 			s.fail(w, err)
 			return
 		}
 	}
 	if status == "completed" || status == "failed" {
-		if output := strings.TrimSpace(stringFromMap(body, "output")); status == "completed" && output != "" {
+		if output := strings.TrimSpace(stringFromMap(body, "output")); status == "completed" && output != "" && !quietCheckin && !alreadyCommented {
 			var revision int64
 			if err := tx.QueryRowContext(r.Context(), `UPDATE issues SET revision=revision+1, last_activity_at=?, updated_at=? WHERE id=? RETURNING revision`, stamp, stamp, issueID).Scan(&revision); err != nil {
 				s.fail(w, err)
 				return
 			}
 			createdCommentID = uuid.NewString()
-			if _, err := tx.ExecContext(r.Context(), `INSERT INTO comments(id, issue_id, author_type, author_id, content, type, issue_revision, source_task_id, created_at, updated_at) VALUES (?, ?, 'agent', ?, ?, 'comment', ?, ?, ?, ?)`, createdCommentID, issueID, agentID, output, revision, taskID, stamp, stamp); err != nil {
+			if _, err := tx.ExecContext(r.Context(), `INSERT INTO comments(id, issue_id, author_type, author_id, content, type, issue_revision, source_task_id, parent_id, created_at, updated_at) VALUES (?, ?, 'agent', ?, ?, 'comment', ?, ?, (SELECT trigger_comment_id FROM task_runs WHERE id=?), ?, ?)`, createdCommentID, issueID, agentID, output, revision, taskID, taskID, stamp, stamp); err != nil {
 				s.fail(w, err)
 				return
 			}
@@ -822,17 +993,19 @@ func (s *Server) daemonTaskState(w http.ResponseWriter, r *http.Request) {
 		if quickCreate {
 			notificationTitle = issueTitle
 		}
-		notificationItem, notificationInserted, err = insertLocalNotificationTx(r.Context(), tx, localNotificationInput{
-			WorkspaceID: ws.ID, Type: kind, Severity: severity, SourceKey: "task:" + taskID + ":" + kind,
-			IssueID: issueID, ActorType: "agent", ActorID: agentID, Title: notificationTitle,
-			Body: bodyText, Details: notificationDetails,
-		})
-		if err != nil {
-			s.fail(w, err)
-			return
+		if !quietCheckin {
+			notificationItem, notificationInserted, err = insertLocalNotificationTx(r.Context(), tx, localNotificationInput{
+				WorkspaceID: ws.ID, Type: kind, Severity: severity, SourceKey: "task:" + taskID + ":" + kind,
+				IssueID: issueID, ActorType: "agent", ActorID: agentID, Title: notificationTitle,
+				Body: bodyText, Details: notificationDetails,
+			})
+			if err != nil {
+				s.fail(w, err)
+				return
+			}
 		}
 	}
-	if err := tx.Commit(); err != nil {
+	if err := commitLocalWakeupMutation(r.Context(), tx, ws.ID, cursor, origin); err != nil {
 		s.fail(w, err)
 		return
 	}

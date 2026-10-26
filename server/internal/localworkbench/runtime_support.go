@@ -5,6 +5,7 @@ import (
 	"database/sql"
 	"encoding/json"
 	"errors"
+	"maps"
 	"net/http"
 	"strings"
 
@@ -181,7 +182,14 @@ func (s *Server) runtimeItem(w http.ResponseWriter, r *http.Request) {
 }
 
 func runtimePayload(item localRuntime) map[string]any {
-	return map[string]any{"id": item.ID, "workspace_id": item.WorkspaceID, "daemon_id": item.DaemonID, "name": item.Name, "custom_name": nil, "runtime_mode": "local", "provider": item.Provider, "launch_header": "", "status": item.Status, "device_info": "", "metadata": map[string]any{"cli_version": item.Version}, "owner_id": LocalOperatorID, "visibility": "private", "profile_id": item.ProfileID, "last_seen_at": item.LastSeenAt, "created_at": item.CreatedAt, "updated_at": item.UpdatedAt}
+	metadata := maps.Clone(item.Metadata)
+	if metadata == nil {
+		metadata = map[string]any{}
+	}
+	if item.Version != nil {
+		metadata["version"] = *item.Version
+	}
+	return map[string]any{"id": item.ID, "workspace_id": item.WorkspaceID, "daemon_id": item.DaemonID, "name": item.Name, "custom_name": nil, "runtime_mode": "local", "provider": item.Provider, "launch_header": "", "status": item.Status, "device_info": "", "metadata": metadata, "owner_id": LocalOperatorID, "visibility": "private", "profile_id": item.ProfileID, "last_seen_at": item.LastSeenAt, "created_at": item.CreatedAt, "updated_at": item.UpdatedAt}
 }
 
 func (s *Server) unbindAndDeleteRuntime(w http.ResponseWriter, r *http.Request) {

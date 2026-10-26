@@ -14,6 +14,7 @@ import (
 
 	"github.com/go-chi/chi/v5"
 	"github.com/google/uuid"
+	"github.com/multica-ai/multica/server/internal/service"
 )
 
 func (s *Server) workspaceFor(r *http.Request) (Workspace, error) {
@@ -140,6 +141,7 @@ func (s *Server) createProject(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	var input struct {
+		WorkflowID  *string                `json:"workflow_id"`
 		Title       string                 `json:"title"`
 		Description string                 `json:"description"`
 		Icon        string                 `json:"icon"`
@@ -151,12 +153,12 @@ func (s *Server) createProject(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusBadRequest, errors.New("title is required"))
 		return
 	}
-	item, err := s.store.CreateProject(r.Context(), ws.ID, CreateProjectInput{
+	item, err := s.store.CreateProject(r.Context(), ws.ID, CreateProjectInput{WorkflowID: input.WorkflowID,
 		Title: input.Title, Description: &input.Description, Icon: &input.Icon,
 		Status: input.Status, Priority: input.Priority, Resources: input.Resources,
 	})
 	if err != nil {
-		s.fail(w, err)
+		s.respondStoreError(w, err)
 		return
 	}
 	s.hub.broadcast("project:created", map[string]any{"project": item})
@@ -437,7 +439,7 @@ func (s *Server) listGroupedIssues(w http.ResponseWriter, r *http.Request) {
 	if category := r.URL.Query().Get("status_category"); category != "" {
 		filtered := items[:0]
 		for _, item := range items {
-			if item.StatusCategory == category {
+			if localStatusCategoryMatches(item.StatusCategory, category) {
 				filtered = append(filtered, item)
 			}
 		}
@@ -486,7 +488,7 @@ func issueTableGroupKey(kind string, item Issue) string {
 		}
 		return "project:" + *item.ProjectID
 	case "status_category":
-		return "status_category:" + item.StatusCategory
+		return "status_category:" + localStatusCategory(item.StatusCategory)
 	default:
 		return "status:" + item.Status
 	}
@@ -723,10 +725,10 @@ func (s *Server) issueListResponse(ctx context.Context, ws Workspace, values map
 		if idsPresent && !ids[item.ID] {
 			continue
 		}
-		if value := values["status_category"]; value != "" && item.StatusCategory != value {
+		if value := values["status_category"]; value != "" && !localStatusCategoryMatches(item.StatusCategory, value) {
 			continue
 		}
-		if len(statusCategories) > 0 && !statusCategories[item.StatusCategory] {
+		if len(statusCategories) > 0 && !statusCategories[item.StatusCategory] && !statusCategories[localStatusCategory(item.StatusCategory)] {
 			continue
 		}
 		if value := values["status"]; value != "" && item.Status != value {
@@ -756,7 +758,7 @@ func (s *Server) issueListResponse(ctx context.Context, ws Workspace, values map
 		if values["top_level_only"] == "true" && item.ParentIssueID != nil {
 			continue
 		}
-		if values["open_only"] == "true" && (item.StatusCategory == "done" || item.StatusCategory == "cancelled") {
+		if values["open_only"] == "true" && (item.StatusCategory == "done" || localStatusCategory(item.StatusCategory) == "closed") {
 			continue
 		}
 		if q != "" && !strings.Contains(strings.ToLower(item.Title), q) && !strings.Contains(strings.ToLower(item.Identifier), q) {
@@ -839,11 +841,16 @@ func (s *Server) createIssue(w http.ResponseWriter, r *http.Request) {
 		s.respondStoreError(w, err)
 		return
 	}
-	if err := s.store.enqueueAssignedIssue(r.Context(), ws.ID, item.ID, ""); err != nil {
-		s.respondStoreError(w, err)
-		return
+	if !input.SuppressRun {
+		if err := s.store.enqueueAssignedIssue(r.Context(), ws.ID, item.ID, ""); err != nil {
+			s.respondStoreError(w, err)
+			return
+		}
 	}
 	s.hub.broadcast("issue:created", map[string]any{"issue": item})
+	if item.workflowTaskID != "" {
+		s.hub.broadcast("daemon:pending_work", map[string]any{"issue_id": item.ID, "task_id": item.workflowTaskID})
+	}
 	writeJSON(w, 201, item)
 }
 
@@ -1071,7 +1078,7 @@ func (s *Server) updateIssue(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 	}
-	s.hub.broadcast("issue:updated", map[string]any{"issue": item})
+	s.publishLocalIssueUpdate(before, item)
 	writeJSON(w, 200, item)
 }
 
@@ -1087,7 +1094,8 @@ func (s *Server) moveIssue(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	issueID := chi.URLParam(r, "id")
-	if _, err := s.store.GetIssue(r.Context(), ws.ID, issueID); err != nil {
+	previous, err := s.store.GetIssue(r.Context(), ws.ID, issueID)
+	if err != nil {
 		s.respondStoreError(w, err)
 		return
 	}
@@ -1144,7 +1152,7 @@ func (s *Server) moveIssue(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 	}
-	s.hub.broadcast("issue:updated", map[string]any{"issue": item})
+	s.publishLocalIssueUpdate(previous, item)
 	writeJSON(w, 200, item)
 }
 
@@ -1248,8 +1256,17 @@ func (s *Server) batchUpdateIssues(w http.ResponseWriter, r *http.Request) {
 	}
 	handoffNote, _ := input.Updates["handoff_note"].(string)
 	suppressRun, _ := input.Updates["suppress_run"].(bool)
+	if _, present := input.Updates["duplicate_of_issue_id"]; present {
+		writeError(w, http.StatusBadRequest, errors.New("duplicate marks require an individual issue update"))
+		return
+	}
 	updated := 0
 	for _, id := range input.IssueIDs {
+		before, err := s.store.GetIssue(r.Context(), ws.ID, id)
+		if err != nil {
+			s.respondStoreError(w, err)
+			return
+		}
 		item, err := s.store.UpdateIssue(r.Context(), ws.ID, id, input.Updates)
 		if err != nil {
 			s.respondStoreError(w, err)
@@ -1262,7 +1279,7 @@ func (s *Server) batchUpdateIssues(w http.ResponseWriter, r *http.Request) {
 			}
 		}
 		updated++
-		s.hub.broadcast("issue:updated", map[string]any{"issue": item})
+		s.publishLocalIssueUpdate(before, item)
 	}
 	writeJSON(w, 200, map[string]any{"updated": updated})
 }
@@ -1333,12 +1350,12 @@ func (s *Server) createComment(w http.ResponseWriter, r *http.Request) {
 	if agentID == "" && taskID == "" {
 		item, err = s.store.CreateCommentWithAttachments(r.Context(), ws.ID, issueID, input.Content, input.Type, input.ParentID, input.AttachmentIDs)
 	} else {
-		if agentID != LocalAgentID || taskID == "" {
+		if agentID == "" || taskID == "" {
 			writeError(w, http.StatusForbidden, errors.New("invalid agent task identity"))
 			return
 		}
 		var taskExists int
-		if err := s.store.db.QueryRowContext(r.Context(), `SELECT COUNT(*) FROM task_runs WHERE id=? AND issue_id=? AND status='running'`, taskID, issueID).Scan(&taskExists); err != nil {
+		if err := s.store.db.QueryRowContext(r.Context(), `SELECT COUNT(*) FROM task_runs t JOIN issues i ON i.id=t.issue_id WHERE t.id=? AND t.issue_id=? AND t.agent_id=? AND t.status='running' AND i.workspace_id=?`, taskID, issueID, agentID, ws.ID).Scan(&taskExists); err != nil {
 			s.fail(w, err)
 			return
 		}
@@ -1346,7 +1363,7 @@ func (s *Server) createComment(w http.ResponseWriter, r *http.Request) {
 			writeError(w, http.StatusForbidden, errors.New("agent task is not active for issue"))
 			return
 		}
-		item, err = s.store.createAgentCommentWithAttachments(r.Context(), ws.ID, issueID, input.Content, input.Type, input.ParentID, taskID, input.AttachmentIDs)
+		item, err = s.store.createComment(r.Context(), ws.ID, issueID, input.Content, input.Type, input.ParentID, "agent", agentID, taskID, input.AttachmentIDs)
 	}
 	if err != nil {
 		s.respondStoreError(w, err)
@@ -1417,7 +1434,7 @@ func (s *Server) listIssueStatuses(w http.ResponseWriter, r *http.Request) {
 		s.fail(w, err)
 		return
 	}
-	writeJSON(w, 200, map[string]any{"statuses": items, "categories": []string{"backlog", "todo", "in_progress", "in_review", "done", "blocked", "cancelled"}, "total": len(items)})
+	writeJSON(w, 200, map[string]any{"statuses": items, "categories": []string{"unstarted", "started", "done", "closed"}, "total": len(items)})
 }
 
 func (s *Server) listTaskRuns(w http.ResponseWriter, r *http.Request) {
@@ -1626,6 +1643,24 @@ func nullableString(v sql.NullString) string {
 }
 
 func (s *Server) respondStoreError(w http.ResponseWriter, err error) {
+	if errors.Is(err, ErrIssueRevisionConflict) {
+		writeJSON(w, http.StatusConflict, map[string]any{"error": err.Error(), "code": "revision_conflict"})
+		return
+	}
+	if errors.Is(err, ErrInvalidIssueRevision) {
+		writeError(w, http.StatusBadRequest, err)
+		return
+	}
+	if writeLocalDuplicateError(w, err) {
+		return
+	}
+	if writeLocalIssueWorkflowError(w, err) {
+		return
+	}
+	if errors.Is(err, service.ErrWakeupForbidden) {
+		writeError(w, http.StatusForbidden, service.ErrWakeupForbidden)
+		return
+	}
 	if IsNotFound(err) {
 		writeError(w, 404, errors.New("not found"))
 		return
@@ -1643,4 +1678,14 @@ func (s *Server) respondStoreError(w http.ResponseWriter, err error) {
 func (s *Server) fail(w http.ResponseWriter, err error) {
 	s.logger.Error("local workbench request failed", "error", err)
 	writeError(w, 500, errors.New("local database operation failed"))
+}
+
+func (s *Server) publishLocalIssueUpdate(before, after Issue) {
+	s.hub.broadcast("issue:updated", map[string]any{"issue": after, "status_changed": before.Status != after.Status, "duplicate_of_issue_id": after.DuplicateOfIssueID, "prev_duplicate_of_issue_id": before.DuplicateOfIssueID})
+	for _, id := range after.workflowCancelled {
+		s.hub.broadcast("task:cancelled", map[string]any{"task": map[string]any{"id": id, "issue_id": after.ID, "status": "cancelled"}})
+	}
+	if after.workflowTaskID != "" {
+		s.hub.broadcast("daemon:pending_work", map[string]any{"issue_id": after.ID, "task_id": after.workflowTaskID})
+	}
 }

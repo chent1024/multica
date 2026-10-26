@@ -4,6 +4,13 @@ import { NotificationsTab } from "./notifications-tab";
 
 const { mutate } = vi.hoisted(() => ({ mutate: vi.fn() }));
 
+vi.mock("./settings-layout", () => ({
+  SettingsTab: ({ children }: { children: React.ReactNode }) => children,
+  SettingsSection: ({ children }: { children: React.ReactNode }) => children,
+  SettingsCard: ({ children }: { children: React.ReactNode }) => children,
+  SettingsRow: ({ children, label }: { children: React.ReactNode; label: string }) => <div>{label}{children}</div>,
+}));
+
 vi.mock("@tanstack/react-query", () => ({
   useQuery: () => ({ data: { workspace_id: "local", preferences: {} } }),
 }));

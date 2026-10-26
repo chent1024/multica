@@ -78,17 +78,18 @@ WHERE i.workspace_id = $1 AND i.recipient_type = 'member' AND i.recipient_id = $
   AND i.issue_id IN (
     SELECT id FROM issue
     WHERE workspace_id = $1
-      AND issue_effective_status(workspace_id, status) IN ('done', 'cancelled')
+      AND status = ANY($3::text[])
   )
 `
 
 type ArchiveCompletedInboxParams struct {
-	WorkspaceID pgtype.UUID `json:"workspace_id"`
-	RecipientID pgtype.UUID `json:"recipient_id"`
+	WorkspaceID        pgtype.UUID `json:"workspace_id"`
+	RecipientID        pgtype.UUID `json:"recipient_id"`
+	TerminalStatusKeys []string    `json:"terminal_status_keys"`
 }
 
 func (q *Queries) ArchiveCompletedInbox(ctx context.Context, arg ArchiveCompletedInboxParams) (int64, error) {
-	result, err := q.db.Exec(ctx, archiveCompletedInbox, arg.WorkspaceID, arg.RecipientID)
+	result, err := q.db.Exec(ctx, archiveCompletedInbox, arg.WorkspaceID, arg.RecipientID, arg.TerminalStatusKeys)
 	if err != nil {
 		return 0, err
 	}
@@ -260,7 +261,13 @@ INSERT INTO inbox_item (
     workspace_id, recipient_type, recipient_id,
     type, severity, issue_id, title, body,
     actor_type, actor_id, details, id
-) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, COALESCE($12::uuid, gen_random_uuid()))
+)
+SELECT $1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, COALESCE($12::uuid, gen_random_uuid())
+WHERE ($2::text = 'member' AND EXISTS (
+    SELECT 1 FROM member WHERE workspace_id = $1 AND user_id = $3
+)) OR ($2::text = 'agent' AND EXISTS (
+    SELECT 1 FROM agent WHERE workspace_id = $1 AND id = $3
+))
 RETURNING id, workspace_id, recipient_type, recipient_id, type, severity, issue_id, title, body, read, archived, created_at, actor_type, actor_id, details
 `
 
@@ -279,6 +286,8 @@ type CreateInboxItemParams struct {
 	ID            pgtype.UUID `json:"id"`
 }
 
+// A missing recipient is a quiet skip (pgx.ErrNoRows), not a delivery failure.
+// Check the insertion snapshot without adding recipient row locks.
 func (q *Queries) CreateInboxItem(ctx context.Context, arg CreateInboxItemParams) (InboxItem, error) {
 	row := q.db.QueryRow(ctx, createInboxItem,
 		arg.WorkspaceID,

@@ -1,7 +1,6 @@
 {
   "nav": {
     "inbox": "インボックス",
-    "notifications": "通知",
     "chat": "チャット",
     "my_issues": "マイタスク",
     "issues": "タスク",
@@ -12,7 +11,8 @@
     "usage": "分析",
     "runtimes": "ランタイム",
     "skills": "スキル",
-    "settings": "設定"
+    "settings": "設定",
+    "notifications": "通知"
   },
   "tab": {
     "issue": "タスク",
@@ -41,6 +41,13 @@
     "loading_workspace": "ワークスペースを読み込み中…",
     "loading_named_prefix": "読み込み中"
   },
+  "window": {
+    "go_back": "戻る",
+    "go_forward": "進む",
+    "hold_for_history": "長押しで履歴を表示",
+    "back_history": "戻る履歴",
+    "forward_history": "進む履歴"
+  },
   "sidebar": {
     "unpin_tooltip": "ピン留めを解除",
     "workspaces_label": "ワークスペース",
@@ -53,8 +60,16 @@
     "new_issue": "新規タスク",
     "new_issue_shortcut": "C",
     "pinned_label": "ピン留め済み",
+    "work_group": "仕事",
+    "ai_team_group": "AI チーム",
+    "show_more_pins": "さらに {{count}} 件を表示…",
+    "show_fewer_pins": "表示を減らす",
+    "unread_overflow": "99+",
+    "discord_card": {
+      "title": "Discord に参加",
+      "dismiss": "閉じる"
+    },
     "workspace_group": "ワークスペース",
-    "configure_group": "設定",
-    "unread_overflow": "99+"
+    "configure_group": "設定"
   }
 }

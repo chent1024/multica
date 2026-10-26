@@ -214,7 +214,7 @@ docker compose -f docker-compose.selfhost.yml logs backend \
 以下のコマンドは **AI コーディングツールを実行するコンピュータ**で実行します。Docker を実行しているサーバーとは限りません。
 
 <Callout type="warning">
-タスクはデーモンを実行しているユーザーの全権限で動作し、そのユーザーが読み書きできるものはすべて読み書きできます。個人アカウントではなく、専用の Unix ユーザー、コンテナ、または VM でデーモンを実行してください。[セキュリティモデル](/security-model)を参照してください。
+作業はデーモンを実行しているユーザーの全権限で動作し、そのユーザーが読み書きできるものはすべて読み書きできます。個人アカウントではなく、専用の Unix ユーザー、コンテナ、または VM でデーモンを実行してください。[セキュリティモデル](/security-model)を参照してください。
 </Callout>
 
 まず Multica CLI をインストールします。
@@ -261,7 +261,7 @@ multica daemon status
 
 ## 6. 最初の実行を完了する
 
-Multica に戻ります。ランタイム一覧にオンラインのランタイムが表示されたら、エージェントを作成し、最初のイシューを割り当てます。
+Multica に戻ります。ランタイム一覧にオンラインのランタイムが表示されたら、エージェントを作成し、最初のタスクを割り当てます。
 
 実行ログが完了になり、タイムラインにエージェントの返信が現れれば、セルフホストのサービス、実行用コンピュータ、AI コーディングツールがつながっています。詳しい手順は[クイックスタート](/cloud-quickstart)のステップ 3〜5 を参照してください。
 
@@ -314,7 +314,7 @@ docker compose -f docker-compose.selfhost.yml up -d
 実際に動くバージョンを決めるのは `docker compose pull` で、そのタグが今どのイメージを指しているかを GHCR に問い合わせます。したがって数か月更新していない checkout でも今日の `latest` イメージを取得できますし、逆に `git pull` だけではイメージを取得してコンテナを作り直すまで何も変わりません。
 
 <Callout type="warning">
-**`MULTICA_IMAGE_TAG` を固定している場合、どちらのコマンドでもアップグレードされません。** 両方のイメージが `${MULTICA_IMAGE_TAG:-latest}` として解決され（`docker-compose.selfhost.yml:42`、`:125`）、`.env.example` は `MULTICA_IMAGE_TAG=latest` を同梱しています。`.env` で特定のリリースに固定していると、`pull` は同じタグを取り直すだけで、古いバージョンのままです — エラーも警告も出ません。アップグレード前に確認してください。
+**`MULTICA_IMAGE_TAG` を固定している場合、どちらのコマンドでもアップグレードされません。** 両方のイメージが `${MULTICA_IMAGE_TAG:-latest}` として解決され（`docker-compose.selfhost.yml`：`services.backend.image`、`services.frontend.image`）、`.env.example` は `MULTICA_IMAGE_TAG=latest` を同梱しています。`.env` で特定のリリースに固定していると、`pull` は同じタグを取り直すだけで、古いバージョンのままです — エラーも警告も出ません。アップグレード前に確認してください。
 
 ```bash
 grep MULTICA_IMAGE_TAG .env
@@ -353,7 +353,7 @@ migration は backend の起動時に自動で実行されます。過去デー�
 
 ### `/health` ではなく `/readyz` で検証する
 
-`/health` は **liveness** プローブで、プロセスが生きている限り `{"status":"ok"}` を返します — migration が失敗していても同じです。`/readyz`（`server/cmd/server/router.go:680`、`/healthz` はそのエイリアス）はデータベースと適用済み migration の集合をチェックするため、失敗したアップグレードを捕捉できるのはこちらです。
+`/health` は **liveness** プローブで、プロセスが生きている限り `{"status":"ok"}` を返します — migration が失敗していても同じです。`/readyz`（`server/cmd/server/router.go` で登録された `readyHandler`、`/healthz` はそのエイリアス）はデータベースと適用済み migration の集合をチェックするため、失敗したアップグレードを捕捉できるのはこちらです。
 
 ```bash
 curl -s localhost:8080/readyz
@@ -380,7 +380,7 @@ Helm には独自のアップグレード経路があります。values ファ�
 | 認証コードが届かない | コードを一度リクエストし、backend のログで `Verification code` を探す。 |
 | `setup self-host` が server に到達できないと報告する | 実行用コンピュータから `https://api.example.com/health` をリクエストし、DNS、TLS、リバースプロキシがすべて到達可能か確認する。404 が返る場合、プロキシが `/health` をこのパスを転送しない古い web リリースに向けているため、backend へ直接ルーティングすること（[トラブルシューティング](/troubleshooting#multica-setup-がサーバーに到達できないと報告する)）。 |
 | デーモンが `Agents` を表示しない | AI コーディングツールが `PATH` にありログイン済みであることを確認し、`multica daemon restart` を実行する。 |
-| イシューがキューにとどまり続ける | `multica daemon status` を実行し、デーモンが起動していてワークスペースに接続していることを確認する。 |
+| タスクがキューにとどまり続ける | `multica daemon status` を実行し、デーモンが起動していてワークスペースに接続していることを確認する。 |
 
 その他のケースは[トラブルシューティング](/troubleshooting)を参照してください。
 

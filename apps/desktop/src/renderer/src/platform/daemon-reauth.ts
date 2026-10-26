@@ -1,6 +1,7 @@
 import { useAuthStore } from "@multica/core/auth";
 import { toast } from "sonner";
 import { LOCAL_DAEMON_TOKEN } from "./daemon-login-sync";
+import type { DaemonTranslator } from "../components/daemon-i18n";
 
 /**
  * Re-establish the local daemon's credentials after it failed to authenticate
@@ -15,7 +16,9 @@ import { LOCAL_DAEMON_TOKEN } from "./daemon-login-sync";
  * retryable error. There is no valid session-invalid-to-login transition in the
  * fixed local identity model.
  */
-export async function reauthenticateDaemon(): Promise<void> {
+export async function reauthenticateDaemon(
+  t: DaemonTranslator,
+): Promise<void> {
   const user = useAuthStore.getState().user;
   if (!user) {
     toast.error("Couldn't reconnect the daemon", {
@@ -32,16 +35,19 @@ export async function reauthenticateDaemon(): Promise<void> {
     if (result.ok) return; // daemon restarting; status flips via onStatusChange
     // The local desktop has no hosted login fallback. Keep the deterministic
     // operator intact for every recovery failure and let the user retry.
-    toast.error("Couldn't reconnect the daemon", {
+    toast.error(t(($) => $.desktop.daemon.reconnect_failed), {
       description:
         result.reason === "transient"
           ? result.message
-          : "The local daemon rejected its compatibility token. Please try again.",
+          : t(($) => $.desktop.daemon.try_again),
     });
   } catch (err) {
     // An unexpected IPC error is not an auth failure — never log out on it.
-    toast.error("Couldn't reconnect the daemon", {
-      description: err instanceof Error ? err.message : "Please try again.",
+    toast.error(t(($) => $.desktop.daemon.reconnect_failed), {
+      description:
+        err instanceof Error
+          ? err.message
+          : t(($) => $.desktop.daemon.try_again),
     });
   }
 }

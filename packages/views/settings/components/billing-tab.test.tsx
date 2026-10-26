@@ -4,6 +4,12 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 import { ApiError } from "@multica/core/api";
 import { configStore } from "@multica/core/config";
 import { BILLING_WORKSPACE_SUBSCRIPTIONS_FLAG } from "@multica/core/feature-flags";
+import type {
+  AutopilotQuotaUsage,
+  IssueLimitUsage,
+  WorkspaceSubscriptionEntitlements,
+  WorkspaceSubscriptionSummary,
+} from "@multica/core/types";
 import { renderWithI18n } from "../../test/i18n";
 
 const mocks = vi.hoisted(() => ({
@@ -15,9 +21,9 @@ const mocks = vi.hoisted(() => ({
   refetch: vi.fn(),
   refetchSummary: vi.fn(),
   refetchUsage: vi.fn(),
+  refetchIssueLimitUsage: vi.fn(),
   refetchPrices: vi.fn(),
   openExternal: vi.fn(),
-  role: "owner" as "owner" | "admin" | "member",
   workspaceId: "workspace-1",
   prices: null as {
     month: {
@@ -44,22 +50,24 @@ const mocks = vi.hoisted(() => ({
   usagePending: false,
   usageFetching: false,
   usageError: false,
-  entitlementsDataUpdatedAt: 0,
-  entitlementsFetchedAfterMount: false,
+  summaryDataUpdatedAt: 0,
+  summaryFetchedAfterMount: false,
   entitlements: {
     workspaceId: "workspace-1",
     plan: "free",
     status: "inactive",
     seats: 3,
-    issueWindow: 17,
-    autopilotRuns: 7,
+    limits: {
+      issueCount: { mode: "limited", limit: 17 },
+      autopilotRuns: { mode: "limited", limit: 7 },
+    },
     currentPeriodEnd: null as string | null,
     snapshotExpiresAt: null as string | null,
     version: 0,
-  },
+  } as WorkspaceSubscriptionEntitlements,
   summary: {
-    entitlement: null as never,
-    billingInterval: null as "month" | "year" | null,
+    entitlement: null as unknown as WorkspaceSubscriptionEntitlements,
+    billingInterval: null,
     humanMembers: 3,
     seatCapacity: null as {
       purchased: number;
@@ -78,17 +86,28 @@ const mocks = vi.hoisted(() => ({
     cancelAtPeriodEnd: false,
     graceUntil: null as string | null,
     hasStripeCustomer: false,
-  },
+    availableActions: {
+      checkout: true,
+      portal: false,
+      purchaseSeats: false,
+    },
+  } as WorkspaceSubscriptionSummary,
+  issueLimitUsage: {
+    used: 11,
+    limit: 17,
+  } as IssueLimitUsage,
   usage: {
     action: "enforce" as "off" | "observe" | "enforce",
     used: 3 as number | null,
     reserved: 2 as number | null,
+    total: 5 as number | null,
     limit: 7 as number | null,
+    reached: false as boolean | null,
     period_start: "2030-01-01T00:00:00Z" as string | null,
     period_end: "2030-02-01T00:00:00Z" as string | null,
     reset_at: "2030-02-01T00:00:00Z" as string | null,
     blocked_counts: {} as Record<string, number> | null,
-  },
+  } as AutopilotQuotaUsage,
 }));
 
 vi.mock("@tanstack/react-query", () => ({
@@ -96,14 +115,14 @@ vi.mock("@tanstack/react-query", () => ({
 }));
 
 vi.mock("@multica/core/billing", () => ({
-  workspaceSubscriptionEntitlementsOptions: (wsId: string) => ({
-    queryKey: ["workspace-subscriptions", wsId, "entitlements"],
-  }),
   workspaceSubscriptionPricesOptions: (wsId: string) => ({
     queryKey: ["workspace-subscriptions", wsId, "prices"],
   }),
   workspaceSubscriptionSummaryOptions: (wsId: string) => ({
     queryKey: ["workspace-subscriptions", wsId, "summary"],
+  }),
+  issueLimitUsageOptions: (wsId: string) => ({
+    queryKey: ["workspace-subscriptions", wsId, "issue-limit-usage"],
   }),
   useCreateWorkspaceSubscriptionCheckout: () => ({
     mutateAsync: mocks.checkout,
@@ -137,10 +156,6 @@ vi.mock("@multica/core/paths", () => ({
   }),
 }));
 
-vi.mock("@multica/core/permissions", () => ({
-  useCurrentMember: () => ({ role: mocks.role, isLoading: false }),
-}));
-
 const navigationState = {
   search: "tab=billing",
   replace: vi.fn(),
@@ -149,6 +164,7 @@ vi.mock("../../navigation", () => ({
   useNavigation: () => ({
     pathname: "/acme/settings",
     searchParams: new URLSearchParams(navigationState.search),
+    hash: "",
     push: vi.fn(),
     replace: navigationState.replace,
     back: vi.fn(),
@@ -159,6 +175,20 @@ vi.mock("../../navigation", () => ({
 vi.mock("../../platform", () => ({ openExternal: mocks.openExternal }));
 
 import { BillingTab, formatStripeMinorAmount } from "./billing-tab";
+
+// The component formats dates in the viewer's own time zone, so a midnight-UTC
+// fixture reads as the previous calendar day anywhere behind UTC. Build the
+// expected text with the same formatter instead of hard-coding the calendar day.
+function formatExpectedDate(iso: string): string {
+  return new Intl.DateTimeFormat("en", { dateStyle: "medium" }).format(
+    new Date(iso),
+  );
+}
+
+const FEB_1_2030 = formatExpectedDate("2030-02-01T00:00:00Z");
+const FEB_15_2030 = formatExpectedDate("2030-02-15T00:00:00Z");
+const MAR_1_2030 = formatExpectedDate("2030-03-01T00:00:00Z");
+const APR_1_2030 = formatExpectedDate("2030-04-01T00:00:00Z");
 
 function setSeatCapacity({
   humanMembers = 4,
@@ -185,17 +215,22 @@ function setSeatCapacity({
     used,
     reserved,
     available,
+    overcommitted: used > purchased,
     version,
     pendingQuantity,
     activePurchase,
   };
+  Object.assign(mocks.summary.availableActions, {
+    checkout: false,
+    portal: true,
+    purchaseSeats: activePurchase === null,
+  });
 }
 
 describe("BillingTab", () => {
   beforeEach(() => {
     vi.clearAllMocks();
     navigationState.search = "tab=billing";
-    mocks.role = "owner";
     mocks.workspaceId = "workspace-1";
     mocks.prices = {
       month: {
@@ -222,14 +257,16 @@ describe("BillingTab", () => {
     mocks.usagePending = false;
     mocks.usageFetching = false;
     mocks.usageError = false;
-    mocks.entitlementsDataUpdatedAt = 0;
-    mocks.entitlementsFetchedAfterMount = false;
+    mocks.summaryDataUpdatedAt = 0;
+    mocks.summaryFetchedAfterMount = false;
     Object.assign(mocks.entitlements, {
       plan: "free",
       status: "inactive",
       seats: 3,
-      issueWindow: 17,
-      autopilotRuns: 7,
+      limits: {
+        issueCount: { mode: "limited", limit: 17 },
+        autopilotRuns: { mode: "limited", limit: 7 },
+      },
       currentPeriodEnd: null,
       snapshotExpiresAt: null,
       version: 0,
@@ -242,12 +279,23 @@ describe("BillingTab", () => {
       cancelAtPeriodEnd: false,
       graceUntil: null,
       hasStripeCustomer: false,
+      availableActions: {
+        checkout: true,
+        portal: false,
+        purchaseSeats: false,
+      },
+    });
+    Object.assign(mocks.issueLimitUsage, {
+      used: 11,
+      limit: 17,
     });
     Object.assign(mocks.usage, {
       action: "enforce",
       used: 3,
       reserved: 2,
+      total: 5,
       limit: 7,
+      reached: false,
       period_start: "2030-01-01T00:00:00Z",
       period_end: "2030-02-01T00:00:00Z",
       reset_at: "2030-02-01T00:00:00Z",
@@ -274,7 +322,18 @@ describe("BillingTab", () => {
           isPending: mocks.summaryPending,
           isFetching: mocks.summaryFetching,
           isError: mocks.summaryError,
+          dataUpdatedAt: mocks.summaryDataUpdatedAt,
+          isFetchedAfterMount: mocks.summaryFetchedAfterMount,
           refetch: mocks.refetchSummary,
+        };
+      }
+      if (queryKey?.[queryKey.length - 1] === "issue-limit-usage") {
+        return {
+          data: mocks.issueLimitUsage,
+          isPending: false,
+          isFetching: false,
+          isError: false,
+          refetch: mocks.refetchIssueLimitUsage,
         };
       }
       if (queryKey?.[queryKey.length - 1] === "usage") {
@@ -283,13 +342,11 @@ describe("BillingTab", () => {
           isPending: mocks.usagePending,
           isFetching: mocks.usageFetching,
           isError: mocks.usageError,
-          refetch: mocks.refetchUsage,
-        };
-      }
+        refetch: mocks.refetchUsage,
+      };
+    }
       return {
         data: mocks.entitlements,
-        dataUpdatedAt: mocks.entitlementsDataUpdatedAt,
-        isFetchedAfterMount: mocks.entitlementsFetchedAfterMount,
         isPending: false,
         isError: false,
         refetch: mocks.refetch,
@@ -343,13 +400,10 @@ describe("BillingTab", () => {
     renderWithI18n(<BillingTab />);
 
     expect(screen.getByRole("heading", { name: "Billing" })).toBeInTheDocument();
-    expect(screen.getByText("17")).toBeInTheDocument();
+    expect(screen.getByText("11 / 17")).toBeInTheDocument();
     expect(screen.getByText("5 / 7")).toBeInTheDocument();
     expect(screen.getByText("3 completed · 2 in progress")).toBeInTheDocument();
     expect(screen.getByText("$10.00 per human seat")).toBeInTheDocument();
-    expect(
-      screen.getByText("Estimated monthly total: $30.00"),
-    ).toBeInTheDocument();
     expect(mocks.useQuery).toHaveBeenCalledWith(
       expect.objectContaining({
         queryKey: ["workspace-subscriptions", "workspace-1", "prices"],
@@ -359,12 +413,6 @@ describe("BillingTab", () => {
     await user.click(screen.getByRole("button", { name: "Yearly" }));
 
     expect(screen.getByText("$96.00 per human seat")).toBeInTheDocument();
-    expect(
-      screen.getByText("Estimated yearly total: $288.00"),
-    ).toBeInTheDocument();
-    expect(
-      screen.queryByText("Estimated monthly total: $30.00"),
-    ).not.toBeInTheDocument();
     expect(
       screen.queryByRole("button", { name: "Retry" }),
     ).not.toBeInTheDocument();
@@ -478,20 +526,6 @@ describe("BillingTab", () => {
     expect(screen.queryByText(/\$0/)).not.toBeInTheDocument();
   });
 
-  it("does not display a price whose recurrence is not every one interval", () => {
-    if (mocks.prices) mocks.prices.month.intervalCount = 3;
-
-    renderWithI18n(<BillingTab />);
-
-    expect(screen.queryByText("$10.00 per human seat")).not.toBeInTheDocument();
-    expect(
-      screen.getByText(/Stripe Checkout shows the authoritative per-seat price/),
-    ).toBeInTheDocument();
-    expect(
-      screen.queryByRole("button", { name: "Retry" }),
-    ).not.toBeInTheDocument();
-  });
-
   it("creates Checkout with a client idempotency key and opens Stripe externally", async () => {
     const user = userEvent.setup();
     renderWithI18n(<BillingTab />);
@@ -584,6 +618,25 @@ describe("BillingTab", () => {
     expect(await screen.findByText(copy)).toBeInTheDocument();
   });
 
+  it("explains that a disabled billing capability requires an administrator", async () => {
+    const user = userEvent.setup();
+    mocks.checkout.mockRejectedValue(
+      new ApiError("request failed", 403, "Forbidden", {
+        code: "workspace_subscriptions_disabled",
+      }),
+    );
+    renderWithI18n(<BillingTab />);
+
+    await user.click(screen.getByRole("button", { name: "Upgrade to Pro" }));
+    await user.click(screen.getByRole("button", { name: "Continue to Stripe" }));
+
+    expect(
+      await screen.findByText(
+        "Workspace subscriptions are not enabled for this deployment. Contact your administrator.",
+      ),
+    ).toBeInTheDocument();
+  });
+
   it("consumes cancel callback params once while preserving the active tab", () => {
     navigationState.search =
       "tab=billing&result=cancel&session_id=cs_test_1&source=email";
@@ -606,9 +659,15 @@ describe("BillingTab", () => {
       expect(
         screen.getByText("Activating your subscription"),
       ).toBeInTheDocument();
-      expect(mocks.useQuery).toHaveBeenCalledWith(
-        expect.objectContaining({ refetchInterval: 2_000 }),
-      );
+      const summaryOptions = mocks.useQuery.mock.calls
+        .map(([options]) => options)
+        .find(
+          (options) =>
+            options.queryKey?.[options.queryKey.length - 1] === "summary",
+        );
+      expect(
+        summaryOptions.refetchInterval({ state: { data: mocks.summary } }),
+      ).toBe(2_000);
       expect(navigationState.replace).toHaveBeenCalledWith(
         "/acme/settings?tab=billing",
       );
@@ -626,18 +685,16 @@ describe("BillingTab", () => {
     }
   });
 
-  it("keeps Checkout syncing until Pro is fetched after the return callback", () => {
+  it("keeps Checkout syncing while Cloud still exposes Checkout", () => {
     vi.useFakeTimers();
     vi.setSystemTime(new Date("2030-01-01T00:00:00Z"));
     navigationState.search = "tab=billing&result=success&session_id=cs_test_1";
     Object.assign(mocks.entitlements, {
       plan: "pro",
       status: "active",
-      issueWindow: null,
-      autopilotRuns: null,
     });
-    mocks.entitlementsDataUpdatedAt = Date.now() - 1;
-    mocks.entitlementsFetchedAfterMount = true;
+    mocks.summaryDataUpdatedAt = Date.now() - 1;
+    mocks.summaryFetchedAfterMount = true;
     try {
       renderWithI18n(<BillingTab />);
 
@@ -646,28 +703,37 @@ describe("BillingTab", () => {
       ).toBeInTheDocument();
       expect(screen.queryByText("Pro is active")).not.toBeInTheDocument();
       expect(screen.queryByText("Unlimited")).not.toBeInTheDocument();
-      expect(screen.getAllByText("Unavailable").length).toBeGreaterThan(0);
+      expect(screen.getByText("11 / 17")).toBeInTheDocument();
       expect(screen.getByText("5 / 7")).toBeInTheDocument();
-      expect(mocks.useQuery).toHaveBeenCalledWith(
-        expect.objectContaining({ refetchInterval: 2_000 }),
-      );
+      const summaryOptions = mocks.useQuery.mock.calls
+        .map(([options]) => options)
+        .find(
+          (options) =>
+            options.queryKey?.[options.queryKey.length - 1] === "summary",
+        );
+      expect(
+        summaryOptions.refetchInterval({ state: { data: mocks.summary } }),
+      ).toBe(2_000);
     } finally {
       vi.useRealTimers();
     }
   });
 
-  it("confirms Pro despite stale metered quota after the return callback", () => {
+  it("confirms Checkout from refreshed Cloud actions and limit modes", () => {
     vi.useFakeTimers();
     vi.setSystemTime(new Date("2030-01-01T00:00:00Z"));
     navigationState.search = "tab=billing&result=success&session_id=cs_test_1";
     Object.assign(mocks.entitlements, {
       plan: "pro",
       status: "active",
-      issueWindow: null,
-      autopilotRuns: null,
+      limits: {
+        issueCount: { mode: "unlimited", limit: null },
+        autopilotRuns: { mode: "unlimited", limit: null },
+      },
     });
-    mocks.entitlementsDataUpdatedAt = Date.now() + 1;
-    mocks.entitlementsFetchedAfterMount = true;
+    mocks.summary.availableActions.checkout = false;
+    mocks.summaryDataUpdatedAt = Date.now() + 1;
+    mocks.summaryFetchedAfterMount = true;
     try {
       renderWithI18n(<BillingTab />);
 
@@ -679,26 +745,28 @@ describe("BillingTab", () => {
     }
   });
 
-  it("keeps plan facts visible but hides subscription mutations from members", () => {
-    mocks.role = "member";
+  it("keeps plan facts visible but hides mutations denied by Cloud", () => {
+    Object.assign(mocks.summary.availableActions, {
+      checkout: false,
+      portal: false,
+      purchaseSeats: false,
+    });
 
     renderWithI18n(<BillingTab />);
 
-    expect(screen.getByText("Read-only billing access")).toBeInTheDocument();
     expect(screen.getAllByText("3 members")).toHaveLength(1);
     expect(screen.queryByText("Purchased seats")).not.toBeInTheDocument();
-    expect(screen.getByText("$10.00 per human seat")).toBeInTheDocument();
+    expect(screen.queryByText("$10.00 per human seat")).not.toBeInTheDocument();
     expect(
       screen.queryByRole("button", { name: "Upgrade to Pro" }),
     ).not.toBeInTheDocument();
   });
 
-  it("renders authoritative subscription seat facts", () => {
+  it("renders authoritative subscription seat facts and opens their calculation help", async () => {
+    const user = userEvent.setup();
     Object.assign(mocks.entitlements, {
       plan: "pro",
       status: "active",
-      issueWindow: null,
-      autopilotRuns: null,
       currentPeriodEnd: "2030-02-01T00:00:00Z",
     });
     Object.assign(mocks.usage, {
@@ -728,8 +796,20 @@ describe("BillingTab", () => {
     expect(screen.getByText("4 seats")).toBeInTheDocument();
     expect(screen.getByText("1 seat")).toBeInTheDocument();
     expect(screen.getByText("0 seats")).toBeInTheDocument();
-    expect(screen.getByText(/4 seats from Feb 1, 2030/)).toBeInTheDocument();
+    expect(
+      screen.getByText(new RegExp(`4 seats from ${FEB_1_2030}`)),
+    ).toBeInTheDocument();
     expect(screen.getAllByText("4 members")).toHaveLength(1);
+    expect(screen.getByText("Available seats").closest("summary")).toBeNull();
+    const formula = "Purchased seats minus members and reserved invitations.";
+    expect(screen.queryByText(formula)).not.toBeInTheDocument();
+    const help = screen.getByRole("button", { name: "How available seats are calculated" });
+    help.focus();
+    await user.keyboard("{Enter}");
+    expect(await screen.findByText(formula)).toBeVisible();
+    await user.keyboard("{Escape}");
+    await waitFor(() => expect(screen.queryByText(formula)).not.toBeInTheDocument());
+    expect(help).toHaveFocus();
   });
 
   it("quotes and confirms an additive seat purchase", async () => {
@@ -737,8 +817,6 @@ describe("BillingTab", () => {
     Object.assign(mocks.entitlements, {
       plan: "pro",
       status: "active",
-      issueWindow: null,
-      autopilotRuns: null,
     });
     mocks.summary.hasStripeCustomer = true;
     setSeatCapacity();
@@ -811,8 +889,6 @@ describe("BillingTab", () => {
     Object.assign(mocks.entitlements, {
       plan: "pro",
       status: "active",
-      issueWindow: null,
-      autopilotRuns: null,
     });
     mocks.summary.hasStripeCustomer = true;
     setSeatCapacity();
@@ -869,8 +945,6 @@ describe("BillingTab", () => {
     Object.assign(mocks.entitlements, {
       plan: "pro",
       status: "active",
-      issueWindow: null,
-      autopilotRuns: null,
     });
     mocks.summary.hasStripeCustomer = true;
     setSeatCapacity();
@@ -899,8 +973,6 @@ describe("BillingTab", () => {
     Object.assign(mocks.entitlements, {
       plan: "pro",
       status: "active",
-      issueWindow: null,
-      autopilotRuns: null,
     });
     mocks.summary.hasStripeCustomer = true;
     setSeatCapacity();
@@ -938,8 +1010,6 @@ describe("BillingTab", () => {
     Object.assign(mocks.entitlements, {
       plan: "pro",
       status: "active",
-      issueWindow: null,
-      autopilotRuns: null,
     });
     mocks.summary.hasStripeCustomer = true;
     setSeatCapacity();
@@ -981,8 +1051,6 @@ describe("BillingTab", () => {
     Object.assign(mocks.entitlements, {
       plan: "pro",
       status: "active",
-      issueWindow: null,
-      autopilotRuns: null,
     });
     mocks.summary.hasStripeCustomer = true;
     setSeatCapacity();
@@ -1009,8 +1077,6 @@ describe("BillingTab", () => {
     Object.assign(mocks.entitlements, {
       plan: "pro",
       status: "active",
-      issueWindow: null,
-      autopilotRuns: null,
     });
     mocks.summary.hasStripeCustomer = true;
     setSeatCapacity();
@@ -1037,8 +1103,6 @@ describe("BillingTab", () => {
     Object.assign(mocks.entitlements, {
       plan: "pro",
       status: "active",
-      issueWindow: null,
-      autopilotRuns: null,
     });
     mocks.summary.hasStripeCustomer = true;
     setSeatCapacity();
@@ -1071,8 +1135,6 @@ describe("BillingTab", () => {
     Object.assign(mocks.entitlements, {
       plan: "pro",
       status: "active",
-      issueWindow: null,
-      autopilotRuns: null,
     });
     mocks.summary.hasStripeCustomer = true;
     setSeatCapacity();
@@ -1164,8 +1226,14 @@ describe("BillingTab", () => {
     }
   });
 
-  it("uses completed and reserved runs for the quota decision", () => {
-    Object.assign(mocks.usage, { used: 5, reserved: 2, limit: 7 });
+  it("renders Cloud's completed, reserved, total, and reached facts", () => {
+    Object.assign(mocks.usage, {
+      used: 5,
+      reserved: 2,
+      total: 7,
+      limit: 7,
+      reached: true,
+    });
 
     renderWithI18n(<BillingTab />);
 
@@ -1203,18 +1271,16 @@ describe("BillingTab", () => {
     ["request fails", true, false],
     ["response is malformed", false, true],
   ])(
-    "keeps plan facts visible when the subscription summary %s",
+    "fails closed when the authoritative subscription summary %s",
     (_case, isError, isMalformed) => {
       mocks.summaryError = isError;
       mocks.summaryMalformed = isMalformed;
 
       renderWithI18n(<BillingTab />);
 
-      expect(screen.getByText("Free")).toBeInTheDocument();
-      expect(
-        screen.getByText("Some seat details are unavailable"),
-      ).toBeInTheDocument();
-      expect(screen.getAllByText("Unavailable")).toHaveLength(4);
+      expect(screen.getByText("Billing is temporarily unavailable")).toBeInTheDocument();
+      expect(screen.queryByText("Free")).not.toBeInTheDocument();
+      expect(screen.getByRole("button", { name: "Retry" })).toBeInTheDocument();
     },
   );
 
@@ -1249,37 +1315,38 @@ describe("BillingTab", () => {
     renderWithI18n(<BillingTab />);
 
     expect(
-      screen.getByText(/Update your payment method by Feb 15, 2030/),
+      screen.getByText(
+        new RegExp(`Update your payment method by ${FEB_15_2030}`),
+      ),
     ).toBeInTheDocument();
     expect(screen.getByText("Cancellation is scheduled")).toBeInTheDocument();
     expect(
-      screen.getByText(/subscription is scheduled to cancel on Mar 1, 2030/),
+      screen.getByText(new RegExp(`subscription will cancel on ${MAR_1_2030}`)),
     ).toBeInTheDocument();
   });
 
-  it("stops deriving Pro access after the summary grace deadline", () => {
+  it("renders Cloud-resolved Free access without deriving from past_due", () => {
     Object.assign(mocks.entitlements, {
-      plan: "pro",
+      plan: "free",
       status: "past_due",
-      issueWindow: null,
-      autopilotRuns: null,
     });
-    mocks.summary.graceUntil = "2000-01-01T00:00:00Z";
-    Object.assign(mocks.usage, {
-      action: "off",
-      used: null,
-      reserved: null,
-      limit: null,
-      reset_at: null,
+    Object.assign(mocks.summary, {
+      graceUntil: null,
+      availableActions: {
+        checkout: false,
+        portal: true,
+        purchaseSeats: false,
+      },
     });
 
     renderWithI18n(<BillingTab />);
 
     expect(screen.queryByText("Unlimited")).not.toBeInTheDocument();
-    expect(screen.getAllByText("Unavailable").length).toBeGreaterThan(0);
+    expect(screen.getByText("11 / 17")).toBeInTheDocument();
+    expect(screen.getByText("5 / 7")).toBeInTheDocument();
     expect(
       screen.getByText(
-        "Open the Billing Portal to update your payment method. The plan badge above shows the access currently available.",
+        "Update your payment method in billing management.",
       ),
     ).toBeInTheDocument();
     expect(screen.queryByText(/keep Pro access/)).not.toBeInTheDocument();
@@ -1304,23 +1371,27 @@ describe("BillingTab", () => {
     renderWithI18n(<BillingTab />);
 
     expect(
-      screen.getByText(/subscription is scheduled to cancel on Apr 1, 2030/),
+      screen.getByText(new RegExp(`subscription will cancel on ${APR_1_2030}`)),
     ).toBeInTheDocument();
-    expect(screen.getByText(/4 seats from Apr 1, 2030/)).toBeInTheDocument();
-    expect(screen.getByText("Apr 1, 2030")).toBeInTheDocument();
-    expect(screen.queryByText("Mar 1, 2030")).not.toBeInTheDocument();
     expect(
-      screen.queryByText(/subscription is scheduled to cancel on Mar 1, 2030/),
+      screen.getByText(new RegExp(`4 seats from ${APR_1_2030}`)),
+    ).toBeInTheDocument();
+    expect(screen.getByText(APR_1_2030)).toBeInTheDocument();
+    expect(screen.queryByText(MAR_1_2030)).not.toBeInTheDocument();
+    expect(
+      screen.queryByText(new RegExp(`subscription will cancel on ${MAR_1_2030}`)),
     ).not.toBeInTheDocument();
     expect(screen.queryByText(/Pro remains available/)).not.toBeInTheDocument();
   });
 
-  it("shows Pro unlimited on a normal load despite stale metered quota", () => {
+  it("shows Cloud's explicit unlimited limits on a normal load", () => {
     Object.assign(mocks.entitlements, {
       plan: "pro",
       status: "active",
-      issueWindow: null,
-      autopilotRuns: null,
+      limits: {
+        issueCount: { mode: "unlimited", limit: null },
+        autopilotRuns: { mode: "unlimited", limit: null },
+      },
       currentPeriodEnd: "2026-09-13T00:00:00Z",
       version: 3,
     });
@@ -1349,8 +1420,6 @@ describe("BillingTab", () => {
     Object.assign(mocks.entitlements, {
       plan: "pro",
       status: "active",
-      issueWindow: null,
-      autopilotRuns: null,
       version: 3,
     });
     setSeatCapacity({ humanMembers: 5, purchased: 4, used: 5 });
@@ -1369,8 +1438,6 @@ describe("BillingTab", () => {
     Object.assign(mocks.entitlements, {
       plan: "pro",
       status: "active",
-      issueWindow: null,
-      autopilotRuns: null,
       version: 3,
     });
     setSeatCapacity({ humanMembers: 5, purchased: 5, used: 5 });
@@ -1394,6 +1461,11 @@ describe("BillingTab", () => {
       Object.assign(mocks.summary, {
         seatCapacity: null,
         hasStripeCustomer: true,
+        availableActions: {
+          checkout: true,
+          portal: true,
+          purchaseSeats: false,
+        },
       });
 
       renderWithI18n(<BillingTab />);
@@ -1421,15 +1493,22 @@ describe("BillingTab", () => {
       snapshotExpiresAt: null,
       version: 4,
     });
-    mocks.summary.graceUntil = "2000-01-01T00:00:00Z";
-    mocks.summary.hasStripeCustomer = true;
+    Object.assign(mocks.summary, {
+      graceUntil: null,
+      hasStripeCustomer: true,
+      availableActions: {
+        checkout: false,
+        portal: true,
+        purchaseSeats: false,
+      },
+    });
 
     renderWithI18n(<BillingTab />);
 
     expect(screen.getByText("Payment needs attention")).toBeInTheDocument();
     expect(
       screen.getByText(
-        "Open the Billing Portal to update your payment method. The plan badge above shows the access currently available.",
+        "Update your payment method in billing management.",
       ),
     ).toBeInTheDocument();
     expect(screen.queryByText(/keep Pro access/)).not.toBeInTheDocument();

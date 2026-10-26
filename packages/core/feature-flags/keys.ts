@@ -3,3 +3,4 @@ export const PLUGINS_V1_FLAG = "plugins_v1";
 export const LOCAL_WORKBENCH_FLAG = "local_workbench";
 export const BILLING_WORKSPACE_SUBSCRIPTIONS_FLAG =
   "billing_workspace_subscriptions";
+export const PROJECT_WORKFLOWS_V1_FLAG = "project_workflows_v1";

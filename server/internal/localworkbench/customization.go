@@ -97,7 +97,7 @@ func (s *Server) createIssueStatus(w http.ResponseWriter, r *http.Request) {
 
 func validStatusCategory(value string) bool {
 	switch value {
-	case "backlog", "todo", "in_progress", "in_review", "done", "blocked", "cancelled":
+	case "unstarted", "started", "closed", "backlog", "todo", "in_progress", "in_review", "done", "blocked", "cancelled":
 		return true
 	default:
 		return false
@@ -121,10 +121,31 @@ func (s *Server) issueStatusItem(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if r.Method == http.MethodDelete {
-		if _, err := s.store.db.ExecContext(r.Context(), `UPDATE issue_statuses SET archived_at=?, updated_at=? WHERE id=? AND workspace_id=? AND archived_at IS NULL`, now(), now(), id, ws.ID); err != nil {
+		tx, err := s.store.db.BeginTx(r.Context(), nil)
+		if err != nil {
 			s.fail(w, err)
 			return
 		}
+		defer tx.Rollback()
+		var statusKey string
+		if err := tx.QueryRowContext(r.Context(), `SELECT key FROM issue_statuses WHERE workspace_id=? AND id=?`, ws.ID, id).Scan(&statusKey); err != nil {
+			s.respondStoreError(w, err)
+			return
+		}
+		if err := archiveLocalWorkflowStatusTx(r.Context(), tx, ws.ID, statusKey); err != nil {
+			s.respondStoreError(w, err)
+			return
+		}
+		if _, err := tx.ExecContext(r.Context(), `UPDATE issue_statuses SET archived_at=?,updated_at=? WHERE id=? AND workspace_id=? AND archived_at IS NULL`, now(), now(), id, ws.ID); err != nil {
+			s.fail(w, err)
+			return
+		}
+		if err := tx.Commit(); err != nil {
+			s.fail(w, err)
+			return
+		}
+		s.hub.broadcast("issue_status:changed", map[string]any{"workspace_id": ws.ID})
+		s.hub.broadcast("issue_workflow:changed", map[string]any{"workspace_id": ws.ID})
 	} else {
 		input := map[string]any{}
 		if err := decodeBody(r, &input); err != nil {
@@ -180,16 +201,27 @@ func (s *Server) reorderIssueStatuses(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusBadRequest, errors.New("category and ids are required"))
 		return
 	}
-	rows, err := s.store.db.QueryContext(r.Context(), `SELECT id FROM issue_statuses WHERE workspace_id=? AND category=? AND archived_at IS NULL ORDER BY position, id`, ws.ID, input.Category)
+	rows, err := s.store.db.QueryContext(r.Context(), `SELECT id, category FROM issue_statuses WHERE workspace_id=? AND archived_at IS NULL ORDER BY position, id`, ws.ID)
 	if err != nil {
 		s.fail(w, err)
 		return
 	}
 	existing := []string{}
 	for rows.Next() {
-		var id string
-		_ = rows.Scan(&id)
-		existing = append(existing, id)
+		var id, category string
+		if err := rows.Scan(&id, &category); err != nil {
+			_ = rows.Close()
+			s.fail(w, err)
+			return
+		}
+		if localStatusCategoryMatches(category, input.Category) {
+			existing = append(existing, id)
+		}
+	}
+	if err := rows.Err(); err != nil {
+		_ = rows.Close()
+		s.fail(w, err)
+		return
 	}
 	_ = rows.Close()
 	want, got := append([]string(nil), input.IDs...), append([]string(nil), existing...)
@@ -206,7 +238,7 @@ func (s *Server) reorderIssueStatuses(w http.ResponseWriter, r *http.Request) {
 	}
 	defer func() { _ = tx.Rollback() }()
 	for position, id := range input.IDs {
-		if _, err := tx.ExecContext(r.Context(), `UPDATE issue_statuses SET position=?, updated_at=? WHERE id=? AND workspace_id=? AND category=?`, position, now(), id, ws.ID, input.Category); err != nil {
+		if _, err := tx.ExecContext(r.Context(), `UPDATE issue_statuses SET position=?, updated_at=? WHERE id=? AND workspace_id=?`, position, now(), id, ws.ID); err != nil {
 			s.fail(w, err)
 			return
 		}
@@ -341,6 +373,22 @@ func (s *Server) resourceLabels(w http.ResponseWriter, r *http.Request) {
 		s.respondStoreError(w, sql.ErrNoRows)
 		return
 	}
+	var tx *sql.Tx
+	var cursor int64
+	var origin localWakeupOrigin
+	if r.Method == http.MethodPost || r.Method == http.MethodDelete {
+		tx, err = s.store.db.BeginTx(r.Context(), nil)
+		if err != nil {
+			s.fail(w, err)
+			return
+		}
+		defer tx.Rollback()
+		cursor, origin, err = beginLocalWakeupMutation(r.Context(), tx, ws.ID)
+		if err != nil {
+			s.localWakeupError(w, err)
+			return
+		}
+	}
 	if r.Method == http.MethodPost {
 		var input struct {
 			LabelID string `json:"label_id"`
@@ -349,14 +397,14 @@ func (s *Server) resourceLabels(w http.ResponseWriter, r *http.Request) {
 			writeError(w, http.StatusBadRequest, errors.New("label_id is required"))
 			return
 		}
-		result, err := s.store.db.ExecContext(r.Context(), `INSERT INTO resource_labels(workspace_id, resource_type, resource_id, label_id, created_at) SELECT ?, ?, ?, id, ? FROM labels WHERE id=? AND workspace_id=? AND resource_type=? ON CONFLICT DO NOTHING`, ws.ID, kind, resourceID, now(), input.LabelID, ws.ID, kind)
+		result, err := tx.ExecContext(r.Context(), `INSERT INTO resource_labels(workspace_id, resource_type, resource_id, label_id, created_at) SELECT ?, ?, ?, id, ? FROM labels WHERE id=? AND workspace_id=? AND resource_type=? ON CONFLICT DO NOTHING`, ws.ID, kind, resourceID, now(), input.LabelID, ws.ID, kind)
 		if err != nil {
 			s.fail(w, err)
 			return
 		}
 		if count, _ := result.RowsAffected(); count == 0 {
 			var exists int
-			_ = s.store.db.QueryRowContext(r.Context(), `SELECT COUNT(*) FROM labels WHERE id=? AND workspace_id=? AND resource_type=?`, input.LabelID, ws.ID, kind).Scan(&exists)
+			_ = tx.QueryRowContext(r.Context(), `SELECT COUNT(*) FROM labels WHERE id=? AND workspace_id=? AND resource_type=?`, input.LabelID, ws.ID, kind).Scan(&exists)
 			if exists == 0 {
 				s.respondStoreError(w, sql.ErrNoRows)
 				return
@@ -364,7 +412,13 @@ func (s *Server) resourceLabels(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 	if r.Method == http.MethodDelete {
-		_, _ = s.store.db.ExecContext(r.Context(), `DELETE FROM resource_labels WHERE workspace_id=? AND resource_type=? AND resource_id=? AND label_id=?`, ws.ID, kind, resourceID, chi.URLParam(r, "labelID"))
+		_, _ = tx.ExecContext(r.Context(), `DELETE FROM resource_labels WHERE workspace_id=? AND resource_type=? AND resource_id=? AND label_id=?`, ws.ID, kind, resourceID, chi.URLParam(r, "labelID"))
+	}
+	if tx != nil {
+		if err := commitLocalWakeupMutation(r.Context(), tx, ws.ID, cursor, origin); err != nil {
+			s.fail(w, err)
+			return
+		}
 	}
 	rows, err := s.store.db.QueryContext(r.Context(), `SELECT l.id, l.workspace_id, l.resource_type, l.name, l.description, l.color, l.created_at, l.updated_at, (SELECT COUNT(*) FROM resource_labels x WHERE x.label_id=l.id) FROM resource_labels rl JOIN labels l ON l.id=rl.label_id WHERE rl.workspace_id=? AND rl.resource_type=? AND rl.resource_id=? ORDER BY l.name, l.id`, ws.ID, kind, resourceID)
 	if err != nil {
@@ -978,17 +1032,53 @@ func (s *Server) reactions(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusBadRequest, errors.New("emoji is required"))
 		return
 	}
+	tx, err := s.store.db.BeginTx(r.Context(), nil)
+	if err != nil {
+		s.fail(w, err)
+		return
+	}
+	defer tx.Rollback()
+	cursor, origin, err := beginLocalWakeupMutation(r.Context(), tx, ws.ID)
+	if err != nil {
+		s.localWakeupError(w, err)
+		return
+	}
+	var exists int
+	query := `SELECT COUNT(*) FROM issues WHERE workspace_id=? AND id=?`
+	if resourceType == "comment" {
+		query = `SELECT COUNT(*) FROM comments c JOIN issues i ON i.id=c.issue_id WHERE i.workspace_id=? AND c.id=?`
+	}
+	if err := tx.QueryRowContext(r.Context(), query, ws.ID, resourceID).Scan(&exists); err != nil {
+		s.fail(w, err)
+		return
+	}
+	if exists != 1 {
+		s.respondStoreError(w, sql.ErrNoRows)
+		return
+	}
+	actorType, actorID := "member", LocalOperatorID
+	if origin.AgentID != "" {
+		actorType, actorID = "agent", origin.AgentID
+	}
 	if r.Method == http.MethodDelete {
-		_, _ = s.store.db.ExecContext(r.Context(), `DELETE FROM reactions WHERE workspace_id=? AND resource_type=? AND resource_id=? AND actor_type='member' AND actor_id=? AND emoji=?`, ws.ID, resourceType, resourceID, LocalOperatorID, input.Emoji)
+		_, _ = tx.ExecContext(r.Context(), `DELETE FROM reactions WHERE workspace_id=? AND resource_type=? AND resource_id=? AND actor_type=? AND actor_id=? AND emoji=?`, ws.ID, resourceType, resourceID, actorType, actorID, input.Emoji)
+		if err := commitLocalWakeupMutation(r.Context(), tx, ws.ID, cursor, origin); err != nil {
+			s.fail(w, err)
+			return
+		}
 		w.WriteHeader(http.StatusNoContent)
 		return
 	}
 	stamp := now()
-	if _, err := s.store.db.ExecContext(r.Context(), `INSERT INTO reactions(workspace_id, resource_type, resource_id, actor_type, actor_id, emoji, created_at) VALUES (?, ?, ?, 'member', ?, ?, ?) ON CONFLICT DO NOTHING`, ws.ID, resourceType, resourceID, LocalOperatorID, input.Emoji, stamp); err != nil {
+	if _, err := tx.ExecContext(r.Context(), `INSERT INTO reactions(workspace_id, resource_type, resource_id, actor_type, actor_id, emoji, created_at) VALUES (?, ?, ?, ?, ?, ?, ?) ON CONFLICT DO NOTHING`, ws.ID, resourceType, resourceID, actorType, actorID, input.Emoji, stamp); err != nil {
 		s.fail(w, err)
 		return
 	}
-	writeJSON(w, http.StatusCreated, map[string]any{"emoji": input.Emoji, "user_type": "member", "user_id": LocalOperatorID, "created_at": stamp})
+	if err := commitLocalWakeupMutation(r.Context(), tx, ws.ID, cursor, origin); err != nil {
+		s.fail(w, err)
+		return
+	}
+	writeJSON(w, http.StatusCreated, map[string]any{"emoji": input.Emoji, "user_type": actorType, "user_id": actorID, "created_at": stamp})
 }
 
 func (s *Server) issueSubscribers(w http.ResponseWriter, r *http.Request) {
@@ -1082,6 +1172,12 @@ func (s *Server) updateOrDeleteComment(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 		defer func() { _ = tx.Rollback() }()
+		cursor, origin, err := beginLocalWakeupMutation(r.Context(), tx, ws.ID)
+		if err != nil {
+			s.localWakeupError(w, err)
+			return
+		}
+
 		_, _ = tx.ExecContext(r.Context(), `DELETE FROM reactions WHERE resource_type='comment' AND resource_id=?`, id)
 		_, _ = tx.ExecContext(r.Context(), `DELETE FROM attachments WHERE comment_id=?`, id)
 		if _, err := tx.ExecContext(r.Context(), `DELETE FROM comments WHERE id=?`, id); err != nil {
@@ -1091,7 +1187,7 @@ func (s *Server) updateOrDeleteComment(w http.ResponseWriter, r *http.Request) {
 			s.fail(w, err)
 			return
 		}
-		if err := tx.Commit(); err != nil {
+		if err := commitLocalWakeupMutation(r.Context(), tx, ws.ID, cursor, origin); err != nil {
 			for index := len(staged) - 1; index >= 0; index-- {
 				_ = s.files.Rename(staged[index].staged, staged[index].original)
 			}
@@ -1120,13 +1216,28 @@ func (s *Server) updateOrDeleteComment(w http.ResponseWriter, r *http.Request) {
 		query += ` AND revision=?`
 		args = append(args, *input.ExpectedRevision)
 	}
-	result, err := s.store.db.ExecContext(r.Context(), query, args...)
+	tx, err := s.store.db.BeginTx(r.Context(), nil)
+	if err != nil {
+		s.fail(w, err)
+		return
+	}
+	defer tx.Rollback()
+	cursor, origin, err := beginLocalWakeupMutation(r.Context(), tx, ws.ID)
+	if err != nil {
+		s.localWakeupError(w, err)
+		return
+	}
+	result, err := tx.ExecContext(r.Context(), query, args...)
 	if err != nil {
 		s.fail(w, err)
 		return
 	}
 	if count, _ := result.RowsAffected(); count != 1 {
 		writeError(w, http.StatusConflict, errors.New("comment was updated elsewhere"))
+		return
+	}
+	if err := commitLocalWakeupMutation(r.Context(), tx, ws.ID, cursor, origin); err != nil {
+		s.fail(w, err)
 		return
 	}
 	item, _ := scanComment(s.store.db.QueryRowContext(r.Context(), `SELECT id, issue_id, author_type, author_id, content, type, parent_id, created_at, updated_at, revision, issue_revision, resolved_at, resolved_by_type, resolved_by_id, source_task_id, quick_action_id FROM comments WHERE id=?`, id))
@@ -1146,4 +1257,23 @@ func sortedKeys(values map[string]any) []string {
 	}
 	sort.Strings(keys)
 	return keys
+}
+
+// Lifecycle presentation is separate from the stored status behavior. In
+// particular, backlog and todo share a column category but schedule differently.
+func localStatusCategory(value string) string {
+	switch value {
+	case "backlog", "todo":
+		return "unstarted"
+	case "in_progress", "in_review", "blocked":
+		return "started"
+	case "cancelled", "canceled":
+		return "closed"
+	default:
+		return value
+	}
+}
+
+func localStatusCategoryMatches(stored, requested string) bool {
+	return stored == requested || localStatusCategory(stored) == requested
 }

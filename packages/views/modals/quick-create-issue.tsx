@@ -24,6 +24,8 @@ import {
   DropdownMenuTrigger,
 } from "@multica/ui/components/ui/dropdown-menu";
 import { Button } from "@multica/ui/components/ui/button";
+import { Tooltip, TooltipContent, TooltipTrigger } from "@multica/ui/components/ui/tooltip";
+import { TooltipHint } from "@multica/ui/components/common/tooltip-hint";
 import { Switch } from "@multica/ui/components/ui/switch";
 import { cn } from "@multica/ui/lib/utils";
 import { api, ApiError } from "@multica/core/api";
@@ -50,6 +52,7 @@ import {
 } from "@multica/core/runtimes";
 import { useShortcut } from "@multica/core/shortcuts";
 import { ShortcutKeycaps } from "../common/shortcut-keycaps";
+import { DeferredTooltip } from "../common/deferred-tooltip";
 import {
   contentReferencesAttachment,
   type Agent,
@@ -84,6 +87,7 @@ import { FileUploadButton } from "@multica/ui/components/common/file-upload-butt
 import { useT } from "../i18n";
 import { matchesPinyin } from "../editor/extensions/pinyin-match";
 import { SourceContextPreviewCard, useSourceContextFailureMessage } from "./source-context-preview";
+import { useIssueLimitUpgradePrompt } from "./use-issue-limit-upgrade-prompt";
 
 type ActorSelection =
   | { type: "agent"; id: string }
@@ -135,9 +139,11 @@ export function AgentCreatePanel({
     : undefined;
   const onSourceContextExpandedChange = data?.source_context_on_expanded_change as ((expanded: boolean) => void) | undefined;
   const sourceContextFailureMessage = useSourceContextFailureMessage();
+  const showIssueLimitUpgradePrompt = useIssueLimitUpgradePrompt();
   const userId = useAuthStore((s) => s.user?.id);
   const { data: members = [] } = useQuery(memberListOptions(wsId));
   const { data: agents = [] } = useQuery(agentListOptions(wsId));
+  const { data: runtimes = [] } = useQuery(runtimeListOptions(wsId));
   const { data: squads = [] } = useQuery(squadListOptions(wsId));
   // Pull `isSuccess` so the stale-id sweep below can distinguish "still
   // loading" from "loaded as empty". Reading length alone treats both as
@@ -161,9 +167,10 @@ export function AgentCreatePanel({
         (a) =>
           !a.archived_at &&
           isAgentRuntimeBound(a) &&
+          !runtimes.some((r) => r.id === a.runtime_id && r.provider === "qoder_cloud") &&
           canAssignAgent(a, userId, memberRole),
       ),
-    [agents, userId, memberRole],
+    [agents, runtimes, userId, memberRole],
   );
   const visibleAgentIds = useMemo(
     () => new Set(visibleAgents.map((a) => a.id)),
@@ -328,7 +335,6 @@ export function AgentCreatePanel({
   // (git-describe shape) are exempted inside checkQuickCreateCliVersion
   // — frontend and server share the same signal there, so they agree by
   // construction across web/desktop/staging without comparing env flags.
-  const { data: runtimes = [] } = useQuery(runtimeListOptions(wsId));
   const selectedRuntime = useMemo(
     () =>
       selectedAgent?.runtime_id
@@ -336,6 +342,16 @@ export function AgentCreatePanel({
         : undefined,
     [runtimes, selectedAgent?.runtime_id],
   );
+  // We can only pre-check a version we can actually see. A non-admin member's
+  // runtime list (ListVisibleAgentRuntimes) omits other members' private
+  // machines, so a selected agent bound to such a runtime yields no row here.
+  // That absence is "unknown version", NOT "daemon reported no version": the
+  // two must not collapse, or the member gets the misleading "upgrade your
+  // daemon" wall for a runtime that is in fact new enough (#7633). When we
+  // can't pre-check, defer to the server's authoritative gate
+  // (checkQuickCreateDaemonVersion, which reads the row by id regardless of
+  // role) instead of failing closed in the UI.
+  const canPrecheckVersion = selectedAgent?.runtime_id != null && selectedRuntime != null;
   const runtimeCliVersion = readRuntimeCliVersion(selectedRuntime?.metadata);
   const baseVersionCheck = useMemo(
     () => checkQuickCreateCliVersion(runtimeCliVersion),
@@ -348,8 +364,9 @@ export function AgentCreatePanel({
   const usesExplicitFields = priority !== "none" || dueDate !== null;
   const versionCheck = usesExplicitFields ? fieldVersionCheck : baseVersionCheck;
   const versionBlocked =
-    baseVersionCheck.state !== "ok" ||
-    (usesExplicitFields && fieldVersionCheck.state !== "ok");
+    canPrecheckVersion &&
+    (baseVersionCheck.state !== "ok" ||
+      (usesExplicitFields && fieldVersionCheck.state !== "ok"));
 
   const initialPrompt = draft.agent.prompt || (data?.prompt as string) || "";
   // The editor is uncontrolled — we read the latest markdown via the ref at
@@ -465,6 +482,10 @@ export function AgentCreatePanel({
             current_version?: string;
             min_version?: string;
           };
+          if (body.code === "issue_limit_reached") {
+            showIssueLimitUpgradePrompt();
+            return false;
+          }
           if (body.code === "agent_unavailable") {
             setError(body.reason || t(($) => $.create_issue.agent.error_agent_unavailable_fallback));
             return false;
@@ -581,7 +602,7 @@ export function AgentCreatePanel({
     onSwitchMode?.(Object.keys(carry).length > 0 ? carry : null);
   };
 
-  // Field visibility lives in Settings → Issue. Persist the prompt draft
+  // Field visibility lives in Settings → Preferences → Issue creation. Persist the prompt draft
   // before leaving so what the user typed survives the round-trip, then
   // close — the dialog would otherwise linger over the settings page.
   const openFieldSettings = (e: React.MouseEvent) => {
@@ -592,6 +613,43 @@ export function AgentCreatePanel({
     if (resolveClickIntent(e) !== "push") return;
     onClose();
   };
+
+  const createButton = (
+    <Button
+      size="sm"
+      onClick={submit}
+      disabled={!hasContent || !actor || submitting || versionBlocked || gate.uploading || (!!anchorCommentId && !sourcePreview)}
+      aria-disabled={gate.uploading || versionBlocked || undefined}
+      // Sending is a busy state too, not just uploading.
+      aria-busy={gate.uploading || submitting || undefined}
+      // Keeps the button hoverable so its tooltip can say why it is blocked.
+      focusableWhenDisabled={versionBlocked}
+      className={cn(
+        "justify-self-end min-w-28",
+        versionBlocked && "aria-disabled:cursor-not-allowed aria-disabled:opacity-50",
+        justSent && "!bg-emerald-600 !text-white",
+      )}
+    >
+      {submitting ? t(($) => $.create_issue.agent.sending) : gate.uploading ? t(($) => $.create_issue.agent.uploading) : justSent ? (
+        <span className="flex items-center gap-1"><Check className="size-3.5" />{t(($) => $.create_issue.agent.sent_label)}</span>
+      ) : (
+        <>
+          {t(($) => $.create_issue.agent.submit)}
+          {sendShortcut ? (
+            // Touch phones have no ⌘ key and the narrowest footer row
+            // to spare — drop the hint at the same breakpoint the
+            // footer reflows at.
+            <ShortcutKeycaps
+              shortcut={sendShortcut}
+              decorative
+              className="ml-1 max-sm:hidden"
+              keyClassName="border-background/30 bg-background/15 text-primary-foreground shadow-none"
+            />
+          ) : null}
+        </>
+      )}
+    </Button>
+  );
 
   return (
     <>
@@ -604,29 +662,39 @@ export function AgentCreatePanel({
             <ChevronRight className="size-3 text-faint-foreground" />
             <span className="font-medium">{t(($) => $.create_issue.agent_breadcrumb)}</span>
           </div>
-          {/* Native `title` instead of Base UI Tooltip — Tooltip opens on
+          {/* DeferredTooltip instead of Base UI Tooltip — Tooltip opens on
               keyboard focus, and the dialog's focus trap briefly lands focus
               on the first focusable element on mount, causing the tooltip to
-              auto-pop every open. Same workaround applies to expand. */}
+              auto-pop every open. DeferredTooltip opens on pointer hover only. */}
           <div className="flex items-center gap-1">
-            <button
-              type="button"
-              onClick={() => setIsExpanded(!isExpanded)}
-              title={isExpanded ? t(($) => $.common.collapse_tooltip) : t(($) => $.common.expand_tooltip)}
-              aria-label={isExpanded ? t(($) => $.common.collapse_tooltip) : t(($) => $.common.expand_tooltip)}
-              className="rounded-sm p-1.5 opacity-70 hover:opacity-100 hover:bg-accent/60 transition-all cursor-pointer"
-            >
-              {isExpanded ? <Minimize2 className="size-4" /> : <Maximize2 className="size-4" />}
-            </button>
-            <button
-              type="button"
-              onClick={onClose}
-              title={t(($) => $.common.close)}
-              aria-label={t(($) => $.common.close)}
-              className="rounded-sm p-1.5 opacity-70 hover:opacity-100 hover:bg-accent/60 transition-all cursor-pointer"
-            >
-              <XIcon className="size-4" />
-            </button>
+            <DeferredTooltip
+              side="bottom"
+              content={isExpanded ? t(($) => $.common.collapse_tooltip) : t(($) => $.common.expand_tooltip)}
+              trigger={
+                <button
+                  type="button"
+                  onClick={() => setIsExpanded(!isExpanded)}
+                  aria-label={isExpanded ? t(($) => $.common.collapse_tooltip) : t(($) => $.common.expand_tooltip)}
+                  className="rounded-sm p-1.5 opacity-70 hover:opacity-100 hover:bg-accent/60 transition-all cursor-pointer"
+                >
+                  {isExpanded ? <Minimize2 className="size-4" /> : <Maximize2 className="size-4" />}
+                </button>
+              }
+            />
+            <DeferredTooltip
+              side="bottom"
+              content={t(($) => $.common.close)}
+              trigger={
+                <button
+                  type="button"
+                  onClick={onClose}
+                  aria-label={t(($) => $.common.close)}
+                  className="rounded-sm p-1.5 opacity-70 hover:opacity-100 hover:bg-accent/60 transition-all cursor-pointer"
+                >
+                  <XIcon className="size-4" />
+                </button>
+              }
+            />
           </div>
         </div>
 
@@ -731,6 +799,7 @@ export function AgentCreatePanel({
                   clearLabel={tProjects(($) => $.picker.clear_aria)}
                 />
               }
+              tooltip={tIssues(($) => $.detail.prop_project)}
               align="start"
               open={fieldPickerOpen === "project" ? true : undefined}
               onOpenChange={(open) => setFieldPickerOpen(open ? "project" : null)}
@@ -748,6 +817,7 @@ export function AgentCreatePanel({
                 }
               }}
               triggerRender={<PillButton />}
+              tooltip={tIssues(($) => $.detail.prop_priority)}
               align="start"
               open={fieldPickerOpen === "priority" ? true : undefined}
               onOpenChange={(open) => setFieldPickerOpen(open ? "priority" : null)}
@@ -764,22 +834,22 @@ export function AgentCreatePanel({
                 setShared({ dueDate: next });
               }}
               triggerRender={<PillButton />}
+              tooltip={tIssues(($) => $.detail.prop_due_date)}
               align="start"
               open={fieldPickerOpen === "due_date" ? true : undefined}
               onOpenChange={(open) => setFieldPickerOpen(open ? "due_date" : null)}
             />
           )}
           <DropdownMenu>
-            <DropdownMenuTrigger
-              render={
-                <PillButton
-                  aria-label={t(($) => $.create_issue.agent.more_fields_aria)}
-                  title={t(($) => $.create_issue.agent.more_fields_aria)}
-                >
-                  <MoreHorizontal className="size-3.5" />
-                </PillButton>
-              }
-            />
+            <TooltipHint label={t(($) => $.create_issue.agent.more_fields_aria)}>
+              <DropdownMenuTrigger
+                render={
+                  <PillButton aria-label={t(($) => $.create_issue.agent.more_fields_aria)}>
+                    <MoreHorizontal className="size-3.5" />
+                  </PillButton>
+                }
+              />
+            </TooltipHint>
             <DropdownMenuContent align="start" className="w-52">
               {!visibleFields.includes("project") && projectId === null && (
                 <DropdownMenuItem onClick={() => setFieldPickerOpen("project")}>
@@ -803,7 +873,7 @@ export function AgentCreatePanel({
               <DropdownMenuItem
                 render={
                   <AppLink
-                    href={`${workspacePaths.settings()}?tab=issue`}
+                    href={`${workspacePaths.settings()}?tab=preferences&section=issue`}
                     onClick={openFieldSettings}
                   />
                 }
@@ -854,18 +924,19 @@ export function AgentCreatePanel({
               </span>
             )}
           </div>
-          <button
-            type="button"
-            onClick={switchToManual}
-            disabled={gate.uploading}
-            aria-disabled={gate.uploading || undefined}
-            aria-busy={gate.uploading || undefined}
-            title={t(($) => $.create_issue.switch_to_manual_tooltip)}
-            className="flex shrink-0 items-center gap-1.5 justify-self-end text-caption px-2 py-1 rounded-sm text-muted-foreground hover:text-foreground hover:bg-accent/60 transition-colors cursor-pointer disabled:cursor-not-allowed disabled:opacity-50"
-          >
-            <ArrowLeftRight className="size-3.5" />
-            {t(($) => $.create_issue.switch_to_manual)}
-          </button>
+          <TooltipHint label={t(($) => $.create_issue.switch_to_manual_tooltip)}>
+            <button
+              type="button"
+              onClick={switchToManual}
+              disabled={gate.uploading}
+              aria-disabled={gate.uploading || undefined}
+              aria-busy={gate.uploading || undefined}
+              className="flex shrink-0 items-center gap-1.5 justify-self-end text-caption px-2 py-1 rounded-sm text-muted-foreground hover:text-foreground hover:bg-accent/60 transition-colors cursor-pointer disabled:cursor-not-allowed disabled:opacity-50"
+            >
+              <ArrowLeftRight className="size-3.5" />
+              {t(($) => $.create_issue.switch_to_manual)}
+            </button>
+          </TooltipHint>
           <label className="flex shrink-0 items-center gap-1.5 text-caption text-muted-foreground cursor-pointer select-none">
             <Switch
               size="sm"
@@ -874,42 +945,16 @@ export function AgentCreatePanel({
             />
             {t(($) => $.create_issue.create_another)}
           </label>
-          <Button
-            size="sm"
-            onClick={submit}
-            disabled={!hasContent || !actor || submitting || versionBlocked || gate.uploading || (!!anchorCommentId && !sourcePreview)}
-            aria-disabled={gate.uploading || undefined}
-            // Sending is a busy state too, not just uploading.
-            aria-busy={gate.uploading || submitting || undefined}
-            title={
-              versionBlocked
-                ? t(($) => $.create_issue.agent.version_blocked_tooltip, { min: versionCheck.min })
-                : undefined
-            }
-            className={cn(
-              "justify-self-end min-w-28",
-              justSent && "!bg-emerald-600 !text-white",
-            )}
-          >
-            {submitting ? t(($) => $.create_issue.agent.sending) : gate.uploading ? t(($) => $.create_issue.agent.uploading) : justSent ? (
-              <span className="flex items-center gap-1"><Check className="size-3.5" />{t(($) => $.create_issue.agent.sent_label)}</span>
-            ) : (
-              <>
-                {t(($) => $.create_issue.agent.submit)}
-                {sendShortcut ? (
-                  // Touch phones have no ⌘ key and the narrowest footer row
-                  // to spare — drop the hint at the same breakpoint the
-                  // footer reflows at.
-                  <ShortcutKeycaps
-                    shortcut={sendShortcut}
-                    decorative
-                    className="ml-1 max-sm:hidden"
-                    keyClassName="border-background/30 bg-background/15 text-primary-foreground shadow-none"
-                  />
-                ) : null}
-              </>
-            )}
-          </Button>
+          {versionBlocked ? (
+            <Tooltip>
+              <TooltipTrigger render={createButton} />
+              <TooltipContent side="top">
+                {t(($) => $.create_issue.agent.version_blocked_tooltip, { min: versionCheck.min })}
+              </TooltipContent>
+            </Tooltip>
+          ) : (
+            createButton
+          )}
         </div>
     </>
   );

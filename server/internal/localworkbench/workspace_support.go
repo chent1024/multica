@@ -105,7 +105,7 @@ var localNotificationTypes = map[string]bool{
 	"review_requested": true, "task_failed": true, "agent_blocked": true,
 	"quick_create_done": true, "quick_create_failed": true, "quick_create_unconfirmed": true,
 	"automation_failed": true, "integration_failed": true, "webhook_failed": true,
-	"plugin_failed": true, "runtime_failed": true,
+	"plugin_failed": true, "runtime_failed": true, "children_done": true,
 }
 
 func insertLocalNotificationTx(ctx context.Context, tx *sql.Tx, input localNotificationInput) (map[string]any, bool, error) {

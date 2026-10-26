@@ -81,7 +81,7 @@ func (s *Store) SendIssueSessionMessage(ctx context.Context, workspaceID, issueI
 	if !projectID.Valid || strings.TrimSpace(projectID.String) == "" {
 		return IssueSessionMessageResult{}, ErrIssueProjectRequired
 	}
-	if statusCategory == "done" || statusCategory == "cancelled" {
+	if statusCategory == "done" || localStatusCategory(statusCategory) == "closed" {
 		return IssueSessionMessageResult{}, fmt.Errorf("%w: finished issue", ErrIssueSessionNotRunnable)
 	}
 	if assigneeType.Valid || assigneeID.Valid {
@@ -106,7 +106,7 @@ func (s *Store) SendIssueSessionMessage(ctx context.Context, workspaceID, issueI
 	}
 	stamp := now()
 	if !assigneeType.Valid && !assigneeID.Valid {
-		if _, err := tx.ExecContext(ctx, `UPDATE issues SET status='in_progress', assignee_type='agent', assignee_id=?, revision=revision+1, updated_at=?, last_activity_at=? WHERE workspace_id=? AND id=?`, LocalAgentID, stamp, stamp, workspaceID, issueID); err != nil {
+		if _, err := tx.ExecContext(ctx, `UPDATE issues SET status='in_progress',duplicate_of_issue_id=NULL, assignee_type='agent', assignee_id=?, revision=revision+1, updated_at=?, last_activity_at=? WHERE workspace_id=? AND id=?`, LocalAgentID, stamp, stamp, workspaceID, issueID); err != nil {
 			return IssueSessionMessageResult{}, fmt.Errorf("aligning parked issue for session message: %w", err)
 		}
 	}
@@ -300,7 +300,7 @@ func (s *Store) ContinueIssueSession(ctx context.Context, workspaceID, issueID s
 	if !projectID.Valid || strings.TrimSpace(projectID.String) == "" {
 		return Issue{}, "", "", ErrIssueProjectRequired
 	}
-	if statusCategory == "done" || statusCategory == "cancelled" {
+	if statusCategory == "done" || localStatusCategory(statusCategory) == "closed" {
 		return Issue{}, "", "", fmt.Errorf("%w: finished issue", ErrIssueSessionNotRunnable)
 	}
 	if assigneeType.Valid || assigneeID.Valid {
@@ -338,7 +338,7 @@ func (s *Store) ContinueIssueSession(ctx context.Context, workspaceID, issueID s
 	stamp := now()
 	if !assigneeType.Valid && !assigneeID.Valid {
 		status = "in_progress"
-		if _, err := tx.ExecContext(ctx, `UPDATE issues SET status=?, assignee_type='agent', assignee_id=?, revision=revision+1, updated_at=?, last_activity_at=? WHERE workspace_id=? AND id=?`, status, LocalAgentID, stamp, stamp, workspaceID, issueID); err != nil {
+		if _, err := tx.ExecContext(ctx, `UPDATE issues SET status=?,duplicate_of_issue_id=NULL, assignee_type='agent', assignee_id=?, revision=revision+1, updated_at=?, last_activity_at=? WHERE workspace_id=? AND id=?`, status, LocalAgentID, stamp, stamp, workspaceID, issueID); err != nil {
 			return Issue{}, "", "", fmt.Errorf("aligning parked issue for session continuation: %w", err)
 		}
 	}

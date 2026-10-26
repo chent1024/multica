@@ -683,6 +683,12 @@ var schemaMigrations = []migration{
 			 ON inbox_items(workspace_id, recipient_id, source_key) WHERE source_key IS NOT NULL`,
 		},
 	},
+	localRuntimeMetadataMigration,
+	localWakeupsMigration,
+	localVCSWakeupSnapshotMigration,
+	localIssueDuplicatesMigration,
+	localProjectWorkflowsMigration,
+	localTaskStartClaimMigration,
 }
 
 func Open(ctx context.Context, path string) (*Store, error) {

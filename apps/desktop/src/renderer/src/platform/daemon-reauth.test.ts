@@ -17,6 +17,20 @@ vi.mock("sonner", () => ({
 
 import { reauthenticateDaemon } from "./daemon-reauth";
 import { LOCAL_DAEMON_TOKEN } from "./daemon-login-sync";
+import type { DaemonTranslator } from "../components/daemon-i18n";
+
+const translations = {
+  desktop: {
+    daemon: {
+      reconnect_failed: "无法重新连接守护进程",
+      try_again_moment: "请稍后重试。",
+      try_again: "请重试。",
+    },
+  },
+};
+
+const t = ((selector: (resources: typeof translations) => string) =>
+  selector(translations)) as DaemonTranslator;
 
 const daemonAPI = {
   reauthenticate: vi.fn(),
@@ -33,7 +47,7 @@ describe("reauthenticateDaemon", () => {
   it("re-mints + restarts the daemon when signed in, without logging out", async () => {
     daemonAPI.reauthenticate.mockResolvedValue({ ok: true });
 
-    await reauthenticateDaemon();
+    await reauthenticateDaemon(t);
 
     expect(daemonAPI.reauthenticate).toHaveBeenCalledWith(
       LOCAL_DAEMON_TOKEN,
@@ -49,7 +63,7 @@ describe("reauthenticateDaemon", () => {
       reason: "session_invalid",
     });
 
-    await reauthenticateDaemon();
+    await reauthenticateDaemon(t);
 
     expect(logout).not.toHaveBeenCalled();
     expect(toastError).toHaveBeenCalledOnce();
@@ -64,24 +78,28 @@ describe("reauthenticateDaemon", () => {
       message: "mint PAT failed: 503 Service Unavailable",
     });
 
-    await reauthenticateDaemon();
+    await reauthenticateDaemon(t);
 
     expect(logout).not.toHaveBeenCalled();
-    expect(toastError).toHaveBeenCalledOnce();
+    expect(toastError).toHaveBeenCalledWith("无法重新连接守护进程", {
+      description: "mint PAT failed: 503 Service Unavailable",
+    });
   });
 
   it("does NOT log out when the IPC call itself throws unexpectedly", async () => {
     daemonAPI.reauthenticate.mockRejectedValue(new Error("ipc boom"));
 
-    await reauthenticateDaemon();
+    await reauthenticateDaemon(t);
 
     expect(logout).not.toHaveBeenCalled();
-    expect(toastError).toHaveBeenCalledOnce();
+    expect(toastError).toHaveBeenCalledWith("无法重新连接守护进程", {
+      description: "ipc boom",
+    });
   });
 
   it("does not require a hosted session token", async () => {
     daemonAPI.reauthenticate.mockResolvedValue({ ok: true });
-    await reauthenticateDaemon();
+    await reauthenticateDaemon(t);
 
     expect(logout).not.toHaveBeenCalled();
     expect(daemonAPI.reauthenticate).toHaveBeenCalledWith(
@@ -93,7 +111,7 @@ describe("reauthenticateDaemon", () => {
   it("keeps local auth state while the fixed operator is still loading", async () => {
     mockGetState.mockReturnValue({ user: null, logout });
 
-    await reauthenticateDaemon();
+    await reauthenticateDaemon(t);
 
     expect(logout).not.toHaveBeenCalled();
     expect(daemonAPI.reauthenticate).not.toHaveBeenCalled();

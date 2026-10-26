@@ -11,8 +11,8 @@ import (
 
 func scanProjectedTask(row rowScanner) (map[string]any, error) {
 	var id, agentID, runtimeID, issueID, status, createdAt string
-	var chatSessionID, summary, errorText, startedAt, completedAt sql.NullString
-	err := row.Scan(&id, &agentID, &runtimeID, &issueID, &chatSessionID, &status, &summary, &errorText, &startedAt, &completedAt, &createdAt)
+	var chatSessionID, summary, errorText, startedAt, completedAt, wakeupID sql.NullString
+	err := row.Scan(&id, &agentID, &runtimeID, &issueID, &chatSessionID, &status, &summary, &errorText, &startedAt, &completedAt, &createdAt, &wakeupID)
 	value := map[string]any{"id": id, "agent_id": agentID, "runtime_id": runtimeID, "issue_id": issueID, "status": status, "priority": 0, "dispatched_at": nil, "started_at": nullableString(startedAt), "completed_at": nullableString(completedAt), "result": nil, "error": nullableString(errorText), "created_at": createdAt}
 	if summary.Valid {
 		value["result"] = map[string]any{"summary": summary.String}
@@ -20,18 +20,21 @@ func scanProjectedTask(row rowScanner) (map[string]any, error) {
 	if chatSessionID.Valid {
 		value["chat_session_id"] = chatSessionID.String
 	}
+	if wakeupID.Valid {
+		value["wakeup_id"] = wakeupID.String
+	}
 	return value, err
 }
 
-const projectedTasksSQL = `SELECT id, agent_id, runtime_id, issue_id, chat_session_id, status, summary, error, started_at, completed_at, created_at FROM (
+const projectedTasksSQL = `SELECT id, agent_id, runtime_id, issue_id, chat_session_id, status, summary, error, started_at, completed_at, created_at,wakeup_id FROM (
 	SELECT tr.id,
 		COALESCE(tr.agent_id,CASE WHEN i.assignee_type='squad' THEN COALESCE((SELECT leader_id FROM squads WHERE id=i.assignee_id),COALESCE(i.assignee_id,'')) ELSE COALESCE(i.assignee_id,'') END) agent_id,
 		COALESCE(tr.runtime,'') runtime_id, tr.issue_id issue_id, NULL chat_session_id, tr.status, tr.summary, tr.error, tr.started_at, tr.completed_at, tr.created_at,
-		i.workspace_id workspace_id, 'issue' source
+		i.workspace_id workspace_id, 'issue' source,tr.wakeup_id
 	FROM task_runs tr JOIN issues i ON i.id=tr.issue_id
 	UNION ALL
 	SELECT ct.id, ct.agent_id, ct.runtime_id, '' issue_id, ct.chat_session_id, ct.status, ct.summary, ct.error, ct.started_at, ct.completed_at, ct.created_at,
-		cs.workspace_id, 'chat' source
+		cs.workspace_id, 'chat' source,NULL wakeup_id
 	FROM chat_tasks ct JOIN chat_sessions cs ON cs.id=ct.chat_session_id
 ) WHERE workspace_id=?`
 

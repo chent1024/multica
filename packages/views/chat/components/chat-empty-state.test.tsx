@@ -28,6 +28,7 @@ const adapter = (): NavigationAdapter => ({
   back: vi.fn(),
   pathname: "/acme/chat",
   searchParams: new URLSearchParams(),
+  hash: "",
   getShareableUrl: (path: string) => `https://app.test${path}`,
 });
 
@@ -75,11 +76,11 @@ describe("chat empty-state conversation starters", () => {
     const onPickPrompt = renderEmptyState(agent());
 
     fireEvent.click(
-      screen.getByRole("button", { name: "Suggest a first task" }),
+      screen.getByRole("button", { name: "Suggest a first issue" }),
     );
 
     expect(onPickPrompt).toHaveBeenCalledWith(
-      "Suggest three useful tasks I could delegate to you.",
+      "Suggest three useful issues I could assign to you.",
     );
   });
 });
@@ -90,7 +91,7 @@ describe("chat empty-state conversation starters", () => {
 describe("chat empty-state customize affordance", () => {
   afterEach(cleanup);
 
-  const href = "/acme/agents/agent-1?view=instructions&focus=conversation_starters";
+  const href = "/acme/agents/agent-1?view=general&focus=conversation_starters";
 
   it("links a viewer who may edit the agent to its conversation starters", () => {
     renderEmptyState(agent(), href);
