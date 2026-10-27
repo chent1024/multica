@@ -15,6 +15,7 @@ import (
 	"github.com/go-chi/chi/v5"
 	"github.com/google/uuid"
 	"github.com/multica-ai/multica/server/internal/service"
+	"github.com/multica-ai/multica/server/pkg/protocol"
 )
 
 func (s *Server) workspaceFor(r *http.Request) (Workspace, error) {
@@ -848,8 +849,9 @@ func (s *Server) createIssue(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 	s.hub.broadcast("issue:created", map[string]any{"issue": item})
-	if item.workflowTaskID != "" {
-		s.hub.broadcast("daemon:pending_work", map[string]any{"issue_id": item.ID, "task_id": item.workflowTaskID})
+	if item.workflowTaskID != "" || (!input.SuppressRun && localIssueCategoryRunnable(item.StatusCategory) &&
+		item.AssigneeType != nil && (*item.AssigneeType == "agent" || *item.AssigneeType == "squad")) {
+		s.hub.broadcast(protocol.EventDaemonTaskAvailable, map[string]any{"issue_id": item.ID, "task_id": item.workflowTaskID})
 	}
 	writeJSON(w, 201, item)
 }
@@ -1686,6 +1688,6 @@ func (s *Server) publishLocalIssueUpdate(before, after Issue) {
 		s.hub.broadcast("task:cancelled", map[string]any{"task": map[string]any{"id": id, "issue_id": after.ID, "status": "cancelled"}})
 	}
 	if after.workflowTaskID != "" {
-		s.hub.broadcast("daemon:pending_work", map[string]any{"issue_id": after.ID, "task_id": after.workflowTaskID})
+		s.hub.broadcast(protocol.EventDaemonTaskAvailable, map[string]any{"issue_id": after.ID, "task_id": after.workflowTaskID})
 	}
 }

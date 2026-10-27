@@ -405,17 +405,25 @@ func (s *Server) daemonClaimTasks(w http.ResponseWriter, r *http.Request) {
 		input.MaxTasks = 1
 	}
 	tasks := []any{}
-	for _, runtimeID := range input.RuntimeIDs {
-		if len(tasks) >= input.MaxTasks {
+	// A runtime can have several runnable tasks. Visit runtimes in rounds so
+	// one busy provider cannot consume every slot before another is considered.
+	for len(tasks) < input.MaxTasks {
+		before := len(tasks)
+		for _, runtimeID := range input.RuntimeIDs {
+			if len(tasks) >= input.MaxTasks {
+				break
+			}
+			task, err := s.claimTask(r.Context(), input.DaemonID, runtimeID, r.Header.Get("X-Client-Capabilities"))
+			if err != nil {
+				s.respondStoreError(w, err)
+				return
+			}
+			if task != nil {
+				tasks = append(tasks, task)
+			}
+		}
+		if len(tasks) == before {
 			break
-		}
-		task, err := s.claimTask(r.Context(), input.DaemonID, runtimeID, r.Header.Get("X-Client-Capabilities"))
-		if err != nil {
-			s.respondStoreError(w, err)
-			return
-		}
-		if task != nil {
-			tasks = append(tasks, task)
 		}
 	}
 	writeJSON(w, http.StatusOK, map[string]any{"tasks": tasks})

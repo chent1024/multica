@@ -109,6 +109,7 @@ func (s *Server) Router() http.Handler {
 	router.Get("/ws", s.websocket)
 	router.Get("/ws/daemon", s.websocket)
 	router.Route("/api", func(api chi.Router) {
+		api.Get("/daemon/ws", s.websocket)
 		api.Get("/config", s.appConfig)
 		api.Get("/me", s.getMe)
 		api.Patch("/me", s.updateMe)

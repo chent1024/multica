@@ -13,6 +13,7 @@ import (
 
 	"github.com/google/uuid"
 	"github.com/multica-ai/multica/server/internal/service"
+	"github.com/multica-ai/multica/server/pkg/protocol"
 )
 
 func (s *Server) runLocalWakeupScheduler(ctx context.Context) {
@@ -276,7 +277,7 @@ func (s *Server) processLocalWakeup(ctx context.Context, workspaceID, issueID, i
 	if err := tx.Commit(); err != nil {
 		return "", err
 	}
-	s.hub.broadcast("daemon:pending_work", map[string]any{"issue_id": issueID, "task_id": taskID})
+	s.hub.broadcast(protocol.EventDaemonTaskAvailable, map[string]any{"issue_id": issueID, "task_id": taskID})
 	s.hub.broadcast("task:queued", map[string]any{"issue_id": issueID, "task_id": taskID, "agent_id": w.AgentID})
 	return taskID, nil
 }
